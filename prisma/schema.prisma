@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+// Application-wide role. Checked by RolesGuard via the @Roles() decorator.
+enum AppRole {
+  super_admin
+  admin
+  user
+}
+
+// Which frontend a user may sign in to. Checked by AppSurfaceGuard via
+// @AppSurfaces(). Roles map to surfaces in AuthService.surfacesForRole().
+enum AppSurface {
+  admin
+  user
+}
+
+enum AccountStatus {
+  invited
+  active
+  inactive
+  suspended
+  archived
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id                      String        @id @default(uuid())
+  email                   String        @unique
+  passwordHash            String?       @map("password_hash")
+  firstName               String?       @map("first_name")
+  lastName                String?       @map("last_name")
+  role                    AppRole       @default(user)
+  status                  AccountStatus @default(invited)
+  emailVerifiedAt         DateTime?     @map("email_verified_at")
+  onboardingCompleted     Boolean       @default(false) @map("onboarding_completed")
+  mfaEnabled              Boolean       @default(false) @map("mfa_enabled")
+  mfaSecret               String?       @map("mfa_secret")
+  lastLoginAt             DateTime?     @map("last_login_at")
+  avatarUrl               String?       @map("avatar_url")
+  language                String?       @default("en")
+  timezone                String?
+  notificationPreferences Json?         @map("notification_preferences")
+  createdAt               DateTime      @default(now()) @map("created_at")
+  updatedAt               DateTime      @updatedAt @map("updated_at")
+
+  auditLogs AuditLog[] @relation("AuditActor")
+
+  @@map("users")
+}
+
+// Outbound notification record. Written by NotificationsService before the
+// message is queued, then updated by the queue processor once delivery is
+// attempted, so every send has a durable trail independent of the queue.
+model Notification {
+  id              String    @id @default(uuid())
+  recipientUserId String?   @map("recipient_user_id")
+  recipientEmail  String    @map("recipient_email")
+  channel         String    @default("email")
+  templateKey     String?   @map("template_key")
+  type            String
+  status          String    @default("queued")
+  payload         Json?
+  sentAt          DateTime? @map("sent_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([recipientUserId])
+  @@index([type, status])
+  @@map("notifications")
+}
+
+// Append-only activity log. Written asynchronously through the `audit-logs`
+// queue so request latency never depends on the write.
+model AuditLog {
+  id         String   @id @default(uuid())
+  publicId   String?  @unique @map("public_id")
+  actorType  String   @map("actor_type")
+  actorId    String?  @map("actor_id")
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id")
+  action     String
+  before     Json?
+  after      Json?
+  metadata   Json?
+  ipAddress  String?  @map("ip_address") @db.Inet
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@index([entityType, action])
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// Dead-letter record for BullMQ jobs that exhausted their retries. Standalone
+// (no relations) so a failure is never lost to a cascading delete.
+model FailedJob {
+  id           String    @id @default(uuid())
+  queueName    String    @map("queue_name")
+  jobId        String    @map("job_id")
+  jobName      String    @map("job_name")
+  payload      Json
+  errorMessage String    @map("error_message")
+  failedAt     DateTime  @default(now()) @map("failed_at")
+  retriedAt    DateTime? @map("retried_at")
+
+  @@unique([queueName, jobId])
+  @@index([queueName, failedAt])
+  @@map("failed_jobs")
+}

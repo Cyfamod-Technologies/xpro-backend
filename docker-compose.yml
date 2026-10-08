@@ -1,0 +1,103 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  NestJS Prisma Postgres Template — Docker Compose (development)
+#
+#  Services
+#  --------
+#  server   → NestJS API   (build context: ., behind the `full` profile)
+#  postgres → PostgreSQL 16
+#  redis    → Redis 7      (BullMQ queues + session store)
+#
+#  Usage
+#  -----
+#  Local dev (deps only):  docker compose up -d          → postgres, redis
+#                          then run the API on the host: npm run start:dev
+#  Full / prod-like:       docker compose --profile full up --build
+#  Logs:                   docker compose logs -f server
+#
+#  The `server` service sits behind the `full` profile so the default
+#  `docker compose up` brings up only infrastructure. Run the API natively for
+#  hot reload; it reads localhost connection details from .env, which the
+#  containers override internally.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: nestjs-prisma-postgres-template
+
+services:
+  # ── NestJS API ─────────────────────────────────────────────────────────────
+  server:
+    profiles: ['full']
+    build: .
+    container_name: app-api
+    restart: always
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app_db}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - '${PORT:-4000}:${PORT:-4000}'
+    volumes:
+      - ./prisma:/app/prisma
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && node dist/main.js"
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: app-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app_db}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: app-redis
+    restart: always
+    ports:
+      - '${REDIS_PORT:-6379}:${REDIS_PORT:-6379}'
+    command:
+      [
+        'redis-server',
+        '--port',
+        '${REDIS_PORT:-6379}',
+        '--requirepass',
+        '${REDIS_PASSWORD:-}',
+        '--appendonly',
+        'yes',
+      ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'redis-cli -a "${REDIS_PASSWORD:-}" ping 2>/dev/null | grep -q PONG',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:

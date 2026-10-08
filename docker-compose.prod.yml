@@ -1,0 +1,109 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  NestJS Prisma Postgres Template — Docker Compose (production)
+#
+#  Services
+#  --------
+#  server   → NestJS API   (build context: ., runner stage)
+#  postgres → PostgreSQL 16
+#  redis    → Redis 7      (BullMQ queues + session store)
+#
+#  Usage
+#  -----
+#  Start all:    docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#  Logs:         docker compose -f docker-compose.prod.yml logs -f server
+#  Rebuild one:  docker compose -f docker-compose.prod.yml up --build server
+#
+#  Unlike the dev file these have no defaults — every referenced variable must
+#  be set in .env.prod so a missing secret fails loudly instead of silently
+#  starting with a weak one.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: nestjs-prisma-postgres-template
+
+services:
+  server:
+    build:
+      context: .
+      target: runner
+    image: app-api:latest
+    container_name: app-api
+    restart: always
+    env_file: .env.prod
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    ports:
+      - '${PORT:-4000}:${PORT:-4000}'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && node dist/main.js"
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget -qO- http://localhost:${PORT:-4000}/health || exit 1',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: app-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: app-redis
+    restart: always
+    command:
+      [
+        'redis-server',
+        '--port',
+        '${REDIS_PORT:-6379}',
+        '--requirepass',
+        '${REDIS_PASSWORD}',
+        '--appendonly',
+        'yes',
+        '--maxmemory',
+        '256mb',
+        '--maxmemory-policy',
+        'noeviction',
+      ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'redis-cli -a "${REDIS_PASSWORD}" ping 2>/dev/null | grep -q PONG',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:
