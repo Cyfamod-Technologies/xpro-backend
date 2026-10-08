@@ -5,7 +5,7 @@ import type { EmailTemplateKey, EmailTemplatePayloadMap } from './email.types';
 describe('EmailRendererService', () => {
   const renderer = new EmailRendererService(
     new ConfigService({
-      APP_NAME: 'Acme',
+      APP_NAME: 'Xpro',
       FRONTEND_URL: 'https://app.example.com',
       EMAIL_ASSET_BASE_URL: 'https://app.example.com/email/v1',
       EMAIL_SUPPORT_ADDRESS: 'support@example.com',
@@ -43,7 +43,7 @@ describe('EmailRendererService', () => {
       expect(result.subject).toBeTruthy();
       expect(result.preheader).toBeTruthy();
       expect(result.html).toContain('<!doctype html>');
-      expect(result.html).toContain('Acme');
+      expect(result.html).toContain('Xpro');
       expect(result.text).toBeTruthy();
     },
   );
@@ -60,7 +60,7 @@ describe('EmailRendererService', () => {
 
     expect(result.subject).toContain('Northwind Labs');
     expect(result.html).toContain('NL');
-    expect(result.html).not.toContain('Acme');
+    expect(result.html).not.toContain('Xpro');
   });
 
   it('escapes untrusted names', () => {

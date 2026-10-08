@@ -1,4 +1,4 @@
-# NestJS Prisma Postgres Template — Agent Bootstrap Guide
+# Xpro — Agent Bootstrap Guide
 
 This file is the starting point for any agent working in this repository.
 Read the relevant docs before making changes.

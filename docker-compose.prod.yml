@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  NestJS Prisma Postgres Template — Docker Compose (production)
+#  Xpro — Docker Compose (production)
 #
 #  Services
 #  --------
@@ -18,15 +18,15 @@
 #  starting with a weak one.
 # ─────────────────────────────────────────────────────────────────────────────
 
-name: nestjs-prisma-postgres-template
+name: xpro
 
 services:
   server:
     build:
       context: .
       target: runner
-    image: app-api:latest
-    container_name: app-api
+    image: xpro-api:latest
+    container_name: xpro-api
     restart: always
     env_file: .env.prod
     environment:
@@ -60,7 +60,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: app-postgres
+    container_name: xpro-postgres
     restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -76,7 +76,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: app-redis
+    container_name: xpro-redis
     restart: always
     command:
       [

@@ -135,7 +135,7 @@ SMTP_PORT=587
 SMTP_USER=<smtp-username>
 SMTP_PASSWORD=<smtp-password>
 EMAIL_FROM=noreply@example.com
-EMAIL_FROM_NAME=Acme
+EMAIL_FROM_NAME=Xpro
 EMAIL_REPLY_TO=support@example.com
 ```
 

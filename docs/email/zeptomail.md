@@ -40,7 +40,7 @@ the prefix — the `zeptomail` SDK expects it.
 ZEPTOMAIL_URL=https://api.zeptomail.com/v1.1/email
 ZEPTOMAIL_TOKEN=Zoho-enczapikey xxxxxxxxxxxxxxxxxxxx
 EMAIL_FROM=noreply@example.com
-EMAIL_FROM_NAME=Acme
+EMAIL_FROM_NAME=Xpro
 EMAIL_REPLY_TO=support@example.com
 FRONTEND_URL=https://app.example.com
 EMAIL_ASSET_BASE_URL=https://app.example.com/email/v1

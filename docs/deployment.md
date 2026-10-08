@@ -22,7 +22,7 @@ prunes dev dependencies; `runner` copies `node_modules`, `dist`, `prisma` and
 migration files at container start.
 
 ```bash
-docker build -t app-api .
+docker build -t xpro-api .
 ```
 
 ## Compose

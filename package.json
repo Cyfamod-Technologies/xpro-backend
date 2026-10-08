@@ -1,7 +1,7 @@
 {
-  "name": "nestjs-prisma-postgres-template",
+  "name": "xpro-server",
   "version": "0.1.0",
-  "description": "NestJS + Prisma + PostgreSQL backend template with auth, sessions, MFA, queues, email and audit logging",
+  "description": "Xpro API with auth, sessions, MFA, queues, email and audit logging",
   "author": "",
   "private": true,
   "license": "UNLICENSED",

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────────────────────
-#  NestJS Prisma Postgres Template — Docker Compose (development)
+#  Xpro — Docker Compose (development)
 #
 #  Services
 #  --------
@@ -20,18 +20,18 @@
 #  containers override internally.
 # ─────────────────────────────────────────────────────────────────────────────
 
-name: nestjs-prisma-postgres-template
+name: xpro
 
 services:
   # ── NestJS API ─────────────────────────────────────────────────────────────
   server:
     profiles: ['full']
     build: .
-    container_name: app-api
+    container_name: xpro-api
     restart: always
     env_file: .env
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app_db}?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER:-xpro}:${POSTGRES_PASSWORD:-xpro}@postgres:5432/${POSTGRES_DB:-xpro_db}?schema=public
       REDIS_HOST: redis
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
@@ -49,12 +49,12 @@ services:
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
-    container_name: app-postgres
+    container_name: xpro-postgres
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-app}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
-      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      POSTGRES_USER: ${POSTGRES_USER:-xpro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-xpro}
+      POSTGRES_DB: ${POSTGRES_DB:-xpro_db}
     ports:
       - '5432:5432'
     volumes:
@@ -63,7 +63,7 @@ services:
       test:
         [
           'CMD-SHELL',
-          'pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app_db}',
+          'pg_isready -U ${POSTGRES_USER:-xpro} -d ${POSTGRES_DB:-xpro_db}',
         ]
       interval: 5s
       timeout: 5s
@@ -72,7 +72,7 @@ services:
   # ── Redis ──────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
-    container_name: app-redis
+    container_name: xpro-redis
     restart: always
     ports:
       - '${REDIS_PORT:-6379}:${REDIS_PORT:-6379}'

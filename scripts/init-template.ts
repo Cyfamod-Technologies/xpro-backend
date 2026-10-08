@@ -1,9 +1,9 @@
 /**
- * One-time template rename. Run `npm run init` right after cloning, then delete
- * this file and the `init` script from package.json.
+ * Project identity rebrand helper. Run `npm run init -- --name "Your Project"`
+ * when changing the project identity.
  *
- * Rewrites the placeholder identity (`Acme`, `app`, `app_db`, `app_session`,
- * `nestjs-prisma-postgres-template`) across package.json, .env.example, both
+ * Rewrites the current identity (`Xpro`, `xpro`, `xpro_db`, `xpro_session`,
+ * `xpro-server`) across package.json, .env.example, both
  * compose files, the session cookie constant, the deploy example and the docs.
  *
  * Non-interactive use:
@@ -75,45 +75,45 @@ function applyIdentity(id: Identity) {
   const { displayName, slug, dbName, cookieName } = id;
 
   rewrite('package.json', [
-    ['"name": "nestjs-prisma-postgres-template"', `"name": "${slug}"`],
+    ['"name": "xpro-server"', `"name": "${slug}"`],
     [
-      '"description": "NestJS + Prisma + PostgreSQL backend template with auth, sessions, MFA, queues, email and audit logging"',
+      '"description": "Xpro API with auth, sessions, MFA, queues, email and audit logging"',
       `"description": "${displayName} API"`,
     ],
   ]);
 
   rewrite('.env.example', [
-    ['APP_NAME=Acme', `APP_NAME=${displayName}`],
-    ['SERVICE=Acme API', `SERVICE=${displayName} API`],
-    ['EMAIL_FROM_NAME=Acme', `EMAIL_FROM_NAME=${displayName}`],
+    ['APP_NAME=Xpro', `APP_NAME=${displayName}`],
+    ['SERVICE=Xpro API', `SERVICE=${displayName} API`],
+    ['EMAIL_FROM_NAME=Xpro', `EMAIL_FROM_NAME=${displayName}`],
     [
-      'DATABASE_URL=postgresql://app:app@localhost:5432/app_db?schema=public',
+      'DATABASE_URL=postgresql://xpro:xpro@localhost:5432/xpro_db?schema=public',
       `DATABASE_URL=postgresql://${snakeify(slug)}:${snakeify(slug)}@localhost:5432/${dbName}?schema=public`,
     ],
-    ['POSTGRES_USER=app', `POSTGRES_USER=${snakeify(slug)}`],
-    ['POSTGRES_PASSWORD=app', `POSTGRES_PASSWORD=${snakeify(slug)}`],
-    ['POSTGRES_DB=app_db', `POSTGRES_DB=${dbName}`],
+    ['POSTGRES_USER=xpro', `POSTGRES_USER=${snakeify(slug)}`],
+    ['POSTGRES_PASSWORD=xpro', `POSTGRES_PASSWORD=${snakeify(slug)}`],
+    ['POSTGRES_DB=xpro_db', `POSTGRES_DB=${dbName}`],
   ]);
 
   for (const composeFile of ['docker-compose.yml', 'docker-compose.prod.yml']) {
     rewrite(composeFile, [
-      ['name: nestjs-prisma-postgres-template', `name: ${slug}`],
-      ['container_name: app-api', `container_name: ${slug}-api`],
-      ['container_name: app-postgres', `container_name: ${slug}-postgres`],
-      ['container_name: app-redis', `container_name: ${slug}-redis`],
-      ['image: app-api:latest', `image: ${slug}-api:latest`],
-      ['${POSTGRES_USER:-app}', `\${POSTGRES_USER:-${snakeify(slug)}}`],
-      ['${POSTGRES_PASSWORD:-app}', `\${POSTGRES_PASSWORD:-${snakeify(slug)}}`],
-      ['${POSTGRES_DB:-app_db}', `\${POSTGRES_DB:-${dbName}}`],
+      ['name: xpro', `name: ${slug}`],
+      ['container_name: xpro-api', `container_name: ${slug}-api`],
+      ['container_name: xpro-postgres', `container_name: ${slug}-postgres`],
+      ['container_name: xpro-redis', `container_name: ${slug}-redis`],
+      ['image: xpro-api:latest', `image: ${slug}-api:latest`],
+      ['${POSTGRES_USER:-xpro}', `\${POSTGRES_USER:-${snakeify(slug)}}`],
+      ['${POSTGRES_PASSWORD:-xpro}', `\${POSTGRES_PASSWORD:-${snakeify(slug)}}`],
+      ['${POSTGRES_DB:-xpro_db}', `\${POSTGRES_DB:-${dbName}}`],
       [
-        'NestJS Prisma Postgres Template — Docker Compose',
+        'Xpro — Docker Compose',
         `${displayName} — Docker Compose`,
       ],
     ]);
   }
 
   rewrite('src/auth/auth.constants.ts', [
-    ["export const SESSION_COOKIE_NAME = 'app_session';", `export const SESSION_COOKIE_NAME = '${cookieName}';`],
+    ["export const SESSION_COOKIE_NAME = 'xpro_session';", `export const SESSION_COOKIE_NAME = '${cookieName}';`],
     [
       ' `npm run init` rewrites this for a new project.',
       ' Renamed by `npm run init`.',
@@ -121,18 +121,18 @@ function applyIdentity(id: Identity) {
   ]);
 
   rewrite('README.md', [
-    ['# NestJS Prisma Postgres Template', `# ${displayName}`],
+    ['# Xpro API', `# ${displayName} API`],
   ]);
 
   rewrite('AGENTS.md', [
     [
-      '# NestJS Prisma Postgres Template — Agent Bootstrap Guide',
+      '# Xpro — Agent Bootstrap Guide',
       `# ${displayName} — Agent Bootstrap Guide`,
     ],
   ]);
 
   rewrite('docs/folder-structure.md', [
-    ['nestjs-prisma-postgres-template/', `${slug}/`],
+    ['xpro-server/', `${slug}/`],
   ]);
 
   rewrite('.github/workflows/deploy.yml.example', [

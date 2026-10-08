@@ -23,7 +23,7 @@ async function bootstrap() {
 
   const corsOrigins = getCorsOrigins();
 
-  const serviceName = process.env.SERVICE || 'App API';
+  const serviceName = process.env.SERVICE || 'Xpro API';
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle(serviceName)

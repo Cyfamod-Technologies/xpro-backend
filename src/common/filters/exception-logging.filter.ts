@@ -19,7 +19,7 @@ export class ExceptionLoggingFilter implements ExceptionFilter {
 
     if (response.headersSent) return;
 
-    const service = process.env.SERVICE || 'App API';
+    const service = process.env.SERVICE || 'Xpro API';
     const timestamp = new Date().toISOString();
     const status =
       exception instanceof HttpException ? exception.getStatus() : 500;

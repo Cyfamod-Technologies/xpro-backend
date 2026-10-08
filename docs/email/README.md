@@ -74,7 +74,7 @@ No product name is hardcoded in any template. `EmailRenderContext` carries:
 
 | Field | Source |
 | --- | --- |
-| `appName` | `APP_NAME` (default `Acme`) |
+| `appName` | `APP_NAME` (default `Xpro`) |
 | `logoMark` | `EMAIL_LOGO_MARK`, or a monogram derived from `APP_NAME` |
 | `frontendUrl` | `FRONTEND_URL` — normalised to its origin |
 | `assetBaseUrl` | `EMAIL_ASSET_BASE_URL` |

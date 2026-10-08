@@ -93,7 +93,7 @@ export class UpdateMeDto {
 
   @ApiPropertyOptional({
     type: String,
-    example: 'https://cdn.acme.com/avatars/alex.png',
+    example: 'https://cdn.xpro.com/avatars/alex.png',
   })
   @IsOptional()
   @IsUrl()

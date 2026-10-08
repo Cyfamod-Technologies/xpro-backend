@@ -53,7 +53,7 @@ function base32Encode(buf: Buffer): string {
 
 export function generateTotpSecret(
   email: string,
-  issuer = process.env.APP_NAME || 'App',
+  issuer = process.env.APP_NAME || 'Xpro',
 ) {
   const secret = base32Encode(randomBytes(20));
   const otpauthUrl = `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;

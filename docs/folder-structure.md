@@ -1,7 +1,7 @@
 # Folder Structure
 
 ```
-nestjs-prisma-postgres-template/
+xpro-server/
 ├── prisma/
 │   ├── schema.prisma           # Single schema file — all models here
 │   └── migrations/             # Applied migration directories (never edit)

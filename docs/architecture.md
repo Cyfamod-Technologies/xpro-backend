@@ -56,7 +56,7 @@ Request
 ## Authentication
 
 JWT issued by `RedisAuthService`, carried either as a bearer token or in the
-`app_session` cookie (name lives in `src/auth/auth.constants.ts`).
+`xpro_session` cookie (name lives in `src/auth/auth.constants.ts`).
 
 The token payload is deliberately small:
 

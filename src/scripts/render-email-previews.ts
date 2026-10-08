@@ -28,7 +28,7 @@ async function main() {
       FRONTEND_URL: process.env.FRONTEND_URL ?? 'http://localhost:3000',
       EMAIL_ASSET_BASE_URL:
         process.env.EMAIL_ASSET_BASE_URL ?? 'http://localhost:3000/email/v1',
-      APP_NAME: process.env.APP_NAME ?? 'Acme',
+      APP_NAME: process.env.APP_NAME ?? 'Xpro',
       EMAIL_SUPPORT_ADDRESS:
         process.env.EMAIL_SUPPORT_ADDRESS ?? 'support@example.com',
       EMAIL_PRIVACY_URL: process.env.EMAIL_PRIVACY_URL,

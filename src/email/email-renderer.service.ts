@@ -20,7 +20,7 @@ import { renderEmailVerification } from './templates/email-verification.template
 import { renderPasswordReset } from './templates/password-reset.template';
 import { renderWelcomeEmail } from './templates/welcome.template';
 
-/** Derives a short monogram from the app name, e.g. "Acme Labs" -> "AL". */
+/** Derives a short monogram from the app name, e.g. "Xpro Labs" -> "XL". */
 function monogram(appName: string): string {
   const initials = appName
     .split(/\s+/)
@@ -75,7 +75,7 @@ export class EmailRendererService {
     const assetBaseUrl = this.config
       .get<string>('EMAIL_ASSET_BASE_URL', `${frontendUrl}/email/v1`)
       .replace(/\/$/, '');
-    const appName = this.config.get<string>('APP_NAME', 'Acme');
+    const appName = this.config.get<string>('APP_NAME', 'Xpro');
     return {
       recipientEmail,
       appName,

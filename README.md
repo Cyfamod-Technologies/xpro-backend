@@ -1,6 +1,6 @@
-# NestJS Prisma Postgres Template
+# Xpro API
 
-A production-shaped NestJS 11 API template: PostgreSQL via Prisma, Redis-backed
+A production-shaped NestJS 11 API: PostgreSQL via Prisma, Redis-backed
 sessions and BullMQ queues, JWT auth with TOTP MFA, transactional email, audit
 logging and opt-in object storage.
 
@@ -19,10 +19,11 @@ npm run start:dev
 
 API docs at `http://127.0.0.1:4000/` and `http://127.0.0.1:4000/docs`.
 
-Then rename everything for your project:
+To rebrand this project later, update the identity values in `.env` and the
+compose files:
 
 ```bash
-npm run init
+npm run init -- --name "Your Project"
 ```
 
 ## What's included
@@ -67,7 +68,7 @@ auth layer — see [docs/security.md](docs/security.md#authorization-is-your-job
 Required to boot:
 
 ```bash
-DATABASE_URL=postgresql://app:app@localhost:5432/app_db?schema=public
+DATABASE_URL=postgresql://xpro:xpro@localhost:5432/xpro_db?schema=public
 JWT_SECRET=...
 REDIS_HOST=127.0.0.1
 ENCRYPTION_KEY=...          # ≥32 chars
@@ -97,7 +98,7 @@ the logic. See [docs/code-style.md](docs/code-style.md).
 
 | Command | Purpose |
 | --- | --- |
-| `npm run init` | One-time rename of the template |
+| `npm run init` | Rebrand the project identity |
 | `npm run start:dev` | Watch-mode dev server |
 | `npm run build` / `start:prod` | Compile and run |
 | `npm run lint` | ESLint with `--fix` |
