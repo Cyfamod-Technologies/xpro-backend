@@ -47,12 +47,6 @@ export function validateEnv(
   validateStorage(config);
 
   if (config['NODE_ENV'] === 'production') {
-    if (!config['ZEPTOMAIL_TOKEN']) {
-      throw new Error(
-        'ZEPTOMAIL_TOKEN is required in production — see docs/email/README.md to configure a different provider',
-      );
-    }
-
     const missingEmailVariables = PRODUCTION_EMAIL_VARS.filter(
       (key) => !config[key],
     );
