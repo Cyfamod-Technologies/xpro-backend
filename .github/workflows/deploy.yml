@@ -436,6 +436,25 @@ jobs:
                   print(f"  - {var}")
               sys.exit(1)
 
+          # Mirror the app's remaining boot-time production checks so CI fails
+          # here instead of at container boot after a full image transfer.
+          errors = []
+          if node_env == "production":
+              for key in ("FRONTEND_URL", "EMAIL_ASSET_BASE_URL"):
+                  value = found.get(key, "")
+                  if value and not value.lower().startswith("https://"):
+                      errors.append(f"{key} must be an absolute HTTPS URL")
+
+              email_from = found.get("EMAIL_FROM", "")
+              if "@example.com" in email_from.lower():
+                  errors.append("EMAIL_FROM must not use example.com")
+
+          if errors:
+              print(f"Invalid environment values in {env_file}:")
+              for err in errors:
+                  print(f"  - {err}")
+              sys.exit(1)
+
           print(f"All required environment variables present (NODE_ENV={node_env or 'unset'}).")
           PY
           REMOTE_SCRIPT
