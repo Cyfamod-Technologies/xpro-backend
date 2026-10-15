@@ -56,12 +56,7 @@ export function validateEnv(
       );
     }
 
-    for (const key of [
-      'FRONTEND_URL',
-      'EMAIL_ASSET_BASE_URL',
-      'EMAIL_PRIVACY_URL',
-      'EMAIL_TERMS_URL',
-    ]) {
+    for (const key of ['FRONTEND_URL', 'EMAIL_ASSET_BASE_URL']) {
       const value = config[key];
       if (typeof value === 'string' && !isHttpsUrl(value)) {
         throw new Error(`${key} must be an absolute HTTPS URL in production`);
