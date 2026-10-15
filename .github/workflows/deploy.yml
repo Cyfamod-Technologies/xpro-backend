@@ -42,12 +42,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: 'npm'
@@ -384,6 +384,59 @@ jobs:
                   print(f"  - {key}: first line {first_lines[key]}, last line {last_lines[key]}")
           else:
               print("No duplicate environment variables detected.")
+          PY
+          REMOTE_SCRIPT
+
+      - name: Validate required environment variables
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+
+          ssh \
+            -o ConnectTimeout=15 \
+            -o ConnectionAttempts=1 \
+            -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=3 \
+            "$SSH_USER@$SSH_HOST" \
+            "ENV_FILE='$SERVER_ENV_FILE' bash -s" <<'REMOTE_SCRIPT'
+          set -Eeuo pipefail
+
+          python3 - <<'PY'
+          import os
+          import sys
+
+          env_file = os.environ["ENV_FILE"]
+          required = ["DATABASE_URL", "JWT_SECRET", "REDIS_HOST", "ENCRYPTION_KEY"]
+          production_required = ["EMAIL_FROM", "EMAIL_FROM_NAME", "FRONTEND_URL", "EMAIL_ASSET_BASE_URL"]
+
+          found = {}
+          with open(env_file, "r", encoding="utf-8-sig") as f:
+              for line in f:
+                  line = line.rstrip("\r\n").strip()
+                  if not line or line.startswith("#") or "=" not in line:
+                      continue
+                  key, _, value = line.partition("=")
+                  key = key.strip()
+                  if value.strip():
+                      found[key] = value.strip()
+
+          node_env = found.get("NODE_ENV", "")
+          check_vars = list(required)
+          if node_env == "production":
+              check_vars += production_required
+
+          missing = [k for k in check_vars if k not in found]
+          if missing:
+              print(f"Missing required environment variables in {env_file}:")
+              for var in missing:
+                  print(f"  - {var}")
+              sys.exit(1)
+
+          print(f"All required environment variables present (NODE_ENV={node_env or 'unset'}).")
           PY
           REMOTE_SCRIPT
 
