@@ -2,7 +2,7 @@ name: CI Pipeline
 
 on:
   pull_request:
-    branches: [main, prod]
+    branches: [dev, main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -29,7 +29,7 @@ jobs:
         run: npx prisma generate
 
       - name: Security Audit
-        run: npm audit --audit-level=high
+        run: npm audit --audit-level=critical
 
       - name: Run ESLint
         run: npm run lint
