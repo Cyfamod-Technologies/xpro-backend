@@ -5,9 +5,75 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  Length,
   Matches,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class AcceptedTermsDto {
+  @ApiProperty()
+  @IsString()
+  termsVersion: string;
+
+  @ApiProperty()
+  @IsString()
+  privacyVersion: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  providerAgreementVersion?: string;
+}
+
+export class RegisterDto {
+  @ApiProperty({ minLength: 1, maxLength: 80 })
+  @IsString()
+  @Length(1, 80)
+  firstName: string;
+
+  @ApiProperty({ minLength: 1, maxLength: 80 })
+  @IsString()
+  @Length(1, 80)
+  lastName: string;
+
+  @ApiProperty({ format: 'email' })
+  @IsEmail()
+  email: string;
+
+  @ApiProperty({ format: 'password', minLength: 12 })
+  @IsString()
+  @MinLength(12)
+  password: string;
+
+  @ApiProperty({ enum: ['customer', 'provider'] })
+  @IsString()
+  @Matches(/^(customer|provider)$/)
+  role: 'customer' | 'provider';
+
+  @ApiProperty({
+    description:
+      'Current terms and privacy document versions accepted by the user.',
+    example: { termsVersion: '2026-10-01', privacyVersion: '2026-10-01' },
+  })
+  @ValidateNested()
+  @Type(() => AcceptedTermsDto)
+  acceptedTerms: AcceptedTermsDto;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Matches(/^\/(?!\/)/, {
+    message: 'returnTo must be an application-relative path',
+  })
+  returnTo?: string;
+}
+
+export class VerifyEmailTokenDto {
+  @ApiProperty()
+  @IsString()
+  token: string;
+}
 
 export class SignupDto {
   @ApiProperty({ type: String, example: 'Alex' })
