@@ -16,6 +16,7 @@ import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
 import { XProClientGuard } from './common/guards/xpro-client.guard';
 import { StaffModule } from './staff/staff.module';
+import { ProvidersModule } from './providers/providers.module';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { StaffModule } from './staff/staff.module';
     RedisModule,
     AuthModule,
     StaffModule,
+    ProvidersModule,
     UsersModule,
     AuditLogsModule,
     NotificationsModule,
