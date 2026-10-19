@@ -618,8 +618,7 @@ export class StaffService {
       );
     const secret = await this.redisAuth.getMfaPendingSecret(authToken.userId);
     const step = secret ? matchingTotpStep(secret, code) : null;
-    if (step === null)
-      throw new UnauthorizedException('Invalid MFA code.');
+    if (step === null) throw new UnauthorizedException('Invalid MFA code.');
     const staff = await this.prisma.staffMember.findUnique({
       where: { userId: authToken.userId },
       include: { roles: true },
