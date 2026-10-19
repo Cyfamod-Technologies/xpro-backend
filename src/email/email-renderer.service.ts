@@ -6,6 +6,7 @@ import type {
   EmailVerificationPayload,
   PasswordResetPayload,
   RenderedEmail,
+  StaffInvitePayload,
   TrustedCustomEmailPayload,
   WelcomeEmailPayload,
 } from './email.types';
@@ -19,6 +20,7 @@ import { renderTrustedCustomEmail } from './templates/custom-email.template';
 import { renderEmailVerification } from './templates/email-verification.template';
 import { renderPasswordReset } from './templates/password-reset.template';
 import { renderWelcomeEmail } from './templates/welcome.template';
+import { renderStaffInvite } from './templates/staff-invite.template';
 
 /** Derives a short monogram from the app name, e.g. "Xpro Labs" -> "XL". */
 function monogram(appName: string): string {
@@ -63,6 +65,8 @@ export class EmailRendererService {
         return renderPasswordReset(this.passwordResetPayload(payload), context);
       case 'custom_email':
         return renderTrustedCustomEmail(this.customPayload(payload), context);
+      case 'staff_invite':
+        return renderStaffInvite(this.staffInvitePayload(payload), context);
       default:
         return this.unsupportedTemplate(input.templateKey);
     }
@@ -102,8 +106,19 @@ export class EmailRendererService {
     payload: Record<string, unknown>,
   ): EmailVerificationPayload {
     return {
-      code: requiredString(payload, 'code'),
+      code: optionalString(payload, 'code'),
+      token: optionalString(payload, 'token'),
       firstName: optionalString(payload, 'firstName'),
+    };
+  }
+
+  private staffInvitePayload(
+    payload: Record<string, unknown>,
+  ): StaffInvitePayload {
+    return {
+      name: requiredString(payload, 'name'),
+      token: requiredString(payload, 'token'),
+      expiresAt: requiredString(payload, 'expiresAt'),
     };
   }
 

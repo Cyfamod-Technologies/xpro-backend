@@ -19,6 +19,11 @@ const fixtures: {
     firstName: 'Ada',
     resetToken: 'preview-reset-token',
   },
+  staff_invite: {
+    name: 'Alex Example',
+    token: 'preview-invite-token',
+    expiresAt: '2026-10-22T10:00:00.000Z',
+  },
 };
 
 async function main() {
