@@ -58,61 +58,53 @@ ${stack}
       });
     }
 
-    return response
-      .status(status)
-      .json(this.buildErrorBody(exception, status, request));
+    return response.status(status).json(this.buildErrorBody(exception, status));
   }
 
-  private buildErrorBody(exception: unknown, status: number, request: Request) {
-    const meta = { path: request.url, method: request.method };
-
+  private buildErrorBody(exception: unknown, status: number) {
     if (exception instanceof HttpException) {
       const raw = exception.getResponse();
-
-      if (typeof raw === 'string') {
+      if (status >= 500) {
         return {
-          statusCode: status,
-          message: raw,
-          error: this.statusToError(status),
-          data: null,
-          ...meta,
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: 'An unexpected error occurred.',
+          },
         };
       }
+      const body =
+        typeof raw === 'object' && raw !== null
+          ? (raw as Record<string, unknown>)
+          : {};
+      const rawMessage = body.message;
+      const message =
+        typeof rawMessage === 'string'
+          ? rawMessage
+          : Array.isArray(rawMessage)
+            ? 'Request validation failed.'
+            : typeof raw === 'string'
+              ? raw
+              : exception.message;
+      const code =
+        typeof body.code === 'string' ? body.code : this.statusToCode(status);
+      const details = Array.isArray(rawMessage)
+        ? rawMessage.map((item) => ({ message: String(item) }))
+        : body.details;
 
-      if (typeof raw === 'object' && raw !== null) {
-        const { message, error } = raw as Record<string, unknown>;
-        const errorLabel =
-          typeof error === 'string' ? error : this.statusToError(status);
-
-        if (Array.isArray(message)) {
-          return {
-            statusCode: status,
-            message: 'Validation failed',
-            error: errorLabel,
-            errors: message,
-            data: null,
-            ...meta,
-          };
-        }
-
-        return {
-          statusCode: status,
-          message: typeof message === 'string' ? message : exception.message,
-          error: errorLabel,
-          data: null,
-          ...meta,
-        };
-      }
+      return {
+        error: {
+          code,
+          message,
+          ...(details ? { details } : {}),
+        },
+      };
     }
 
-    const message =
-      exception instanceof Error ? exception.message : 'Internal server error';
     return {
-      statusCode: 500,
-      message: `Internal server error: ${message}`,
-      error: 'Internal Server Error',
-      data: null,
-      ...meta,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'An unexpected error occurred.',
+      },
     };
   }
 
@@ -129,23 +121,18 @@ ${stack}
     return 'Internal server error';
   }
 
-  private statusToError(status: number): string {
+  private statusToCode(status: number): string {
     const map: Record<number, string> = {
-      400: 'Bad Request',
-      401: 'Unauthorized',
-      403: 'Forbidden',
-      404: 'Not Found',
-      405: 'Method Not Allowed',
-      408: 'Request Timeout',
-      409: 'Conflict',
-      410: 'Gone',
-      422: 'Unprocessable Entity',
-      429: 'Too Many Requests',
-      500: 'Internal Server Error',
-      501: 'Not Implemented',
-      502: 'Bad Gateway',
-      503: 'Service Unavailable',
+      400: 'VALIDATION_ERROR',
+      401: 'UNAUTHENTICATED',
+      403: 'FORBIDDEN',
+      404: 'NOT_FOUND',
+      409: 'INVALID_STATE',
+      410: 'INVITE_INVALID',
+      422: 'VALIDATION_ERROR',
+      429: 'RATE_LIMITED',
+      503: 'SERVICE_UNAVAILABLE',
     };
-    return map[status] ?? 'Error';
+    return map[status] ?? 'INTERNAL_ERROR';
   }
 }

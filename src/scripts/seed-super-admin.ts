@@ -12,7 +12,15 @@
  *   SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD, SUPER_ADMIN_FIRST_NAME, SUPER_ADMIN_LAST_NAME
  */
 
-import { AccountStatus, AppRole, PrismaClient } from '@prisma/client';
+import {
+  AccountStatus,
+  AppRole,
+  PlatformRole,
+  PrismaClient,
+  RoleAddedVia,
+  StaffRole,
+  StaffStatus,
+} from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import * as readline from 'readline';
 
@@ -112,6 +120,30 @@ async function main() {
       emailVerifiedAt: new Date(),
     },
   });
+
+  await prisma.$transaction([
+    prisma.userRole.upsert({
+      where: { userId_role: { userId: user.id, role: PlatformRole.staff } },
+      create: {
+        userId: user.id,
+        role: PlatformRole.staff,
+        addedVia: RoleAddedVia.invite,
+      },
+      update: {},
+    }),
+    prisma.staffMember.upsert({
+      where: { userId: user.id },
+      create: { userId: user.id, status: StaffStatus.active },
+      update: { status: StaffStatus.active },
+    }),
+    prisma.staffMemberRole.upsert({
+      where: {
+        staffUserId_role: { staffUserId: user.id, role: StaffRole.super_admin },
+      },
+      create: { staffUserId: user.id, role: StaffRole.super_admin },
+      update: {},
+    }),
+  ]);
 
   console.log(`\nSuper-admin upserted successfully.`);
   console.log(`  ID:     ${user.id}`);

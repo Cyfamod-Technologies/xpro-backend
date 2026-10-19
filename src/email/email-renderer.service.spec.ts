@@ -29,6 +29,11 @@ describe('EmailRendererService', () => {
       html: '<p>Trusted content</p>',
       text: 'Trusted content',
     },
+    staff_invite: {
+      name: 'Alex Example',
+      token: 'invite-token',
+      expiresAt: '2026-10-22T10:00:00.000Z',
+    },
   };
 
   it.each(Object.keys(fixtures) as EmailTemplateKey[])(

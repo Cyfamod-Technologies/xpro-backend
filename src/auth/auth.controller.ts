@@ -25,10 +25,12 @@ import {
   LoginDto,
   ReauthenticateDto,
   ResendVerificationDto,
+  RegisterDto,
   ResetPasswordDto,
   SignupDto,
   UpdateMeDto,
   VerifyEmailDto,
+  VerifyEmailTokenDto,
 } from './dto/auth.dto';
 
 @ApiTags('Auth')
@@ -46,14 +48,28 @@ export class AuthController {
   }
 
   @Post('register')
-  @ApiOperation({
-    summary: 'Register a new user account (alias for /auth/signup)',
-  })
-  @ApiResponse({ status: 201, description: 'Account created.' })
+  @ApiOperation({ summary: 'Register a customer or provider account' })
+  @ApiResponse({ status: 202, description: 'Registration accepted.' })
   @ApiResponse({ status: 400, description: 'Invalid signup payload.' })
   @Throttle({ default: { limit: 5, ttl: 60000 } })
-  async register(@Body() dto: SignupDto) {
-    return this.authService.signup(dto);
+  async register(@Body() dto: RegisterDto) {
+    return this.authService.register(dto);
+  }
+
+  @Post('email/verify')
+  @ApiOperation({
+    summary: 'Verify an account email using its one-time link token',
+  })
+  @Throttle({ default: { limit: 30, ttl: 60000 } })
+  verifyEmailToken(@Body() dto: VerifyEmailTokenDto) {
+    return this.authService.verifyEmailToken(dto);
+  }
+
+  @Post('email/resend')
+  @ApiOperation({ summary: 'Resend the account verification link' })
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  resendEmailVerification(@Body() dto: ResendVerificationDto) {
+    return this.authService.resendEmailVerification(dto);
   }
 
   @Post('verify-email')

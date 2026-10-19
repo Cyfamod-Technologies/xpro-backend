@@ -60,12 +60,22 @@ export function generateTotpSecret(
   return { secret, otpauthUrl };
 }
 
-export function verifyTotp(secret: string, code: string): boolean {
-  if (!/^\d{6}$/.test(code)) return false;
+export function matchingTotpStep(
+  secret: string,
+  code: string,
+  nowMs = Date.now(),
+): bigint | null {
+  if (!/^\d{6}$/.test(code) || !/^[A-Z2-7]+$/.test(secret)) return null;
+  if (!Number.isFinite(nowMs) || nowMs < 0) return null;
   const key = base32Decode(secret);
-  const counter = Math.floor(Date.now() / 1000 / 30);
+  const counter = Math.floor(nowMs / 30_000);
   for (let i = -1; i <= 1; i++) {
-    if (hotp(key, counter + i) === code) return true;
+    const step = counter + i;
+    if (step >= 0 && hotp(key, step) === code) return BigInt(step);
   }
-  return false;
+  return null;
+}
+
+export function verifyTotp(secret: string, code: string): boolean {
+  return matchingTotpStep(secret, code) !== null;
 }

@@ -42,11 +42,6 @@ export class ResponseInterceptor<T> implements NestInterceptor<T, unknown> {
           options.statusCode ??
           response.statusCode ??
           200;
-        const message =
-          (dataObj?.message as string | undefined) ??
-          options.message ??
-          'Success';
-
         const isPrimitive =
           Array.isArray(data) ||
           typeof data === 'string' ||
@@ -66,11 +61,9 @@ export class ResponseInterceptor<T> implements NestInterceptor<T, unknown> {
 
         response.status(statusCode);
 
-        return {
-          statusCode,
-          message,
-          data: payload,
-        };
+        if (statusCode === 204) return null;
+
+        return { data: payload };
       }),
     );
   }

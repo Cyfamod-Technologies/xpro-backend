@@ -3,6 +3,7 @@ export const EMAIL_TEMPLATE_KEYS = [
   'email_verification',
   'password_reset',
   'custom_email',
+  'staff_invite',
 ] as const;
 
 export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[number];
@@ -12,13 +13,20 @@ export interface WelcomeEmailPayload {
 }
 
 export interface EmailVerificationPayload {
-  code: string;
+  code?: string;
+  token?: string;
   firstName?: string;
 }
 
 export interface PasswordResetPayload {
   resetToken: string;
   firstName?: string;
+}
+
+export interface StaffInvitePayload {
+  name: string;
+  token: string;
+  expiresAt: string;
 }
 
 /**
@@ -38,6 +46,7 @@ export interface EmailTemplatePayloadMap {
   email_verification: EmailVerificationPayload;
   password_reset: PasswordResetPayload;
   custom_email: TrustedCustomEmailPayload;
+  staff_invite: StaffInvitePayload;
 }
 
 export interface EmailRenderContext {

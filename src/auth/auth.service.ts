@@ -4,7 +4,14 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { AppRole, AppSurface, Prisma } from '@prisma/client';
+import {
+  AppRole,
+  AppSurface,
+  AuthTokenPurpose,
+  PlatformRole,
+  Prisma,
+  RoleAddedVia,
+} from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import {
@@ -22,12 +29,14 @@ import {
   LoginDto,
   ResendVerificationDto,
   ResetPasswordDto,
+  RegisterDto,
   SignupDto,
   UpdateMeDto,
   VerifyEmailDto,
+  VerifyEmailTokenDto,
 } from './dto/auth.dto';
 import { RedisAuthService } from './redis-auth.service';
-import { generateTotpSecret, verifyTotp } from './totp.util';
+import { generateTotpSecret, matchingTotpStep } from './totp.util';
 
 @Injectable()
 export class AuthService {
@@ -103,7 +112,11 @@ export class AuthService {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Incorrect password');
     if (user.mfaEnabled) {
-      if (!mfaCode || !user.mfaSecret || !verifyTotp(user.mfaSecret, mfaCode)) {
+      if (
+        !mfaCode ||
+        !user.mfaSecret ||
+        !(await this.consumeTotp(userId, user.mfaSecret, mfaCode))
+      ) {
         throw new UnauthorizedException('Valid MFA code required');
       }
     }
@@ -171,6 +184,209 @@ export class AuthService {
         required: true,
         email: user.email,
       },
+    };
+  }
+
+  async register(dto: RegisterDto) {
+    const email = dto.email.toLowerCase().trim();
+    const firstName = dto.firstName.trim();
+    const lastName = dto.lastName.trim();
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+    // Keep registration responses non-enumerating, including for existing accounts.
+    if (existing)
+      return { statusCode: 202, email, status: 'pending_verification' };
+
+    const documents = await this.prisma.legalDocument.findMany({
+      where: {
+        kind: {
+          in:
+            dto.role === 'provider'
+              ? ['terms', 'privacy', 'provider_agreement']
+              : ['terms', 'privacy'],
+        },
+      },
+      orderBy: { publishedAt: 'desc' },
+      distinct: ['kind'],
+    });
+    const versions = new Map(
+      documents.map((document) => [document.kind, document.version]),
+    );
+    if (
+      versions.get('terms') !== dto.acceptedTerms.termsVersion ||
+      versions.get('privacy') !== dto.acceptedTerms.privacyVersion ||
+      (dto.role === 'provider' &&
+        versions.get('provider_agreement') !==
+          dto.acceptedTerms.providerAgreementVersion)
+    ) {
+      throw new BadRequestException('Accept the current terms to continue.');
+    }
+
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+    const rawToken = generateRawToken();
+    const user = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email,
+          firstName,
+          lastName,
+          passwordHash,
+          status: 'unverified',
+          platformRoles: {
+            create: {
+              role: dto.role as PlatformRole,
+              addedVia: RoleAddedVia.signup,
+            },
+          },
+        },
+      });
+      await tx.authToken.create({
+        data: {
+          userId: created.id,
+          purpose: AuthTokenPurpose.email_verify,
+          tokenHash: Buffer.from(hashToken(rawToken), 'hex'),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          metadata: dto.returnTo ? { returnTo: dto.returnTo } : undefined,
+        },
+      });
+      const accepted = documents.filter(
+        (document) =>
+          document.version === dto.acceptedTerms.termsVersion ||
+          document.version === dto.acceptedTerms.privacyVersion ||
+          document.version === dto.acceptedTerms.providerAgreementVersion,
+      );
+      await tx.legalAcceptance.createMany({
+        data: accepted.map((document) => ({
+          userId: created.id,
+          documentId: document.id,
+          source: 'signup',
+        })),
+      });
+      return created;
+    });
+
+    await this.notifications.queueEmail({
+      recipientEmail: user.email,
+      recipientUserId: user.id,
+      type: 'email_verification',
+      templateKey: 'email_verification',
+      payload: { token: rawToken, firstName },
+    });
+    this.auditLogs.record({
+      actorType: 'user',
+      actorId: user.id,
+      entityType: 'auth',
+      entityId: user.id,
+      action: 'signup_created',
+    });
+    return { statusCode: 202, email, status: 'pending_verification' };
+  }
+
+  async verifyEmailToken(dto: VerifyEmailTokenDto) {
+    const now = new Date();
+    const tokenHash = Buffer.from(hashToken(dto.token), 'hex');
+    const token = await this.prisma.authToken.findUnique({
+      where: { tokenHash },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            emailVerifiedAt: true,
+            status: true,
+          },
+        },
+      },
+    });
+    if (
+      !token ||
+      token.purpose !== AuthTokenPurpose.email_verify ||
+      token.usedAt ||
+      token.expiresAt <= now ||
+      token.user.emailVerifiedAt
+    ) {
+      throw new BadRequestException(
+        'This verification link is invalid or has already been used.',
+      );
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const consumed = await tx.authToken.updateMany({
+        where: { id: token.id, usedAt: null, expiresAt: { gt: now } },
+        data: { usedAt: now },
+      });
+      if (consumed.count !== 1) {
+        throw new BadRequestException(
+          'This verification link is invalid or has already been used.',
+        );
+      }
+      await tx.user.update({
+        where: { id: token.userId },
+        data: { status: 'active', emailVerifiedAt: now },
+      });
+    });
+    this.auditLogs.record({
+      actorType: 'user',
+      actorId: token.userId,
+      entityType: 'auth',
+      entityId: token.userId,
+      action: 'email_verified',
+    });
+    const metadata = token.metadata as { returnTo?: string } | null;
+    return {
+      verified: true,
+      email: token.user.email,
+      ...(metadata?.returnTo ? { returnTo: metadata.returnTo } : {}),
+    };
+  }
+
+  async resendEmailVerification(dto: ResendVerificationDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email.toLowerCase().trim() },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        firstName: true,
+        emailVerifiedAt: true,
+        status: true,
+      },
+    });
+    if (user && !user.emailVerifiedAt && user.status === 'unverified') {
+      const rawToken = generateRawToken();
+      await this.prisma.$transaction([
+        this.prisma.authToken.updateMany({
+          where: {
+            userId: user.id,
+            purpose: AuthTokenPurpose.email_verify,
+            usedAt: null,
+          },
+          data: { usedAt: new Date() },
+        }),
+        this.prisma.authToken.create({
+          data: {
+            userId: user.id,
+            purpose: AuthTokenPurpose.email_verify,
+            tokenHash: Buffer.from(hashToken(rawToken), 'hex'),
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+        }),
+      ]);
+      await this.notifications.queueEmail({
+        recipientEmail: user.email,
+        recipientUserId: user.id,
+        type: 'email_verification',
+        templateKey: 'email_verification',
+        payload: {
+          token: rawToken,
+          firstName: user.firstName ?? user.name ?? undefined,
+        },
+      });
+    }
+    return {
+      message:
+        'If the account is awaiting verification, a new email will be sent',
     };
   }
 
@@ -313,7 +529,7 @@ export class AuthService {
       if (!user.mfaSecret) {
         throw new UnauthorizedException('MFA setup is incomplete');
       }
-      if (!verifyTotp(user.mfaSecret, dto.mfaCode)) {
+      if (!(await this.consumeTotp(user.id, user.mfaSecret, dto.mfaCode))) {
         throw new UnauthorizedException('Invalid MFA code');
       }
     }
@@ -529,13 +745,19 @@ export class AuthService {
       );
     }
 
-    if (!verifyTotp(secret, code)) {
+    const step = matchingTotpStep(secret, code);
+    if (step === null) {
       throw new UnauthorizedException('Invalid MFA code');
     }
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { mfaSecret: secret, mfaEnabled: true },
+      data: {
+        mfaSecret: secret,
+        mfaEnabled: true,
+        mfaEnrolledAt: new Date(),
+        mfaLastStep: step,
+      },
     });
 
     await this.redisAuth.deleteMfaPendingSecret(userId);
@@ -568,14 +790,19 @@ export class AuthService {
       if (!dto.code) throw new UnauthorizedException('MFA code required');
       if (!user.mfaSecret)
         throw new UnauthorizedException('MFA setup is incomplete');
-      if (!verifyTotp(user.mfaSecret, dto.code)) {
+      if (!(await this.consumeTotp(userId, user.mfaSecret, dto.code))) {
         throw new UnauthorizedException('Invalid MFA code');
       }
     }
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { mfaEnabled: false, mfaSecret: null },
+      data: {
+        mfaEnabled: false,
+        mfaSecret: null,
+        mfaEnrolledAt: null,
+        mfaLastStep: null,
+      },
     });
 
     this.auditLogs.record({
@@ -692,5 +919,26 @@ export class AuthService {
       return [AppSurface.admin];
     }
     return [AppSurface.user];
+  }
+
+  private async consumeTotp(
+    userId: string,
+    secret: string,
+    code: string,
+  ): Promise<boolean> {
+    const step = matchingTotpStep(secret, code);
+    if (step === null) return false;
+
+    const result = await this.prisma.user.updateMany({
+      where: {
+        id: userId,
+        status: 'active',
+        mfaEnabled: true,
+        mfaSecret: secret,
+        OR: [{ mfaLastStep: null }, { mfaLastStep: { lt: step } }],
+      },
+      data: { mfaLastStep: step },
+    });
+    return result.count === 1;
   }
 }

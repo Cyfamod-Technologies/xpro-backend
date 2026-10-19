@@ -15,6 +15,22 @@ export class RequestContextMiddleware implements NestMiddleware {
       req.ip ??
       req.socket.remoteAddress;
 
-    this.ctx.run({ ipAddress }, next);
+    const clientHeader = req.header('X-XPro-Client');
+    const client =
+      clientHeader === 'web' ||
+      clientHeader === 'mobile_ios' ||
+      clientHeader === 'mobile_android'
+        ? clientHeader
+        : undefined;
+
+    this.ctx.run(
+      {
+        ipAddress,
+        client,
+        deviceId: req.header('X-XPro-Device-Id')?.slice(0, 64),
+        userAgent: req.header('user-agent')?.slice(0, 512),
+      },
+      next,
+    );
   }
 }

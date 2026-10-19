@@ -24,11 +24,95 @@ enum AppSurface {
 }
 
 enum AccountStatus {
+  unverified
   invited
   active
   inactive
   suspended
+  pending_deletion
+  deactivated
+  deleted
   archived
+}
+
+enum PlatformRole {
+  customer
+  provider
+  staff
+}
+
+enum WorkspaceRole {
+  customer
+  provider
+}
+
+enum RoleAddedVia {
+  signup
+  invite
+  self_service
+}
+
+enum ClientKind {
+  web
+  mobile_ios
+  mobile_android
+}
+
+enum SessionRevokedReason {
+  logout
+  logout_all
+  user_revoked
+  admin_revoked
+  password_changed
+  password_reset
+  email_changed
+  mfa_reset
+  mfa_reenrolled
+  suspended
+  deactivated
+  deletion_requested
+  role_changed
+  refresh_reuse
+  expired
+}
+
+enum AuthTokenPurpose {
+  email_verify
+  password_reset
+  email_change
+  mfa_challenge
+  mfa_enrollment
+}
+
+enum LegalDocumentKind {
+  terms
+  privacy
+  provider_agreement
+  staff_policy
+}
+
+enum StaffRole {
+  super_admin
+  operations
+  pricing
+  client_relations
+  finance
+}
+
+enum StaffStatus {
+  invited
+  active
+  suspended
+  deactivated
+  revoked
+}
+
+enum StaffInviteState {
+  pending
+  consumed
+  superseded
+  revoked
+  expired
 }
 
 // ─── Models ───────────────────────────────────────────────────────────────────
@@ -50,12 +134,215 @@ model User {
   language                String?       @default("en")
   timezone                String?
   notificationPreferences Json?         @map("notification_preferences")
+  name                    String?
+  statusReason            String?       @map("status_reason")
+  statusChangedAt         DateTime?     @map("status_changed_at")
+  statusChangedBy         String?       @map("status_changed_by")
+  passwordChangedAt       DateTime?     @map("password_changed_at")
+  failedLoginCount        Int           @default(0) @map("failed_login_count")
+  backoffUntil            DateTime?     @map("backoff_until")
+  mfaSecretEnc            Bytes?        @map("mfa_secret_enc")
+  mfaPendingSecretEnc     Bytes?        @map("mfa_pending_secret_enc")
+  mfaPendingCreatedAt     DateTime?     @map("mfa_pending_created_at")
+  mfaEnrolledAt           DateTime?     @map("mfa_enrolled_at")
+  mfaLastStep             BigInt?       @map("mfa_last_step")
+  lastActiveRole          WorkspaceRole? @map("last_active_role")
+  deletionRequestedAt     DateTime?     @map("deletion_requested_at")
+  deletionScheduledFor    DateTime?     @map("deletion_scheduled_for")
+  deletedAt               DateTime?     @map("deleted_at")
   createdAt               DateTime      @default(now()) @map("created_at")
   updatedAt               DateTime      @updatedAt @map("updated_at")
 
-  auditLogs AuditLog[] @relation("AuditActor")
+  auditLogs     AuditLog[]           @relation("AuditActor")
+  platformRoles UserRole[]
+  sessions      Session[]
+  authTokens    AuthToken[]
+  recoveryCodes MfaRecoveryCode[]
+  legalAcceptances LegalAcceptance[]
+  statusHistory AccountStatusHistory[]
+  staffMember   StaffMember?
 
   @@map("users")
+}
+
+model UserRole {
+  userId   String       @map("user_id")
+  role     PlatformRole
+  addedAt  DateTime     @default(now()) @map("added_at")
+  addedVia RoleAddedVia @map("added_via")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, role])
+  @@index([role])
+  @@map("user_roles")
+}
+
+model Session {
+  id                    String               @id @default(uuid())
+  userId                String               @map("user_id")
+  client                ClientKind
+  deviceId              String?              @map("device_id")
+  deviceLabel           String               @map("device_label")
+  ipCreated             String?              @map("ip_created") @db.Inet
+  ipLast                String?              @map("ip_last") @db.Inet
+  userAgent             String               @map("user_agent")
+  remember              Boolean              @default(false)
+  activeRole            WorkspaceRole?       @map("active_role")
+  mfaVerifiedAt         DateTime?            @map("mfa_verified_at")
+  reauthAt              DateTime?            @map("reauth_at")
+  lastSeenAt            DateTime             @default(now()) @map("last_seen_at")
+  idleExpiresAt         DateTime             @map("idle_expires_at")
+  absoluteExpiresAt     DateTime             @map("absolute_expires_at")
+  permissionVersionSeen Int?                 @map("permission_version_seen")
+  revokedAt             DateTime?            @map("revoked_at")
+  revokedReason         SessionRevokedReason? @map("revoked_reason")
+  createdAt             DateTime             @default(now()) @map("created_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@index([idleExpiresAt])
+  @@index([absoluteExpiresAt])
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id            String    @id @default(uuid())
+  sessionId     String    @map("session_id")
+  tokenHash     Bytes     @unique @map("token_hash")
+  issuedAt      DateTime  @default(now()) @map("issued_at")
+  supersededAt  DateTime? @map("superseded_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, supersededAt])
+  @@map("refresh_tokens")
+}
+
+model AuthToken {
+  id        String          @id @default(uuid())
+  userId    String          @map("user_id")
+  purpose   AuthTokenPurpose
+  tokenHash Bytes           @unique @map("token_hash")
+  expiresAt DateTime        @map("expires_at")
+  usedAt    DateTime?       @map("used_at")
+  attempts  Int             @default(0)
+  metadata  Json?
+  createdIp String?         @map("created_ip") @db.Inet
+  createdAt DateTime        @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose, usedAt])
+  @@index([expiresAt])
+  @@map("auth_tokens")
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  codeHash  Bytes     @map("code_hash")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, usedAt])
+  @@map("mfa_recovery_codes")
+}
+
+model LegalDocument {
+  id          String            @id @default(uuid())
+  kind        LegalDocumentKind
+  version     String
+  url         String
+  publishedAt DateTime          @map("published_at")
+  createdAt   DateTime          @default(now()) @map("created_at")
+
+  acceptances LegalAcceptance[]
+
+  @@unique([kind, version])
+  @@index([kind, publishedAt])
+  @@map("legal_documents")
+}
+
+model LegalAcceptance {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  documentId String   @map("document_id")
+  acceptedAt DateTime @default(now()) @map("accepted_at")
+  source     String
+  ipAddress  String?  @map("ip_address") @db.Inet
+  userAgent  String?  @map("user_agent")
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document LegalDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, documentId])
+  @@index([userId, acceptedAt])
+  @@map("legal_acceptances")
+}
+
+model AccountStatusHistory {
+  id        String       @id @default(uuid())
+  userId    String       @map("user_id")
+  status    AccountStatus
+  reason    String?
+  changedBy String?      @map("changed_by")
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("account_status_history")
+}
+
+model StaffMember {
+  userId      String      @id @map("user_id")
+  status      StaffStatus @default(invited)
+  permVersion Int         @default(1) @map("perm_version")
+  canOwnRequests Boolean  @default(false) @map("can_own_requests")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roles StaffMemberRole[]
+  invites StaffInvite[]
+
+  @@map("staff_members")
+}
+
+model StaffMemberRole {
+  staffUserId String    @map("staff_user_id")
+  role        StaffRole
+  addedAt     DateTime  @default(now()) @map("added_at")
+
+  staffMember StaffMember @relation(fields: [staffUserId], references: [userId], onDelete: Cascade)
+
+  @@id([staffUserId, role])
+  @@index([role])
+  @@map("staff_member_roles")
+}
+
+model StaffInvite {
+  id          String          @id @default(uuid())
+  staffUserId String          @map("staff_user_id")
+  tokenHash   Bytes           @unique @map("token_hash")
+  state       StaffInviteState @default(pending)
+  invitedBy   String          @map("invited_by")
+  expiresAt   DateTime        @map("expires_at")
+  consumedAt  DateTime?       @map("consumed_at")
+  revokedAt   DateTime?       @map("revoked_at")
+  createdAt   DateTime        @default(now()) @map("created_at")
+
+  staffMember StaffMember @relation(fields: [staffUserId], references: [userId], onDelete: Cascade)
+
+  @@index([staffUserId, state])
+  @@index([expiresAt])
+  @@map("staff_invites")
 }
 
 // Outbound notification record. Written by NotificationsService before the
