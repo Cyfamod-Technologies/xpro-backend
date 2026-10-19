@@ -9,7 +9,6 @@ import {
   AppSurface,
   AuthTokenPurpose,
   LegalDocumentKind,
-  PlatformRole,
   Prisma,
   RoleAddedVia,
 } from '@prisma/client';

@@ -17,7 +17,6 @@ import {
   StaffStatus,
 } from '@prisma/client';
 import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
-import { RequestUser } from '../common/types/request-user';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -641,6 +640,10 @@ export class ProvidersService {
         'These profile changes are no longer awaiting review.',
       );
     const changes = profile.pendingChanges as Prisma.JsonObject;
+    if (typeof changes.trade !== 'string') {
+      throw new BadRequestException('These profile changes are invalid.');
+    }
+    const trade = changes.trade;
     const now = new Date().toISOString();
     const updated = await this.prisma.$transaction(async (tx) => {
       const result = await tx.providerProfile.update({
@@ -648,7 +651,7 @@ export class ProvidersService {
         data: {
           ...(dto.approve
             ? {
-                trade: String(changes.trade),
+                trade,
                 services: json(changes.services),
                 serviceAreas: json(changes.serviceAreas),
                 skills: json(changes.skills),
