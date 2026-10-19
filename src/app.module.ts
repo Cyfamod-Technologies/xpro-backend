@@ -21,7 +21,12 @@ import { ProvidersModule } from './providers/providers.module';
 @Module({
   imports: [
     RequestContextModule,
-    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath:
+        process.env.NODE_ENV === 'production' ? '.env.prod' : '.env.local',
+      validate: validateEnv,
+    }),
     PrismaModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     BullModule.forRootAsync({

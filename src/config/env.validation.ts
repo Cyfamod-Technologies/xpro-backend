@@ -21,6 +21,13 @@ const PRODUCTION_EMAIL_VARS = [
   'EMAIL_ASSET_BASE_URL',
 ];
 
+const PRODUCTION_SMTP_VARS = [
+  'SMTP_HOST',
+  'SMTP_PORT',
+  'SMTP_USER',
+  'SMTP_PASSWORD',
+];
+
 const STORAGE_DRIVERS = ['none', 'r2'] as const;
 type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 
@@ -47,10 +54,16 @@ export function validateEnv(
   validateStorage(config);
 
   if (config['NODE_ENV'] === 'production') {
-    if (!config['ZEPTOMAIL_TOKEN']) {
+    const missingSmtpVariables = PRODUCTION_SMTP_VARS.filter(
+      (key) => typeof config[key] !== 'string' || !String(config[key]).trim(),
+    );
+    if (missingSmtpVariables.length > 0) {
       throw new Error(
-        'ZEPTOMAIL_TOKEN is required in production — see docs/email/README.md to configure a different provider',
+        `Missing required production SMTP variables: ${missingSmtpVariables.join(', ')}`,
       );
+    }
+    if (![465, 587].includes(Number(config['SMTP_PORT']))) {
+      throw new Error('SMTP_PORT must be 465 or 587 in production');
     }
 
     const missingEmailVariables = PRODUCTION_EMAIL_VARS.filter(
