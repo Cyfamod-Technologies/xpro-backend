@@ -20,6 +20,7 @@ function getCorsOrigins() {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.setGlobalPrefix('api/v1');
 
   const corsOrigins = getCorsOrigins();
 
@@ -72,8 +73,22 @@ async function bootstrap() {
       'Accept',
       'X-Requested-With',
       'Origin',
+      'X-XPro-Client',
+      'X-XPro-Device-Id',
+      'X-XPro-App-Version',
+      'X-XPro-Activity',
+      'Idempotency-Key',
+      'If-Match',
+      'X-CSRF-Token',
     ],
-    exposedHeaders: ['Content-Range', 'X-Content-Range', 'Content-Type'],
+    exposedHeaders: [
+      'Content-Range',
+      'X-Content-Range',
+      'Content-Type',
+      'ETag',
+      'Retry-After',
+      'X-XPro-Perm-Version',
+    ],
   });
 
   (app.getHttpAdapter().getInstance() as Express).set('trust proxy', 1);

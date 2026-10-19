@@ -14,6 +14,8 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
+import { XProClientGuard } from './common/guards/xpro-client.guard';
+import { StaffModule } from './staff/staff.module';
 
 @Module({
   imports: [
@@ -40,6 +42,7 @@ import { UsersModule } from './users/users.module';
     }),
     RedisModule,
     AuthModule,
+    StaffModule,
     UsersModule,
     AuditLogsModule,
     NotificationsModule,
@@ -52,6 +55,10 @@ import { UsersModule } from './users/users.module';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: XProClientGuard,
     },
   ],
 })
