@@ -186,7 +186,9 @@ async function main() {
     applyIdentity(identity);
 
     console.log('\nDone. Remaining manual steps:');
-    console.log('  1. Update .env with the new DATABASE_URL and POSTGRES_* values');
+    console.log(
+      '  1. Update .env.local with the new DATABASE_URL and POSTGRES_* values',
+    );
     console.log('  2. Rewrite the intro paragraph of README.md');
     console.log('  3. Delete scripts/init-template.ts and the "init" script in package.json');
     console.log(

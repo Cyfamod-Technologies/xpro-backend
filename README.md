@@ -10,8 +10,8 @@ Boots on four environment variables. Everything else is optional or has a defaul
 
 ```bash
 npm install --legacy-peer-deps
-cp .env.example .env
-docker compose up -d          # postgres + redis
+cp .env.example .env.local
+docker compose --env-file .env.local up -d  # postgres + redis
 npx prisma migrate deploy
 npm run generate
 npm run start:dev
@@ -19,7 +19,7 @@ npm run start:dev
 
 API docs at `http://127.0.0.1:4000/` and `http://127.0.0.1:4000/docs`.
 
-To rebrand this project later, update the identity values in `.env` and the
+To rebrand this project later, update the identity values in `.env.local` and the
 compose files:
 
 ```bash
@@ -36,7 +36,7 @@ npm run init -- --name "Your Project"
 | **Authorization** | `AppRole` (`super_admin` / `admin` / `user`) and `AppSurface` (`admin` / `user`) guards |
 | **Database** | Prisma 6 + PostgreSQL 16, snake_case mapping, one init migration |
 | **Queues** | BullMQ with retry/backoff defaults and a `FailedJob` dead-letter table |
-| **Email** | Template renderer split from transport, 4 templates, queued sends with delivery records |
+| **Email** | Template renderer split from transport, 5 templates, queued sends with delivery records |
 | **Audit log** | Fire-and-forget, written off the request path |
 | **Storage** | Cloudflare R2, opt-in and inert by default |
 | **HTTP hardening** | Helmet with split CSP, CORS allowlist, rate limiting, Permissions-Policy |
@@ -75,8 +75,8 @@ ENCRYPTION_KEY=...          # ≥32 chars
 ```
 
 Optional subsystems stay dormant until configured: object storage
-(`STORAGE_DRIVER=none`) and email sending (rendering and previews work without a
-provider token). See [`.env.example`](.env.example) for the annotated list.
+(`STORAGE_DRIVER=none`) and email sending (rendering and previews work without
+SMTP credentials). See [`.env.example`](.env.example) for the annotated list.
 
 `validateEnv` runs at boot and fails fast on a bad configuration, with extra
 requirements under `NODE_ENV=production`.
