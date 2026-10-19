@@ -11,12 +11,12 @@ export const S3_CLIENT = 'S3_CLIENT';
 export type StorageDriver = 'none' | 'r2';
 
 export interface StorageConfig {
-  driver: Exclude<StorageDriver, 'none'>;
-  bucket: string;
-  region: string;
-  endpoint: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+  driver: StorageDriver;
+  bucket?: string;
+  region?: string;
+  endpoint?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
   /** Base URL objects are served from. R2 has no default public hostname. */
   publicUrl: string;
 }
@@ -29,9 +29,9 @@ export interface StorageConfig {
  */
 export function resolveStorageConfig(
   config: ConfigService,
-): StorageConfig | null {
+): StorageConfig {
   const driver = config.get<string>('STORAGE_DRIVER', 'none');
-  if (driver === 'none') return null;
+  if (driver === 'none') return { driver: 'none', publicUrl: '' };
 
   if (driver !== 'r2') {
     throw new Error(
