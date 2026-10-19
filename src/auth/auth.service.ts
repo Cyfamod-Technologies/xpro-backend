@@ -36,7 +36,7 @@ import {
   VerifyEmailTokenDto,
 } from './dto/auth.dto';
 import { RedisAuthService } from './redis-auth.service';
-import { generateTotpSecret, verifyTotp } from './totp.util';
+import { generateTotpSecret, matchingTotpStep } from './totp.util';
 
 @Injectable()
 export class AuthService {
@@ -112,7 +112,11 @@ export class AuthService {
     const ok = await bcrypt.compare(password, user.passwordHash);
     if (!ok) throw new UnauthorizedException('Incorrect password');
     if (user.mfaEnabled) {
-      if (!mfaCode || !user.mfaSecret || !verifyTotp(user.mfaSecret, mfaCode)) {
+      if (
+        !mfaCode ||
+        !user.mfaSecret ||
+        !(await this.consumeTotp(userId, user.mfaSecret, mfaCode))
+      ) {
         throw new UnauthorizedException('Valid MFA code required');
       }
     }
@@ -525,7 +529,7 @@ export class AuthService {
       if (!user.mfaSecret) {
         throw new UnauthorizedException('MFA setup is incomplete');
       }
-      if (!verifyTotp(user.mfaSecret, dto.mfaCode)) {
+      if (!(await this.consumeTotp(user.id, user.mfaSecret, dto.mfaCode))) {
         throw new UnauthorizedException('Invalid MFA code');
       }
     }
@@ -741,13 +745,19 @@ export class AuthService {
       );
     }
 
-    if (!verifyTotp(secret, code)) {
+    const step = matchingTotpStep(secret, code);
+    if (step === null) {
       throw new UnauthorizedException('Invalid MFA code');
     }
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { mfaSecret: secret, mfaEnabled: true },
+      data: {
+        mfaSecret: secret,
+        mfaEnabled: true,
+        mfaEnrolledAt: new Date(),
+        mfaLastStep: step,
+      },
     });
 
     await this.redisAuth.deleteMfaPendingSecret(userId);
@@ -780,14 +790,19 @@ export class AuthService {
       if (!dto.code) throw new UnauthorizedException('MFA code required');
       if (!user.mfaSecret)
         throw new UnauthorizedException('MFA setup is incomplete');
-      if (!verifyTotp(user.mfaSecret, dto.code)) {
+      if (!(await this.consumeTotp(userId, user.mfaSecret, dto.code))) {
         throw new UnauthorizedException('Invalid MFA code');
       }
     }
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { mfaEnabled: false, mfaSecret: null },
+      data: {
+        mfaEnabled: false,
+        mfaSecret: null,
+        mfaEnrolledAt: null,
+        mfaLastStep: null,
+      },
     });
 
     this.auditLogs.record({
@@ -904,5 +919,26 @@ export class AuthService {
       return [AppSurface.admin];
     }
     return [AppSurface.user];
+  }
+
+  private async consumeTotp(
+    userId: string,
+    secret: string,
+    code: string,
+  ): Promise<boolean> {
+    const step = matchingTotpStep(secret, code);
+    if (step === null) return false;
+
+    const result = await this.prisma.user.updateMany({
+      where: {
+        id: userId,
+        status: 'active',
+        mfaEnabled: true,
+        mfaSecret: secret,
+        OR: [{ mfaLastStep: null }, { mfaLastStep: { lt: step } }],
+      },
+      data: { mfaLastStep: step },
+    });
+    return result.count === 1;
   }
 }

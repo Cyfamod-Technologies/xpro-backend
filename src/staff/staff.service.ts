@@ -28,7 +28,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStore } from '../redis/session-store.service';
 import { RedisAuthService } from '../auth/redis-auth.service';
-import { generateTotpSecret, verifyTotp } from '../auth/totp.util';
+import { generateTotpSecret, matchingTotpStep } from '../auth/totp.util';
 import {
   canOwnRequests,
   permissionsForRoles,
@@ -448,6 +448,8 @@ export class StaffService {
                 mfaEnabled: false,
                 mfaSecret: null,
                 mfaSecretEnc: null,
+                mfaEnrolledAt: null,
+                mfaLastStep: null,
               }
             : {}),
         },
@@ -462,6 +464,7 @@ export class StaffService {
             mfaSecret: null,
             mfaSecretEnc: null,
             mfaEnrolledAt: null,
+            mfaLastStep: null,
           },
         });
         await tx.mfaRecoveryCode.deleteMany({ where: { userId: staffId } });
@@ -512,6 +515,7 @@ export class StaffService {
           mfaPendingSecretEnc: null,
           mfaPendingCreatedAt: null,
           mfaEnrolledAt: null,
+          mfaLastStep: null,
         },
       });
       await tx.mfaRecoveryCode.deleteMany({ where: { userId: staffId } });
@@ -613,7 +617,8 @@ export class StaffService {
         'Enrollment token is invalid or expired.',
       );
     const secret = await this.redisAuth.getMfaPendingSecret(authToken.userId);
-    if (!secret || !verifyTotp(secret, code))
+    const step = secret ? matchingTotpStep(secret, code) : null;
+    if (step === null)
       throw new UnauthorizedException('Invalid MFA code.');
     const staff = await this.prisma.staffMember.findUnique({
       where: { userId: authToken.userId },
@@ -645,6 +650,7 @@ export class StaffService {
           mfaEnabled: true,
           mfaSecret: secret,
           mfaEnrolledAt: new Date(),
+          mfaLastStep: step,
           emailVerifiedAt: new Date(),
           lastLoginAt: new Date(),
         },
