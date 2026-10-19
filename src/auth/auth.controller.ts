@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,6 +8,7 @@ import {
   Patch,
   Post,
   Res,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
@@ -54,6 +56,13 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   async register(@Body() dto: RegisterDto) {
     return this.authService.register(dto);
+  }
+
+  @Get('legal-documents')
+  @ApiOperation({ summary: 'Get the current legal document versions required for registration' })
+  legalDocuments(@Query('role') role: 'customer' | 'provider' = 'customer') {
+    if (role !== 'customer' && role !== 'provider') throw new BadRequestException('Choose a customer or provider account.');
+    return this.authService.legalDocuments(role);
   }
 
   @Post('email/verify')
