@@ -1,6 +1,9 @@
-# ZeptoMail
+# ZeptoMail (historical)
 
-The configured provider. ZeptoMail (Zoho) is transactional-only — it will not
+The backend now sends through SMTP. This guide is retained for reference and
+rollback to a previous release; its ZeptoMail SDK setup is not active.
+
+The previously configured provider. ZeptoMail (Zoho) is transactional-only — it will not
 accept marketing sends, which is part of why its deliverability is good.
 
 ## 1. Add and verify a domain
@@ -67,7 +70,7 @@ Check the `notifications` table — `status` should reach `sent` with `sentAt` s
 
 ## Implementation
 
-`src/email/email.service.ts` uses the official `zeptomail` SDK:
+The previous `src/email/email.service.ts` used the official `zeptomail` SDK:
 
 ```ts
 this.client = new SendMailClient({ url: zeptoUrl, token: this.zeptoToken });
@@ -81,8 +84,7 @@ Two details worth knowing:
   a pixel, which hurts deliverability on transactional mail and has privacy
   implications. Turn them on deliberately, not by default.
 
-Without a token the service logs a warning at construction and throws on send —
-development and previews still work.
+The previous service logged a warning without a token and threw on send.
 
 ## Troubleshooting
 
