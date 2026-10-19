@@ -52,9 +52,10 @@ export class AuthService {
   ) {}
 
   async legalDocuments(role: 'customer' | 'provider') {
-    const kinds: LegalDocumentKind[] = role === 'provider'
-      ? ['terms', 'privacy', 'provider_agreement']
-      : ['terms', 'privacy'];
+    const kinds: LegalDocumentKind[] =
+      role === 'provider'
+        ? ['terms', 'privacy', 'provider_agreement']
+        : ['terms', 'privacy'];
     const documents = await this.prisma.legalDocument.findMany({
       where: { kind: { in: kinds }, publishedAt: { lte: new Date() } },
       orderBy: { publishedAt: 'desc' },
@@ -250,7 +251,7 @@ export class AuthService {
           status: 'unverified',
           platformRoles: {
             create: {
-              role: dto.role as PlatformRole,
+              role: dto.role,
               addedVia: RoleAddedVia.signup,
             },
           },
@@ -521,7 +522,10 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
-      include: { platformRoles: { select: { role: true } }, staffMember: { select: { status: true } } },
+      include: {
+        platformRoles: { select: { role: true } },
+        staffMember: { select: { status: true } },
+      },
     });
 
     if (!user?.passwordHash) {

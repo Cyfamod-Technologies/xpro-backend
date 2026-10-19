@@ -6,7 +6,11 @@ import {
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import {
   S3_CLIENT,
   STORAGE_CONFIG,
@@ -58,10 +62,17 @@ export class StorageService {
     );
   }
 
-  async head(key: string): Promise<{ contentType?: string; contentLength?: number }> {
+  async head(
+    key: string,
+  ): Promise<{ contentType?: string; contentLength?: number }> {
     this.requireEnabled();
-    const result = await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
-    return { contentType: result.ContentType, contentLength: result.ContentLength };
+    const result = await this.s3.send(
+      new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    return {
+      contentType: result.ContentType,
+      contentLength: result.ContentLength,
+    };
   }
 
   async signedUploadUrl(
@@ -123,6 +134,9 @@ export class StorageService {
   }
 
   private requireEnabled(): void {
-    if (!this.enabled) throw new ServiceUnavailableException('Object storage is not configured.');
+    if (!this.enabled)
+      throw new ServiceUnavailableException(
+        'Object storage is not configured.',
+      );
   }
 }

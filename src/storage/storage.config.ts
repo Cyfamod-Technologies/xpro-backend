@@ -27,9 +27,7 @@ export interface StorageConfig {
  * re-reads rather than trusting, so the service can never be constructed with
  * half a configuration.
  */
-export function resolveStorageConfig(
-  config: ConfigService,
-): StorageConfig {
+export function resolveStorageConfig(config: ConfigService): StorageConfig {
   const driver = config.get<string>('STORAGE_DRIVER', 'none');
   if (driver === 'none') return { driver: 'none', publicUrl: '' };
 

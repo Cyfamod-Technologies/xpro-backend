@@ -19,7 +19,8 @@ import { StorageService } from './storage.service';
     {
       provide: STORAGE_CONFIG,
       inject: [ConfigService],
-      useFactory: (config: ConfigService): StorageConfig => resolveStorageConfig(config),
+      useFactory: (config: ConfigService): StorageConfig =>
+        resolveStorageConfig(config),
     },
     {
       provide: S3_CLIENT,
