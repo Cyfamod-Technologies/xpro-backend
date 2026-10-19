@@ -115,6 +115,35 @@ enum StaffInviteState {
   expired
 }
 
+enum ProviderVerificationStatus {
+  draft
+  pending
+  changes_requested
+  rejected
+  approved
+  delisted
+}
+
+enum ProviderBankStatus {
+  pending
+  verified
+  rejected
+  superseded
+}
+
+enum ProviderUploadPurpose {
+  provider_document
+  provider_photo
+  provider_portfolio
+}
+
+enum ProviderUploadStatus {
+  pending
+  ready
+  attached
+  expired
+}
+
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model User {
@@ -161,6 +190,8 @@ model User {
   legalAcceptances LegalAcceptance[]
   statusHistory AccountStatusHistory[]
   staffMember   StaffMember?
+  providerProfile ProviderProfile?
+  providerUploads ProviderUpload[]
 
   @@map("users")
 }
@@ -325,6 +356,101 @@ model StaffMemberRole {
   @@id([staffUserId, role])
   @@index([role])
   @@map("staff_member_roles")
+}
+
+model ProviderProfile {
+  id                 String                    @id @default(uuid())
+  userId             String                    @unique @map("user_id")
+  phone              String
+  trade              String
+  city               String
+  services           Json
+  serviceAreas       Json                     @map("service_areas")
+  skills             Json
+  capacity           Int                      @default(3)
+  workingHours       Json                     @map("working_hours")
+  timeOff            Json                     @default("[]") @map("time_off")
+  experience         Float                    @default(0)
+  bio                String
+  documents          Json                     @default("[]")
+  photo              Json?
+  portfolio          Json                     @default("[]")
+  verification       ProviderVerificationStatus @default(draft)
+  available          Boolean                  @default(false)
+  reviewNote         String?                  @map("review_note")
+  reviewedAt         DateTime?                @map("reviewed_at")
+  reviewedBy         String?                  @map("reviewed_by")
+  rejectedAt         DateTime?                @map("rejected_at")
+  pendingChanges     Json?                    @map("pending_changes")
+  changesReview      Json?                    @map("changes_review")
+  version            Int                      @default(1)
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
+
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankAccounts ProviderBankAccount[]
+  reviews    ProviderReview[]
+
+  @@index([verification, available])
+  @@map("provider_profiles")
+}
+
+model ProviderBankAccount {
+  id                 String             @id @default(uuid())
+  providerId         String             @map("provider_id")
+  bankCode           String             @map("bank_code")
+  bankName           String             @map("bank_name")
+  accountNumberEnc   String             @map("account_number_enc")
+  accountNameEnc     String             @map("account_name_enc")
+  last4              String             @map("last4")
+  state              ProviderBankStatus @default(pending)
+  reviewNote         String?            @map("review_note")
+  reviewedBy         String?            @map("reviewed_by")
+  reviewedAt         DateTime?          @map("reviewed_at")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  provider ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, state])
+  @@map("provider_bank_accounts")
+}
+
+model ProviderReview {
+  id         String   @id @default(uuid())
+  providerId String   @map("provider_id")
+  kind       String
+  decision   String
+  note       String?
+  actorId    String   @map("actor_id")
+  version    Int
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  provider ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, createdAt])
+  @@map("provider_reviews")
+}
+
+model ProviderUpload {
+  id          String                 @id @default(uuid())
+  ownerId     String                 @map("owner_id")
+  purpose     ProviderUploadPurpose
+  status      ProviderUploadStatus   @default(pending)
+  fileName    String                 @map("file_name")
+  contentType String                 @map("content_type")
+  size        Int
+  storageKey  String                 @unique @map("storage_key")
+  expiresAt   DateTime               @map("expires_at")
+  completedAt DateTime?              @map("completed_at")
+  attachedAt  DateTime?              @map("attached_at")
+  createdAt   DateTime               @default(now()) @map("created_at")
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, status, purpose])
+  @@index([expiresAt])
+  @@map("provider_uploads")
 }
 
 model StaffInvite {
