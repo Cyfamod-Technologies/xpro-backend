@@ -114,7 +114,7 @@ Two layers, deliberately separate:
 - **`EmailRendererService`** turns a template key plus an untyped payload into
   subject/html/text. Pure, synchronous, no I/O — which is why it is unit-testable
   and why `npm run email:preview` works without credentials.
-- **`EmailService`** is the transport (ZeptoMail by default).
+- **`EmailService`** is the SMTP transport (Hostinger Email settings by default).
 
 Nothing sends inline: `NotificationsService.queueEmail()` writes a `Notification`
 row, optionally applies a Redis cooldown to suppress duplicates, and enqueues an

@@ -41,7 +41,7 @@ so it cannot block startup. `resolveStorageConfig()` is the only place env is re
 ## Turning it on
 
 1. Follow [r2.md](r2.md) to create the bucket and credentials.
-2. Set `STORAGE_DRIVER=r2` and the rest of the `STORAGE_*` block in `.env`.
+2. Set `STORAGE_DRIVER=r2` and the rest of the `STORAGE_*` block in `.env.local`.
 3. Import `StorageModule` in whichever feature module needs it:
 
    ```ts

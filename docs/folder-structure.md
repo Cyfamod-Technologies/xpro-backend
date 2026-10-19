@@ -47,7 +47,7 @@ xpro-server/
 │   ├── config/
 │   │   └── env.validation.ts   # Validates required env vars at startup
 │   ├── email/                  # Provider transport + HTML/text templates
-│   │   ├── email.service.ts        # ZeptoMail transport
+│   │   ├── email.service.ts        # SMTP transport
 │   │   ├── email-renderer.service.ts   # Template key → rendered email
 │   │   ├── email.types.ts          # Template keys and payload types
 │   │   └── templates/
