@@ -87,6 +87,22 @@ export class ReactivateStaffDto extends StaffReasonDto {
   resetMfa = false;
 }
 
+export class StaffConflictDeclarationDto {
+  @ApiProperty()
+  @IsBoolean()
+  hasLinkedCustomerAccount: boolean;
+
+  @ApiPropertyOptional({ format: 'email' })
+  @IsOptional()
+  @IsEmail()
+  linkedCustomerEmail?: string;
+
+  @ApiProperty({ minLength: 10, maxLength: 1000 })
+  @IsString()
+  @Length(10, 1000)
+  statement: string;
+}
+
 export class AcceptStaffInviteDto {
   @ApiProperty()
   @IsString()
@@ -106,22 +122,6 @@ export class AcceptStaffInviteDto {
   @ValidateNested()
   @Type(() => StaffConflictDeclarationDto)
   conflictDeclaration: StaffConflictDeclarationDto;
-}
-
-export class StaffConflictDeclarationDto {
-  @ApiProperty()
-  @IsBoolean()
-  hasLinkedCustomerAccount: boolean;
-
-  @ApiPropertyOptional({ format: 'email' })
-  @IsOptional()
-  @IsEmail()
-  linkedCustomerEmail?: string;
-
-  @ApiProperty({ minLength: 10, maxLength: 1000 })
-  @IsString()
-  @Length(10, 1000)
-  statement: string;
 }
 
 export class VerifyStaffMfaDto {
