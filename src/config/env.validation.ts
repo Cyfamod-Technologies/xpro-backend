@@ -54,6 +54,18 @@ export function validateEnv(
   validateStorage(config);
 
   if (config['NODE_ENV'] === 'production') {
+    const missingSmtpVariables = PRODUCTION_SMTP_VARS.filter(
+      (key) => typeof config[key] !== 'string' || !String(config[key]).trim(),
+    );
+    if (missingSmtpVariables.length > 0) {
+      throw new Error(
+        `Missing required production SMTP variables: ${missingSmtpVariables.join(', ')}`,
+      );
+    }
+    if (![465, 587].includes(Number(config['SMTP_PORT']))) {
+      throw new Error('SMTP_PORT must be 465 or 587 in production');
+    }
+
     const missingEmailVariables = PRODUCTION_EMAIL_VARS.filter(
       (key) => !config[key],
     );
