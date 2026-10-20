@@ -41,7 +41,7 @@ so it cannot block startup. `resolveStorageConfig()` is the only place env is re
 ## Turning it on
 
 1. Follow [r2.md](r2.md) to create the bucket and credentials.
-2. Set `STORAGE_DRIVER=r2` and the rest of the `STORAGE_*` block in `.env`.
+2. Set `STORAGE_DRIVER=r2` and the rest of the `STORAGE_*` block in `.env.local`.
 3. Import `StorageModule` in whichever feature module needs it:
 
    ```ts
@@ -62,8 +62,10 @@ so it cannot block startup. `resolveStorageConfig()` is the only place env is re
    }
    ```
 
-Importing `StorageModule` while `STORAGE_DRIVER=none` throws at boot with an
-explanatory message, rather than handing you a service that fails on first use.
+Importing `StorageModule` while `STORAGE_DRIVER=none` is allowed so the API can
+boot without optional uploads configured. Storage operations return a clear
+service-unavailable response until a driver is enabled. Set `STORAGE_DRIVER=r2`
+and configure the required credentials before using provider document uploads.
 
 ## API
 
@@ -82,6 +84,6 @@ process entirely.
 
 ## Turning it off
 
-Set `STORAGE_DRIVER=none` and remove the `StorageModule` import. To drop it
-permanently, delete `src/storage/` and uninstall `@aws-sdk/client-s3` and
+Set `STORAGE_DRIVER=none` to disable uploads. To drop storage permanently,
+remove the `StorageModule` imports, delete `src/storage/`, and uninstall `@aws-sdk/client-s3` and
 `@aws-sdk/s3-request-presigner`.

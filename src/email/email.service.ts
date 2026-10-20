@@ -1,39 +1,43 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SendMailClient, type Sendmail } from 'zeptomail';
+import { createTransport, type Transporter } from 'nodemailer';
 import { EmailRendererService } from './email-renderer.service';
 import type { QueuedEmail, SentEmailResult } from './email.types';
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private readonly client: SendMailClient;
+  private readonly transporter?: Transporter;
   private readonly from: { address: string; name: string };
   private readonly replyTo?: { address: string; name: string };
-  private readonly zeptoToken: string;
 
   constructor(
     private readonly config: ConfigService,
     private readonly renderer: EmailRendererService,
   ) {
-    const zeptoUrl = this.config.get<string>(
-      'ZEPTOMAIL_URL',
-      'https://api.zeptomail.com/v1.1/email',
-    );
-    this.zeptoToken = this.config.get<string>('ZEPTOMAIL_TOKEN', '');
+    const host = this.config.get<string>('SMTP_HOST', '');
+    const user = this.config.get<string>('SMTP_USER', '');
+    const password = this.config.get<string>('SMTP_PASSWORD', '');
+    const port = Number(this.config.get<string>('SMTP_PORT', '465'));
     this.from = this.parseEmailFrom(
       this.config.get<string>('EMAIL_FROM', 'noreply@example.com'),
       this.config.get<string>('EMAIL_FROM_NAME'),
     );
     const replyTo = this.config.get<string>('EMAIL_REPLY_TO');
     this.replyTo = replyTo ? this.parseEmailFrom(replyTo) : undefined;
-    this.client = new SendMailClient({
-      url: zeptoUrl,
-      token: this.zeptoToken,
-    });
-
-    if (!this.zeptoToken) {
-      this.logger.warn('ZEPTOMAIL_TOKEN is not configured');
+    if (host && user && password && (port === 465 || port === 587)) {
+      this.transporter = createTransport({
+        host,
+        port,
+        secure: port === 465,
+        requireTLS: port === 587,
+        auth: { user, pass: password },
+        connectionTimeout: 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 20_000,
+      });
+    } else {
+      this.logger.warn('SMTP is not configured');
     }
   }
 
@@ -43,55 +47,27 @@ export class EmailService {
       templateKey: input.templateKey,
       payload: input.payload,
     });
-    return this.sendWithZeptoMail({
-      notificationId: input.notificationId,
-      to: input.recipientEmail,
-      subject: rendered.subject,
-      html: rendered.html,
-      text: rendered.text,
-    });
-  }
-
-  private async sendWithZeptoMail(options: {
-    notificationId: string;
-    to: string;
-    subject: string;
-    html: string;
-    text: string;
-  }): Promise<SentEmailResult> {
-    if (!this.zeptoToken) {
-      throw new Error('ZEPTOMAIL_TOKEN is not configured');
+    if (!this.transporter) {
+      throw new Error('SMTP is not configured');
     }
 
-    const email: Sendmail = {
-      from: this.from,
-      to: [
-        {
-          email_address: {
-            address: options.to,
-            name: this.nameFromEmail(options.to),
-          },
-        },
-      ],
-      subject: options.subject,
-      htmlbody: options.html,
-      textbody: options.text,
-      client_reference: options.notificationId,
-      track_clicks: false,
-      track_opens: false,
-      ...(this.replyTo && { reply_to: [this.replyTo] }),
-    };
-
     try {
-      const response = await this.client.sendMail(email);
-      const id = this.extractProviderId(response);
+      const response = await this.transporter.sendMail({
+        from: this.from,
+        to: input.recipientEmail,
+        subject: rendered.subject,
+        html: rendered.html,
+        text: rendered.text,
+        ...(this.replyTo && { replyTo: this.replyTo }),
+        headers: { 'X-Notification-Id': input.notificationId },
+      });
       this.logger.log(
-        `ZeptoMail sent to=${this.maskEmail(options.to)} providerId=${id ?? 'none'}`,
+        `SMTP sent to=${this.maskEmail(input.recipientEmail)} messageId=${response.messageId}`,
       );
-      return { provider: 'zeptomail', id, response };
+      return { provider: 'smtp', id: response.messageId, response };
     } catch (error) {
       this.logger.error(
-        `ZeptoMail failed to=${this.maskEmail(options.to)} error=${String(error)}`,
+        `SMTP failed to=${this.maskEmail(input.recipientEmail)} error=${String(error)}`,
       );
       throw error;
     }
@@ -115,30 +91,5 @@ export class EmailService {
     const [local, domain] = email.split('@');
     if (!domain) return '***';
     return `${local?.charAt(0) || '*'}***@${domain}`;
-  }
-
-  private extractProviderId(response: unknown): string | undefined {
-    const seen = new Set<unknown>();
-    const pending: unknown[] = [response];
-    const keys = ['message_id', 'messageId', 'id', 'request_id', 'requestId'];
-
-    while (pending.length > 0) {
-      const current = pending.shift();
-      if (!current || typeof current !== 'object' || seen.has(current)) {
-        continue;
-      }
-      seen.add(current);
-
-      const record = current as Record<string, unknown>;
-      for (const key of keys) {
-        if (typeof record[key] === 'string') {
-          return record[key];
-        }
-      }
-
-      pending.push(...Object.values(record));
-    }
-
-    return undefined;
   }
 }

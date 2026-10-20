@@ -16,11 +16,17 @@ import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
 import { XProClientGuard } from './common/guards/xpro-client.guard';
 import { StaffModule } from './staff/staff.module';
+import { ProvidersModule } from './providers/providers.module';
 
 @Module({
   imports: [
     RequestContextModule,
-    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath:
+        process.env.NODE_ENV === 'production' ? '.env.prod' : '.env.local',
+      validate: validateEnv,
+    }),
     PrismaModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     BullModule.forRootAsync({
@@ -43,6 +49,7 @@ import { StaffModule } from './staff/staff.module';
     RedisModule,
     AuthModule,
     StaffModule,
+    ProvidersModule,
     UsersModule,
     AuditLogsModule,
     NotificationsModule,

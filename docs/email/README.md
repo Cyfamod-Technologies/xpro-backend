@@ -2,8 +2,8 @@
 
 | Guide | When |
 | --- | --- |
-| [zeptomail.md](zeptomail.md) | ZeptoMail — the configured provider |
-| [smtp.md](smtp.md) | Generic SMTP — SES, Mailgun, Postmark, Resend, Gmail |
+| [smtp.md](smtp.md) | Hostinger Email SMTP — the configured transport |
+| [zeptomail.md](zeptomail.md) | Historical ZeptoMail setup guide |
 
 ## Two layers
 
@@ -21,8 +21,9 @@ EmailRendererService                → template key + payload → subject/html/
 templates/*.template.ts             → pure functions, no I/O
 ```
 
-Switching providers touches **`email.service.ts` only**. Renderer, templates,
-queueing and the `Notification` record are all transport-agnostic.
+The transport implementation lives in `email.service.ts`. Renderer, templates,
+queueing and the `Notification` record are transport-agnostic. A provider switch
+also needs matching environment validation, dependencies and deployment secrets.
 
 ## Sending
 
@@ -45,7 +46,7 @@ inside the window is dropped. Use it on anything a user can trigger repeatedly.
 
 ## Templates
 
-Four ship with the template:
+Five ship with the template:
 
 | Key | Payload |
 | --- | --- |
@@ -53,6 +54,7 @@ Four ship with the template:
 | `email_verification` | `{ code, firstName? }` |
 | `password_reset` | `{ resetToken, firstName? }` |
 | `custom_email` | `{ subject, preheader?, html, text }` |
+| `staff_invite` | `{ name, token, expiresAt }` |
 
 `custom_email` injects `html` **without escaping**. Only ever populate it from
 trusted server-side code, never from user input.
@@ -103,10 +105,9 @@ from the database without provider dashboard access.
 
 `validateEnv` enforces these when `NODE_ENV=production`:
 
-- `ZEPTOMAIL_TOKEN` set
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` and `SMTP_PASSWORD` set; port 465 or 587
 - `EMAIL_FROM`, `EMAIL_FROM_NAME`, `FRONTEND_URL`, `EMAIL_ASSET_BASE_URL` set
 - All URL variables absolute HTTPS
 - `EMAIL_FROM` not on `example.com`
 
-If you switch to SMTP, update that check in `env.validation.ts` — see
-[smtp.md](smtp.md).
+See [smtp.md](smtp.md) for Hostinger mailbox and domain setup.

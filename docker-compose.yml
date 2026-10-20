@@ -9,14 +9,15 @@
 #
 #  Usage
 #  -----
-#  Local dev (deps only):  docker compose up -d          → postgres, redis
+#  Local dev (deps only):  docker compose --env-file .env.local up -d
+#                          → postgres, redis
 #                          then run the API on the host: npm run start:dev
-#  Full / prod-like:       docker compose --profile full up --build
+#  Full / prod-like:       docker compose --env-file .env.local --profile full up --build
 #  Logs:                   docker compose logs -f server
 #
 #  The `server` service sits behind the `full` profile so the default
 #  `docker compose up` brings up only infrastructure. Run the API natively for
-#  hot reload; it reads localhost connection details from .env, which the
+#  hot reload; it reads localhost connection details from .env.local, which the
 #  containers override internally.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -29,7 +30,7 @@ services:
     build: .
     container_name: xpro-api
     restart: always
-    env_file: .env
+    env_file: .env.local
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-xpro}:${POSTGRES_PASSWORD:-xpro}@postgres:5432/${POSTGRES_DB:-xpro_db}?schema=public
       REDIS_HOST: redis

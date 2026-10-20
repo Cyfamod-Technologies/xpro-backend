@@ -10,8 +10,8 @@
 
 ```bash
 npm install --legacy-peer-deps
-cp .env.example .env
-docker compose up -d          # postgres + redis
+cp .env.example .env.local
+docker compose --env-file .env.local up -d  # postgres + redis
 npx prisma migrate deploy     # apply the init migration
 npm run generate              # generate the Prisma client
 npm run start:dev
@@ -53,6 +53,10 @@ after cloning, then delete `scripts/init-template.ts`.
 | `npm run seed:sample-user` | Create/update an ordinary verified user |
 | `npm run email:preview` | Render every email template to `.email-previews/` |
 
+The app reads `.env.local` in development and `.env.prod` when
+`NODE_ENV=production`. Helper scripts use `.env.local` by default; set
+`DOTENV_CONFIG_PATH=.env.prod` to run one with production settings.
+
 ## Seeding
 
 Both seed scripts are idempotent upserts, safe to re-run.
@@ -82,4 +86,4 @@ credentials needed — this renders locally without sending anything.
 ## Optional subsystems
 
 - **Object storage** is off by default (`STORAGE_DRIVER=none`). See [storage/](storage/README.md).
-- **Email sending** needs a provider token; rendering and previews work without one. See [email/](email/README.md).
+- **Email sending** needs SMTP credentials; rendering and previews work without them. See [email/](email/README.md).

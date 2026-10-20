@@ -8,7 +8,7 @@ import {
   AppRole,
   AppSurface,
   AuthTokenPurpose,
-  PlatformRole,
+  LegalDocumentKind,
   Prisma,
   RoleAddedVia,
 } from '@prisma/client';
@@ -49,6 +49,20 @@ export class AuthService {
     private readonly redisAuth: RedisAuthService,
     private readonly sessions: SessionStore,
   ) {}
+
+  async legalDocuments(role: 'customer' | 'provider') {
+    const kinds: LegalDocumentKind[] =
+      role === 'provider'
+        ? ['terms', 'privacy', 'provider_agreement']
+        : ['terms', 'privacy'];
+    const documents = await this.prisma.legalDocument.findMany({
+      where: { kind: { in: kinds }, publishedAt: { lte: new Date() } },
+      orderBy: { publishedAt: 'desc' },
+      distinct: ['kind'],
+      select: { kind: true, version: true, url: true, publishedAt: true },
+    });
+    return documents;
+  }
 
   async listSessions(userId: string, role: string, currentSid?: string) {
     const sessions = await this.sessions.getAllSessions(userId, role);
@@ -236,7 +250,7 @@ export class AuthService {
           status: 'unverified',
           platformRoles: {
             create: {
-              role: dto.role as PlatformRole,
+              role: dto.role,
               addedVia: RoleAddedVia.signup,
             },
           },
@@ -507,6 +521,10 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.toLowerCase() },
+      include: {
+        platformRoles: { select: { role: true } },
+        staffMember: { select: { status: true } },
+      },
     });
 
     if (!user?.passwordHash) {
@@ -576,6 +594,8 @@ export class AuthService {
         lastName: user.lastName,
         email: user.email,
         role: user.role,
+        platformRoles: user.platformRoles.map(({ role }) => role),
+        staffStatus: user.staffMember?.status ?? null,
         emailVerified: !!user.emailVerifiedAt,
         onboardingCompleted: user.onboardingCompleted,
         mfaEnabled: user.mfaEnabled,
@@ -626,6 +646,8 @@ export class AuthService {
         language: true,
         timezone: true,
         notificationPreferences: true,
+        platformRoles: { select: { role: true } },
+        staffMember: { select: { status: true } },
         createdAt: true,
         updatedAt: true,
       },
@@ -639,6 +661,8 @@ export class AuthService {
       lastName: user.lastName,
       email: user.email,
       role: user.role,
+      platformRoles: user.platformRoles.map(({ role }) => role),
+      staffStatus: user.staffMember?.status ?? null,
       emailVerified: !!user.emailVerifiedAt,
       onboardingCompleted: user.onboardingCompleted,
       mfaEnabled: user.mfaEnabled,

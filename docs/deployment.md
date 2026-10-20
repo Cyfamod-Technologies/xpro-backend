@@ -29,11 +29,11 @@ docker build -t xpro-api .
 
 ```bash
 # Development — infrastructure only, API on the host
-docker compose up -d
+docker compose --env-file .env.local up -d
 npm run start:dev
 
 # Development — everything in containers
-docker compose --profile full up --build
+docker compose --env-file .env.local --profile full up --build
 
 # Production
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
@@ -65,7 +65,7 @@ out rather than in each container's start command, or concurrent replicas will r
 `validateEnv` runs at boot and refuses to start on a bad configuration. In
 production it additionally requires:
 
-- `ZEPTOMAIL_TOKEN` and the email variables
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` and the email variables
 - All URL variables absolute HTTPS
 - `EMAIL_FROM` not on `example.com`
 - `ENCRYPTION_KEY` not the shipped development default

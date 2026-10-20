@@ -12,7 +12,7 @@ Architecture and conventions for this template, for both humans and coding agent
 | [background-jobs.md](background-jobs.md) | BullMQ queues, producers, processors, failure handling |
 | [database.md](database.md) | Prisma conventions, migrations, seeding |
 | [deployment.md](deployment.md) | Docker, compose, CI/CD, production checklist |
-| [email/](email/README.md) | Email rendering and provider setup (ZeptoMail, SMTP) |
+| [email/](email/README.md) | Email rendering and Hostinger SMTP setup |
 | [storage/](storage/README.md) | Object storage setup (Cloudflare R2, AWS S3) |
 
 Start with [architecture.md](architecture.md) for a system-wide orientation.

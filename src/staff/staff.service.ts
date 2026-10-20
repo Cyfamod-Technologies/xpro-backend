@@ -493,7 +493,7 @@ export class StaffService {
     dto: StaffReasonDto,
     reauthToken?: string,
   ) {
-    const actor = await this.requirePermission(actorId, 'staff.mfa.reset');
+    await this.requirePermission(actorId, 'staff.mfa.reset');
     if (actorId === staffId)
       throw new ForbiddenException({
         code: 'SELF_ACTION',

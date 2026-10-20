@@ -21,6 +21,13 @@ const PRODUCTION_EMAIL_VARS = [
   'EMAIL_ASSET_BASE_URL',
 ];
 
+const PRODUCTION_SMTP_VARS = [
+  'SMTP_HOST',
+  'SMTP_PORT',
+  'SMTP_USER',
+  'SMTP_PASSWORD',
+];
+
 const STORAGE_DRIVERS = ['none', 'r2'] as const;
 type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 
