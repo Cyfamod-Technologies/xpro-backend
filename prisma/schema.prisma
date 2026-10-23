@@ -532,3 +532,17 @@ model FailedJob {
   @@index([queueName, failedAt])
   @@map("failed_jobs")
 }
+
+model IdempotencyKey {
+  actorId     String   @map("actor_id")
+  key         String
+  requestHash String   @map("request_hash")
+  status      Int
+  response    Json
+  createdAt   DateTime @default(now()) @map("created_at")
+  expiresAt   DateTime @map("expires_at")
+
+  @@id([actorId, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}

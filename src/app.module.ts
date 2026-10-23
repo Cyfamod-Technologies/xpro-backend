@@ -11,6 +11,7 @@ import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { JobsModule } from './jobs/jobs.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
@@ -28,6 +29,7 @@ import { ProvidersModule } from './providers/providers.module';
       validate: validateEnv,
     }),
     PrismaModule,
+    PlatformModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     BullModule.forRootAsync({
       imports: [ConfigModule],
