@@ -22,6 +22,7 @@ import { StorageService } from '../storage/storage.service';
 import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
+import { LocationsService } from '../platform/locations/locations.service';
 import {
   ProviderAvailabilityDto,
   CreateProviderUploadDto,
@@ -48,6 +49,7 @@ export class ProvidersService {
     private readonly config: ConfigService,
     private readonly storage: StorageService,
     private readonly actors: ActorService,
+    private readonly locations: LocationsService,
   ) {}
 
   async myProfile(userId: string) {
@@ -240,6 +242,7 @@ export class ProvidersService {
         'Verify your email before submitting your provider profile.',
       );
     const normalized = this.validateSubmission(dto);
+    const locationValues = await this.locations.resolveProviderLocationIds(dto);
     await this.verifyAttachments(userId, dto);
     const resolved = await this.resolveBank(dto.bankCode, dto.accountNumber);
     const current = await this.prisma.providerProfile.findUnique({
@@ -265,7 +268,10 @@ export class ProvidersService {
       const proposed = {
         trade: dto.trade.trim(),
         services: normalized.services,
-        serviceAreas: normalized.serviceAreas,
+        city: locationValues.cityName,
+        cityId: locationValues.cityId,
+        serviceAreas: locationValues.serviceAreaNames,
+        serviceAreaIds: locationValues.serviceAreaIds,
         skills: normalized.skills,
         capacity: dto.capacity,
         documents: dto.documents,
@@ -277,7 +283,9 @@ export class ProvidersService {
           where: { userId },
           data: {
             phone: dto.phone.trim(),
-            city: dto.city.trim(),
+            city: locationValues.cityName,
+            cityId: locationValues.cityId ?? null,
+            businessName: dto.businessName?.trim() || undefined,
             experience: dto.experience,
             bio: dto.bio.trim(),
             workingHours: json(dto.workingHours),
@@ -301,9 +309,12 @@ export class ProvidersService {
             userId,
             phone: dto.phone.trim(),
             trade: dto.trade.trim(),
-            city: dto.city.trim(),
+            city: locationValues.cityName,
+            cityId: locationValues.cityId ?? null,
+            businessName: dto.businessName?.trim() || undefined,
             services: json(normalized.services),
-            serviceAreas: json(normalized.serviceAreas),
+            serviceAreas: json(locationValues.serviceAreaNames),
+            serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
@@ -318,9 +329,12 @@ export class ProvidersService {
           update: {
             phone: dto.phone.trim(),
             trade: dto.trade.trim(),
-            city: dto.city.trim(),
+            city: locationValues.cityName,
+            cityId: locationValues.cityId ?? null,
+            businessName: dto.businessName?.trim() || null,
             services: json(normalized.services),
-            serviceAreas: json(normalized.serviceAreas),
+            serviceAreas: json(locationValues.serviceAreaNames),
+            serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
@@ -656,6 +670,15 @@ export class ProvidersService {
                 trade,
                 services: json(changes.services),
                 serviceAreas: json(changes.serviceAreas),
+                ...(typeof changes.city === 'string'
+                  ? { city: changes.city }
+                  : {}),
+                ...(typeof changes.cityId === 'string'
+                  ? { cityId: changes.cityId }
+                  : {}),
+                ...(Array.isArray(changes.serviceAreaIds)
+                  ? { serviceAreaIds: changes.serviceAreaIds as string[] }
+                  : {}),
                 skills: json(changes.skills),
                 capacity: Number(changes.capacity),
                 documents: json(changes.documents),
@@ -798,7 +821,7 @@ export class ProvidersService {
   private validateSubmission(dto: ProviderProfileSubmissionDto) {
     if (!dto.services.length)
       throw new BadRequestException('Choose at least one service.');
-    if (!dto.serviceAreas.length)
+    if (!dto.serviceAreaIds?.length && !dto.serviceAreas?.length)
       throw new BadRequestException('Add at least one service area.');
     if (!dto.documents.length)
       throw new BadRequestException(
@@ -820,7 +843,7 @@ export class ProvidersService {
     return {
       services: [...new Set(dto.services)],
       serviceAreas: [
-        ...new Set(dto.serviceAreas.map((area) => area.trim()).filter(Boolean)),
+        ...new Set((dto.serviceAreas ?? []).map((area) => area.trim()).filter(Boolean)),
       ],
       skills: dto.skills,
     };
@@ -1037,8 +1060,11 @@ export class ProvidersService {
       phone: string;
       trade: string;
       city: string;
+      cityId?: string | null;
+      businessName?: string | null;
       services: Prisma.JsonValue;
       serviceAreas: Prisma.JsonValue;
+      serviceAreaIds?: string[];
       skills: Prisma.JsonValue;
       capacity: number;
       workingHours: Prisma.JsonValue;
@@ -1090,8 +1116,11 @@ export class ProvidersService {
       phone: profile.phone,
       trade: profile.trade,
       city: profile.city,
+      cityId: profile.cityId,
+      businessName: profile.businessName,
       services: profile.services,
       serviceAreas: profile.serviceAreas,
+      serviceAreaIds: profile.serviceAreaIds,
       skills: profile.skills,
       capacity: profile.capacity,
       workingHours: profile.workingHours,

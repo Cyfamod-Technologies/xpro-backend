@@ -364,8 +364,11 @@ model ProviderProfile {
   phone              String
   trade              String
   city               String
+  cityId             String?                  @map("city_id")
   services           Json
   serviceAreas       Json                     @map("service_areas")
+  serviceAreaIds     String[]                 @default([]) @map("service_area_ids")
+  businessName       String?                  @map("business_name")
   skills             Json
   capacity           Int                      @default(3)
   workingHours       Json                     @map("working_hours")
@@ -388,11 +391,38 @@ model ProviderProfile {
   updatedAt          DateTime                 @updatedAt @map("updated_at")
 
   user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cityLocation Location?     @relation("ProviderCity", fields: [cityId], references: [id], onDelete: SetNull)
   bankAccounts ProviderBankAccount[]
   reviews    ProviderReview[]
 
   @@index([verification, available])
   @@map("provider_profiles")
+}
+
+enum LocationKind {
+  city
+  district
+}
+
+model Location {
+  id        String   @id @default(uuid())
+  kind      LocationKind
+  name      String
+  parentId  String?  @map("parent_id")
+  aliases   String[] @default([])
+  active    Boolean  @default(true)
+  sort      Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children Location[] @relation("LocationHierarchy")
+  providers ProviderProfile[] @relation("ProviderCity")
+
+  @@unique([parentId, name])
+  @@index([kind, active])
+  @@index([parentId, active, sort])
+  @@map("locations")
 }
 
 model ProviderBankAccount {

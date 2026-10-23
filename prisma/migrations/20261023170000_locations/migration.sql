@@ -1,0 +1,62 @@
+CREATE TYPE "LocationKind" AS ENUM ('city', 'district');
+
+CREATE TABLE "locations" (
+    "id" TEXT NOT NULL,
+    "kind" "LocationKind" NOT NULL,
+    "name" TEXT NOT NULL,
+    "parent_id" TEXT,
+    "aliases" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    "active" BOOLEAN NOT NULL DEFAULT true,
+    "sort" INTEGER NOT NULL DEFAULT 0,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+    CONSTRAINT "locations_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX "locations_parent_id_active_sort_idx"
+    ON "locations"("parent_id", "active", "sort");
+
+CREATE INDEX "locations_kind_active_idx"
+    ON "locations"("kind", "active");
+
+CREATE UNIQUE INDEX "locations_parent_id_name_key"
+    ON "locations"("parent_id", "name");
+
+ALTER TABLE "locations"
+    ADD CONSTRAINT "locations_parent_id_fkey"
+    FOREIGN KEY ("parent_id") REFERENCES "locations"("id")
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE "provider_profiles"
+    ADD COLUMN "city_id" TEXT,
+    ADD COLUMN "service_area_ids" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    ADD COLUMN "business_name" TEXT;
+
+ALTER TABLE "provider_profiles"
+    ADD CONSTRAINT "provider_profiles_city_id_fkey"
+    FOREIGN KEY ("city_id") REFERENCES "locations"("id")
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+INSERT INTO "locations" ("id", "kind", "name", "parent_id", "aliases", "sort", "updated_at")
+VALUES
+    ('00000000-0000-4000-8000-000000000001', 'city', 'Abuja (FCT)', NULL, ARRAY['Abuja Municipal', 'Abuja']::TEXT[], 0, CURRENT_TIMESTAMP)
+ON CONFLICT ("id") DO NOTHING;
+
+INSERT INTO "locations" ("id", "kind", "name", "parent_id", "aliases", "sort", "updated_at")
+VALUES
+    ('00000000-0000-4000-8000-000000000002', 'district', 'Asokoro', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 1, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000003', 'district', 'Maitama', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 2, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000004', 'district', 'Wuse', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 3, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000005', 'district', 'Wuse II', '00000000-0000-4000-8000-000000000001', ARRAY['Wuse 2']::TEXT[], 4, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000006', 'district', 'Garki', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 5, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000007', 'district', 'Jabi', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 6, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000008', 'district', 'Gwarimpa', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 7, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000009', 'district', 'Kubwa', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 8, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000010', 'district', 'Lugbe', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 9, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000011', 'district', 'Utako', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 10, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000012', 'district', 'Lokogoma', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 11, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000013', 'district', 'Katampe', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 12, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000014', 'district', 'Life Camp', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 13, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000015', 'district', 'Apo', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 14, CURRENT_TIMESTAMP),
+    ('00000000-0000-4000-8000-000000000016', 'district', 'Other / not listed', '00000000-0000-4000-8000-000000000001', ARRAY[]::TEXT[], 15, CURRENT_TIMESTAMP)
+ON CONFLICT ("id") DO NOTHING;
