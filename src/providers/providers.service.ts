@@ -19,6 +19,10 @@ import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import {
+  hasExpectedSignature,
+  validateFile,
+} from '../storage/file-validation';
 import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
@@ -109,7 +113,7 @@ export class ProvidersService {
 
   async createUpload(userId: string, dto: CreateProviderUploadDto) {
     await this.requireProvider(userId);
-    this.validateFile(dto.name, dto.type, dto.size, dto.purpose);
+    validateFile(dto.name, dto.type, dto.size, dto.purpose);
     const id = randomUUID();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     const ext = dto.name.split('.').pop()?.toLowerCase() ?? 'bin';
@@ -155,7 +159,7 @@ export class ProvidersService {
         'Uploaded file size or type does not match the upload request.',
       );
     const bytes = await this.storage.read(upload.storageKey);
-    if (!this.hasExpectedSignature(bytes, upload.contentType))
+    if (!hasExpectedSignature(bytes, upload.contentType))
       throw new BadRequestException(
         'The uploaded file content does not match its type.',
       );
@@ -894,71 +898,6 @@ export class ProvidersService {
           'Uploaded file details do not match. Select the file again.',
         );
     }
-  }
-
-  private validateFile(
-    name: string,
-    type: string,
-    size: number,
-    purpose: ProviderUploadPurpose,
-  ) {
-    const ext = name.split('.').pop()?.toLowerCase();
-    const allowed: Record<
-      ProviderUploadPurpose,
-      { extensions: string[]; types: string[] }
-    > = {
-      provider_document: {
-        extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'doc', 'docx'],
-        types: [
-          'application/pdf',
-          'image/png',
-          'image/jpeg',
-          'image/webp',
-          'application/msword',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ],
-      },
-      provider_photo: {
-        extensions: ['png', 'jpg', 'jpeg', 'webp'],
-        types: ['image/png', 'image/jpeg', 'image/webp'],
-      },
-      provider_portfolio: {
-        extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp'],
-        types: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
-      },
-    };
-    if (
-      !allowed[purpose].extensions.includes(ext ?? '') ||
-      !allowed[purpose].types.includes(type)
-    )
-      throw new BadRequestException(
-        'Use a supported file type for this upload.',
-      );
-    if (
-      size > 20 * 1024 * 1024 ||
-      (purpose === ProviderUploadPurpose.provider_photo &&
-        size > 5 * 1024 * 1024)
-    )
-      throw new BadRequestException('This file is too large.');
-  }
-
-  private hasExpectedSignature(bytes: Buffer, type: string) {
-    if (type === 'application/pdf')
-      return bytes.subarray(0, 5).toString() === '%PDF-';
-    if (type === 'image/png')
-      return bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-    if (type === 'image/jpeg')
-      return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-    if (type === 'image/webp')
-      return (
-        bytes.subarray(0, 4).toString() === 'RIFF' &&
-        bytes.subarray(8, 12).toString() === 'WEBP'
-      );
-    if (type.startsWith('application/vnd.openxmlformats-officedocument'))
-      return bytes.subarray(0, 2).toString() === 'PK';
-    if (type === 'application/msword')
-      return bytes.subarray(0, 4).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
-    return false;
   }
 
   private validateCalendar(

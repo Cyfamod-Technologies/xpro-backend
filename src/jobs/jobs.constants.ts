@@ -12,3 +12,5 @@ export const QUEUE_NAMES = [
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const OUTBOX_SWEEP_INTERVAL_MS = 30_000;
+
+export const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;

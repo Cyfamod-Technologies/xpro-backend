@@ -10,6 +10,7 @@ import { JobsService } from './jobs.service';
 import { AuditLogsProcessor } from './processors/audit-logs.processor';
 import { EmailProcessor } from './processors/email.processor';
 import { PlatformProcessor } from './processors/platform.processor';
+import { UploadsModule } from '../uploads/uploads.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { PlatformProcessor } from './processors/platform.processor';
     EmailModule,
     PlatformModule,
     PrismaModule,
+    UploadsModule,
   ],
   providers: [
     JobsService,

@@ -144,6 +144,20 @@ enum ProviderUploadStatus {
   expired
 }
 
+enum UploadPurpose {
+  request_attachment
+  message_attachment
+  progress_evidence
+  payment_proof
+}
+
+enum UploadStatus {
+  pending
+  ready
+  attached
+  expired
+}
+
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model User {
@@ -481,6 +495,28 @@ model ProviderUpload {
   @@index([ownerId, status, purpose])
   @@index([expiresAt])
   @@map("provider_uploads")
+}
+
+model Upload {
+  id          String        @id @default(uuid())
+  ownerId     String        @map("owner_id")
+  purpose     UploadPurpose
+  status      UploadStatus  @default(pending)
+  fileName    String        @map("file_name")
+  contentType String        @map("content_type")
+  size        Int
+  storageKey  String        @unique @map("storage_key")
+  entityType  String?       @map("entity_type")
+  entityId    String?       @map("entity_id")
+  expiresAt   DateTime      @map("expires_at")
+  completedAt DateTime?     @map("completed_at")
+  attachedAt  DateTime?     @map("attached_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([ownerId, status, purpose])
+  @@index([entityType, entityId])
+  @@index([expiresAt])
+  @@map("uploads")
 }
 
 model StaffInvite {

@@ -2,7 +2,11 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import type { EmailJobData } from '../email/email.types';
-import { OUTBOX_SWEEP_INTERVAL_MS, QUEUE_NAMES } from './jobs.constants';
+import {
+  OUTBOX_SWEEP_INTERVAL_MS,
+  QUEUE_NAMES,
+  UPLOAD_CLEANUP_INTERVAL_MS,
+} from './jobs.constants';
 
 /**
  * Single entry point for enqueuing background work. Controllers and services
@@ -31,6 +35,11 @@ export class JobsService implements OnModuleInit {
       'outbox-sweep',
       { every: OUTBOX_SWEEP_INTERVAL_MS },
       { name: 'outbox.sweep', opts: { attempts: 1 } },
+    );
+    await this.platformQueue.upsertJobScheduler(
+      'uploads-cleanup',
+      { every: UPLOAD_CLEANUP_INTERVAL_MS },
+      { name: 'uploads.cleanup' },
     );
   }
 
