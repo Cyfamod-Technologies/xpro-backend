@@ -563,6 +563,35 @@ model InAppNotification {
   @@map("in_app_notifications")
 }
 
+model Setting {
+  key       String   @id
+  value     Json
+  riskClass String   @map("risk_class")
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by")
+
+  @@map("settings")
+}
+
+model SettingHistory {
+  id          String   @id @default(uuid())
+  key         String
+  oldValue    Json?    @map("old_value")
+  newValue    Json     @map("new_value")
+  riskClass   String   @map("risk_class")
+  actorId     String   @map("actor_id")
+  actorName   String   @map("actor_name")
+  reason      String
+  changeSetId String   @map("change_set_id")
+  sessionId   String?  @map("session_id")
+  ip          String?  @db.Inet
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([key, createdAt])
+  @@map("settings_history")
+}
+
 model OutboxEvent {
   id            String    @id @default(uuid())
   type          String

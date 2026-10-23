@@ -5,6 +5,8 @@ export const REQUEST_TABLES = [
   'idempotency_keys',
   'in_app_notifications',
   'outbox_events',
+  'settings_history',
+  'settings',
 ];
 
 export async function truncateRequestTables(prisma: PrismaClient) {
