@@ -14,16 +14,14 @@ import {
   ProviderUploadPurpose,
   ProviderUploadStatus,
   ProviderVerificationStatus,
-  StaffStatus,
 } from '@prisma/client';
 import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
-import {
-  permissionsForRoles,
-  type StaffPermission,
-} from '../staff/staff-permissions';
+import type { StaffPermission } from '../staff/staff-permissions';
+import { ActorService } from '../platform/actor/actor.service';
+import { requirePermission } from '../platform/actor/actor.guards';
 import {
   ProviderAvailabilityDto,
   CreateProviderUploadDto,
@@ -37,6 +35,9 @@ import {
   ProviderReviewDto,
 } from './dto/provider.dto';
 
+const PROVIDER_REVIEW_DENIED =
+  'You do not have permission to review provider details.';
+
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 
 @Injectable()
@@ -46,6 +47,7 @@ export class ProvidersService {
     private readonly audit: AuditLogsService,
     private readonly config: ConfigService,
     private readonly storage: StorageService,
+    private readonly actors: ActorService,
   ) {}
 
   async myProfile(userId: string) {
@@ -785,20 +787,12 @@ export class ProvidersService {
     return user;
   }
 
-  private async requirePermission(userId: string, permission: string) {
-    const member = await this.prisma.staffMember.findFirst({
-      where: { userId, status: StaffStatus.active },
-      include: { roles: true },
+  private async requirePermission(userId: string, permission: StaffPermission) {
+    requirePermission(await this.actors.resolve(userId), permission, {
+      accountType: PROVIDER_REVIEW_DENIED,
+      inactive: PROVIDER_REVIEW_DENIED,
+      denied: PROVIDER_REVIEW_DENIED,
     });
-    const roles = member?.roles.map(({ role }) => role) ?? [];
-    if (
-      !member ||
-      !permissionsForRoles(roles).includes(permission as StaffPermission)
-    )
-      throw new ForbiddenException(
-        'You do not have permission to review provider details.',
-      );
-    return roles;
   }
 
   private validateSubmission(dto: ProviderProfileSubmissionDto) {
