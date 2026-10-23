@@ -11,6 +11,7 @@ registered from that list, so adding a queue is a single-source change.
 | `audit-logs` | `JobsService.addAuditLogJob` | `AuditLogsProcessor` | Writes `AuditLog` rows off the request path |
 | `platform` | `JobsService` (repeatable) | `PlatformProcessor` | Housekeeping such as expired idempotency keys |
 | `outbox` | `OutboxService.kick()` and a 30 s repeatable sweep | `OutboxProcessor` | Delivers `outbox_events` rows (`email.notify` → `request_update` email). Retries live on the row: 5 attempts, waits of 1, 5, 15 and 60 min, then a `FailedJob` |
+| `timers` | `TimersService.kick()` and a 60 s repeatable sweep | `TimersProcessor` | Runs due `request_timers` rows through the handlers registered in `TimerRegistry`. Claims with `FOR UPDATE SKIP LOCKED`; retries live on the row (same 5 attempts and 1, 5, 15, 60 min waits, then `failed` + a `FailedJob`). An unknown kind fails at once |
 
 ## Default job options
 

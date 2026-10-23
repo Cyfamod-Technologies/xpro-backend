@@ -45,4 +45,23 @@ describe('validateEnv SMTP requirements', () => {
       }),
     ).toBeDefined();
   });
+
+  it('rejects ENABLE_DEV_TOOLS=true in production', () => {
+    expect(() =>
+      validateEnv({ ...productionEnv, ENABLE_DEV_TOOLS: 'true' }),
+    ).toThrow('ENABLE_DEV_TOOLS must not be enabled in production');
+    expect(
+      validateEnv({ ...productionEnv, ENABLE_DEV_TOOLS: 'false' }),
+    ).toBeDefined();
+  });
+
+  it('allows ENABLE_DEV_TOOLS=true outside production', () => {
+    expect(
+      validateEnv({
+        ...productionEnv,
+        NODE_ENV: 'development',
+        ENABLE_DEV_TOOLS: 'true',
+      }),
+    ).toBeDefined();
+  });
 });

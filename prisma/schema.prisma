@@ -671,3 +671,33 @@ model OutboxEvent {
   @@index([processedAt, createdAt])
   @@map("outbox_events")
 }
+
+enum TimerStatus {
+  pending
+  running
+  done
+  cancelled
+  failed
+}
+
+model RequestTimer {
+  id            String      @id @default(uuid())
+  /// No foreign key until the requests table exists (WP-2.1).
+  requestId     String      @map("request_id")
+  kind          String
+  /// Assignment, quote or schedule id; empty string when none.
+  refId         String      @default("") @map("ref_id")
+  dueAt         DateTime    @map("due_at")
+  payload       Json?
+  status        TimerStatus @default(pending)
+  attempts      Int         @default(0)
+  lastError     String?     @map("last_error")
+  /// Retry time after a failure, or the lease expiry while the row is running.
+  nextAttemptAt DateTime?   @map("next_attempt_at")
+  firedAt       DateTime?   @map("fired_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@index([status, dueAt])
+  @@index([requestId, status])
+  @@map("request_timers")
+}

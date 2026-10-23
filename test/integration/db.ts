@@ -5,6 +5,7 @@ export const REQUEST_TABLES = [
   'idempotency_keys',
   'in_app_notifications',
   'outbox_events',
+  'request_timers',
   'settings_history',
   'settings',
 ];
