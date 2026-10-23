@@ -15,19 +15,38 @@ export class FailedJobsService {
     const attempts = job.opts.attempts ?? 1;
     if (job.attemptsMade + 1 < attempts) return;
 
+    await this.recordFinal(queueName, {
+      jobId: String(job.id),
+      jobName: job.name,
+      payload: job.data ?? {},
+      error,
+    });
+  }
+
+  /** For work retried outside BullMQ (outbox rows): records the final failure unconditionally. */
+  async recordFinal(
+    queueName: string,
+    failure: {
+      jobId: string;
+      jobName: string;
+      payload: unknown;
+      error: unknown;
+    },
+  ) {
+    const payload = failure.payload as Prisma.InputJsonValue;
     await this.prisma.failedJob.upsert({
-      where: { queueName_jobId: { queueName, jobId: String(job.id) } },
+      where: { queueName_jobId: { queueName, jobId: failure.jobId } },
       create: {
         queueName,
-        jobId: String(job.id),
-        jobName: job.name,
-        payload: (job.data ?? {}) as Prisma.InputJsonValue,
-        errorMessage: this.errorMessage(error),
+        jobId: failure.jobId,
+        jobName: failure.jobName,
+        payload,
+        errorMessage: this.errorMessage(failure.error),
       },
       update: {
-        jobName: job.name,
-        payload: (job.data ?? {}) as Prisma.InputJsonValue,
-        errorMessage: this.errorMessage(error),
+        jobName: failure.jobName,
+        payload,
+        errorMessage: this.errorMessage(failure.error),
         failedAt: new Date(),
       },
     });

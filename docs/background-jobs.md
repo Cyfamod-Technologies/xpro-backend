@@ -9,6 +9,8 @@ registered from that list, so adding a queue is a single-source change.
 | --- | --- | --- | --- |
 | `email` | `JobsService.addEmailJob` | `EmailProcessor` | Renders and sends queued email, updates the `Notification` row |
 | `audit-logs` | `JobsService.addAuditLogJob` | `AuditLogsProcessor` | Writes `AuditLog` rows off the request path |
+| `platform` | `JobsService` (repeatable) | `PlatformProcessor` | Housekeeping such as expired idempotency keys |
+| `outbox` | `OutboxService.kick()` and a 30 s repeatable sweep | `OutboxProcessor` | Delivers `outbox_events` rows (`email.notify` → `request_update` email). Retries live on the row: 5 attempts, waits of 1, 5, 15 and 60 min, then a `FailedJob` |
 
 ## Default job options
 

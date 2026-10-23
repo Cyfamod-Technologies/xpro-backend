@@ -4,6 +4,7 @@ export const EMAIL_TEMPLATE_KEYS = [
   'password_reset',
   'custom_email',
   'staff_invite',
+  'request_update',
 ] as const;
 
 export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[number];
@@ -29,6 +30,13 @@ export interface StaffInvitePayload {
   expiresAt: string;
 }
 
+export interface RequestUpdatePayload {
+  title: string;
+  message: string;
+  /** Path on the frontend, for example `/requests/XPR-00001`. */
+  link?: string;
+}
+
 /**
  * Pre-rendered HTML/text supplied by trusted server-side callers only. Never
  * populate this from user input — the body is injected into the email shell
@@ -47,6 +55,7 @@ export interface EmailTemplatePayloadMap {
   password_reset: PasswordResetPayload;
   custom_email: TrustedCustomEmailPayload;
   staff_invite: StaffInvitePayload;
+  request_update: RequestUpdatePayload;
 }
 
 export interface EmailRenderContext {

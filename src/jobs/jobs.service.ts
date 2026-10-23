@@ -2,7 +2,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import type { EmailJobData } from '../email/email.types';
-import { QUEUE_NAMES } from './jobs.constants';
+import { OUTBOX_SWEEP_INTERVAL_MS, QUEUE_NAMES } from './jobs.constants';
 
 /**
  * Single entry point for enqueuing background work. Controllers and services
@@ -18,6 +18,7 @@ export class JobsService implements OnModuleInit {
     @InjectQueue('email') private readonly emailQueue: Queue,
     @InjectQueue('audit-logs') private readonly auditLogsQueue: Queue,
     @InjectQueue('platform') private readonly platformQueue: Queue,
+    @InjectQueue('outbox') private readonly outboxQueue: Queue,
   ) {}
 
   async onModuleInit() {
@@ -25,6 +26,11 @@ export class JobsService implements OnModuleInit {
       'idempotency-cleanup',
       { every: 60 * 60 * 1000 },
       { name: 'idempotency.cleanup' },
+    );
+    await this.outboxQueue.upsertJobScheduler(
+      'outbox-sweep',
+      { every: OUTBOX_SWEEP_INTERVAL_MS },
+      { name: 'outbox.sweep', opts: { attempts: 1 } },
     );
   }
 
@@ -36,11 +42,17 @@ export class JobsService implements OnModuleInit {
     return this.auditLogsQueue.add('write', data, { attempts: 5 });
   }
 
+  /** Row-level retries live on `outbox_events`, so the job itself runs once. */
+  addOutboxKickJob() {
+    return this.outboxQueue.add('outbox.kick', {}, { attempts: 1 });
+  }
+
   getQueue(name: string): Queue | null {
     const queues: Record<string, Queue> = {
       email: this.emailQueue,
       'audit-logs': this.auditLogsQueue,
       platform: this.platformQueue,
+      outbox: this.outboxQueue,
     };
     return queues[name] ?? null;
   }

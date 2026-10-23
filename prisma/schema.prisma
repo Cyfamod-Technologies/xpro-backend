@@ -546,3 +546,33 @@ model IdempotencyKey {
   @@index([expiresAt])
   @@map("idempotency_keys")
 }
+
+model InAppNotification {
+  id          String    @id @default(uuid())
+  recipientId String    @map("recipient_id")
+  event       String
+  title       String
+  message     String
+  requestId   String?   @map("request_id")
+  link        String?
+  mandatory   Boolean   @default(false)
+  readAt      DateTime? @map("read_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([recipientId, readAt, createdAt])
+  @@map("in_app_notifications")
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid())
+  type          String
+  payload       Json
+  attempts      Int       @default(0)
+  lastError     String?   @map("last_error")
+  nextAttemptAt DateTime? @map("next_attempt_at")
+  processedAt   DateTime? @map("processed_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([processedAt, createdAt])
+  @@map("outbox_events")
+}

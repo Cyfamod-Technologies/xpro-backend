@@ -6,6 +6,7 @@ import type {
   EmailVerificationPayload,
   PasswordResetPayload,
   RenderedEmail,
+  RequestUpdatePayload,
   StaffInvitePayload,
   TrustedCustomEmailPayload,
   WelcomeEmailPayload,
@@ -20,6 +21,7 @@ import { renderTrustedCustomEmail } from './templates/custom-email.template';
 import { renderEmailVerification } from './templates/email-verification.template';
 import { renderPasswordReset } from './templates/password-reset.template';
 import { renderWelcomeEmail } from './templates/welcome.template';
+import { renderRequestUpdate } from './templates/request-update.template';
 import { renderStaffInvite } from './templates/staff-invite.template';
 
 /** Derives a short monogram from the app name, e.g. "Xpro Labs" -> "XL". */
@@ -67,6 +69,8 @@ export class EmailRendererService {
         return renderTrustedCustomEmail(this.customPayload(payload), context);
       case 'staff_invite':
         return renderStaffInvite(this.staffInvitePayload(payload), context);
+      case 'request_update':
+        return renderRequestUpdate(this.requestUpdatePayload(payload), context);
       default:
         return this.unsupportedTemplate(input.templateKey);
     }
@@ -119,6 +123,16 @@ export class EmailRendererService {
       name: requiredString(payload, 'name'),
       token: requiredString(payload, 'token'),
       expiresAt: requiredString(payload, 'expiresAt'),
+    };
+  }
+
+  private requestUpdatePayload(
+    payload: Record<string, unknown>,
+  ): RequestUpdatePayload {
+    return {
+      title: requiredString(payload, 'title'),
+      message: requiredString(payload, 'message'),
+      link: optionalString(payload, 'link'),
     };
   }
 
