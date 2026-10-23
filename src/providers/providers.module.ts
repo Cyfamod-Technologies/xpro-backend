@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { PlatformModule } from '../platform/platform.module';
 import { StorageModule } from '../storage/storage.module';
 import {
   ProvidersController,
@@ -8,7 +9,7 @@ import {
 import { ProvidersService } from './providers.service';
 
 @Module({
-  imports: [AuditLogsModule, StorageModule],
+  imports: [PlatformModule, AuditLogsModule, StorageModule],
   controllers: [ProvidersController, ProviderReviewController],
   providers: [ProvidersService],
 })

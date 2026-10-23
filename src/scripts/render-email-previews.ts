@@ -24,6 +24,11 @@ const fixtures: {
     token: 'preview-invite-token',
     expiresAt: '2026-10-22T10:00:00.000Z',
   },
+  request_update: {
+    title: 'Request received',
+    message: 'We have received your request and will review it shortly.',
+    link: '/requests',
+  },
 };
 
 async function main() {

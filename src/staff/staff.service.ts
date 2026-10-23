@@ -25,6 +25,11 @@ import { generateRawToken, hashToken } from '../common/utils/token.util';
 import { paginationArgs, toPaginatedResult } from '../common/utils/paginate';
 import { RequestContextService } from '../common/request-context/request-context.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ActorService } from '../platform/actor/actor.service';
+import {
+  requireActiveStaff,
+  requirePermission,
+} from '../platform/actor/actor.guards';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStore } from '../redis/session-store.service';
 import { RedisAuthService } from '../auth/redis-auth.service';
@@ -72,6 +77,7 @@ export class StaffService {
     private readonly sessions: SessionStore,
     private readonly redisAuth: RedisAuthService,
     private readonly requestContext: RequestContextService,
+    private readonly actors: ActorService,
   ) {}
 
   async list(actorId: string, query: ListStaffQueryDto) {
@@ -111,12 +117,12 @@ export class StaffService {
   }
 
   async myPermissions(actorId: string) {
-    const member = await this.requireActiveStaff(actorId);
-    const roles = member.roles.map(({ role }) => role);
+    const actor = await this.actors.resolve(actorId);
+    requireActiveStaff(actor);
     return {
-      permissions: permissionsForRoles(roles),
-      canOwnRequests: canOwnRequests(member.status, roles),
-      permVersion: member.permVersion,
+      permissions: [...actor.staff.permissions],
+      canOwnRequests: actor.staff.canOwn,
+      permVersion: actor.staff.permVersion,
     };
   }
 
@@ -717,28 +723,9 @@ export class StaffService {
     actorId: string,
     permission: Extract<StaffPermission, 'staff.manage' | 'staff.mfa.reset'>,
   ) {
-    const member = await this.requireActiveStaff(actorId);
-    const roles = member.roles.map(({ role }) => role);
-    if (!permissionsForRoles(roles).includes(permission))
-      throw new ForbiddenException();
-    return member;
-  }
-
-  private async requireActiveStaff(actorId: string) {
-    const member = await this.prisma.staffMember.findUnique({
-      where: { userId: actorId },
-      include: { roles: true },
+    requirePermission(await this.actors.resolve(actorId), permission, {
+      denied: 'Forbidden',
     });
-    const isStaff = await this.prisma.userRole.findFirst({
-      where: { userId: actorId, role: PlatformRole.staff },
-    });
-    if (!member || !isStaff)
-      throw new ForbiddenException(
-        'This action is not available for your account type.',
-      );
-    if (member.status !== StaffStatus.active)
-      throw new ForbiddenException('Your staff account is not active.');
-    return member;
   }
 
   private async requireStepUp(actorId: string, token?: string) {

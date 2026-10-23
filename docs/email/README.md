@@ -46,7 +46,7 @@ inside the window is dropped. Use it on anything a user can trigger repeatedly.
 
 ## Templates
 
-Five ship with the template:
+Six ship with the template:
 
 | Key | Payload |
 | --- | --- |
@@ -55,6 +55,7 @@ Five ship with the template:
 | `password_reset` | `{ resetToken, firstName? }` |
 | `custom_email` | `{ subject, preheader?, html, text }` |
 | `staff_invite` | `{ name, token, expiresAt }` |
+| `request_update` | `{ title, message, link? }` (`link` is a frontend path) |
 
 `custom_email` injects `html` **without escaping**. Only ever populate it from
 trusted server-side code, never from user input.

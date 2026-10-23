@@ -34,6 +34,11 @@ describe('EmailRendererService', () => {
       token: 'invite-token',
       expiresAt: '2026-10-22T10:00:00.000Z',
     },
+    request_update: {
+      title: 'Request received',
+      message: 'We have received your request.',
+      link: '/requests',
+    },
   };
 
   it.each(Object.keys(fixtures) as EmailTemplateKey[])(
@@ -140,5 +145,68 @@ describe('EmailRendererService', () => {
         payload: {},
       }),
     ).toThrow('Unsupported email template: unsupported');
+  });
+
+  describe('request_update', () => {
+    it('renders the title, message and a link button on the frontend origin', () => {
+      const result = renderer.render({
+        recipientEmail: 'ada@example.com',
+        templateKey: 'request_update',
+        payload: {
+          title: 'Quote ready',
+          message: 'Your quote is ready to review.',
+          link: '/requests/abc?tab=quote',
+        },
+      });
+
+      expect(result.subject).toBe('Quote ready');
+      expect(result.html).toContain('Your quote is ready to review.');
+      expect(result.html).toContain(
+        'https://app.example.com/requests/abc?tab=quote',
+      );
+      expect(result.text).toContain(
+        'https://app.example.com/requests/abc?tab=quote',
+      );
+    });
+
+    it('omits the button when there is no link and ignores non-path links', () => {
+      const withoutLink = renderer.render({
+        recipientEmail: 'ada@example.com',
+        templateKey: 'request_update',
+        payload: { title: 'Update', message: 'Something changed.' },
+      });
+      expect(withoutLink.html).not.toContain('View details');
+
+      const external = renderer.render({
+        recipientEmail: 'ada@example.com',
+        templateKey: 'request_update',
+        payload: {
+          title: 'Update',
+          message: 'Something changed.',
+          link: 'https://evil.example.net/x',
+        },
+      });
+      expect(external.html).not.toContain('evil.example.net');
+    });
+
+    it('escapes the title and message', () => {
+      const result = renderer.render({
+        recipientEmail: 'ada@example.com',
+        templateKey: 'request_update',
+        payload: { title: '<b>x</b>', message: '<script>1</script>' },
+      });
+      expect(result.html).not.toContain('<script>1</script>');
+      expect(result.html).toContain('&lt;script&gt;1&lt;/script&gt;');
+    });
+
+    it('rejects a payload without a message', () => {
+      expect(() =>
+        renderer.render({
+          recipientEmail: 'ada@example.com',
+          templateKey: 'request_update',
+          payload: { title: 'Update' },
+        }),
+      ).toThrow('missing message');
+    });
   });
 });

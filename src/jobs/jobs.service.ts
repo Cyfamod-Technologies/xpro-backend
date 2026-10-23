@@ -1,8 +1,8 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import type { EmailJobData } from '../email/email.types';
-import { QUEUE_NAMES } from './jobs.constants';
+import { OUTBOX_SWEEP_INTERVAL_MS, QUEUE_NAMES } from './jobs.constants';
 
 /**
  * Single entry point for enqueuing background work. Controllers and services
@@ -13,11 +13,26 @@ import { QUEUE_NAMES } from './jobs.constants';
  * `add*Job` method, and register a processor under `processors/`.
  */
 @Injectable()
-export class JobsService {
+export class JobsService implements OnModuleInit {
   constructor(
     @InjectQueue('email') private readonly emailQueue: Queue,
     @InjectQueue('audit-logs') private readonly auditLogsQueue: Queue,
+    @InjectQueue('platform') private readonly platformQueue: Queue,
+    @InjectQueue('outbox') private readonly outboxQueue: Queue,
   ) {}
+
+  async onModuleInit() {
+    await this.platformQueue.upsertJobScheduler(
+      'idempotency-cleanup',
+      { every: 60 * 60 * 1000 },
+      { name: 'idempotency.cleanup' },
+    );
+    await this.outboxQueue.upsertJobScheduler(
+      'outbox-sweep',
+      { every: OUTBOX_SWEEP_INTERVAL_MS },
+      { name: 'outbox.sweep', opts: { attempts: 1 } },
+    );
+  }
 
   addEmailJob(name: string, data: EmailJobData) {
     return this.emailQueue.add(name, data);
@@ -27,10 +42,17 @@ export class JobsService {
     return this.auditLogsQueue.add('write', data, { attempts: 5 });
   }
 
+  /** Row-level retries live on `outbox_events`, so the job itself runs once. */
+  addOutboxKickJob() {
+    return this.outboxQueue.add('outbox.kick', {}, { attempts: 1 });
+  }
+
   getQueue(name: string): Queue | null {
     const queues: Record<string, Queue> = {
       email: this.emailQueue,
       'audit-logs': this.auditLogsQueue,
+      platform: this.platformQueue,
+      outbox: this.outboxQueue,
     };
     return queues[name] ?? null;
   }

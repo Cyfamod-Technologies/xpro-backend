@@ -1,0 +1,12 @@
+export const ERROR_CODES = [
+  'VALIDATION_ERROR',
+  'NOT_FOUND',
+  'FORBIDDEN',
+  'STATE_CONFLICT',
+  'VERSION_CONFLICT',
+  'IDEMPOTENCY_KEY_REUSED',
+  'RATE_LIMITED',
+  'PAYMENT_IN_PROGRESS',
+] as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[number];
