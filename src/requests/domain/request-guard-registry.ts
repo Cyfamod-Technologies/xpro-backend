@@ -4,6 +4,7 @@ import { MESSAGE_GUARDS } from './message-guards';
 import { UPDATE_GUARDS } from './request-update-guards';
 import { OWNERSHIP_GUARDS } from './ownership-guards';
 import { DISPATCH_GUARDS } from './dispatch-guards';
+import { LIFECYCLE_GUARDS } from './lifecycle-guards';
 
 /** Compose feature guard groups here as lifecycle commands are added. */
 export function composeRequestGuards(
@@ -24,4 +25,5 @@ export const REQUEST_GUARDS = composeRequestGuards(
   UPDATE_GUARDS,
   OWNERSHIP_GUARDS,
   DISPATCH_GUARDS,
+  LIFECYCLE_GUARDS,
 );

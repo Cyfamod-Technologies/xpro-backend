@@ -26,6 +26,16 @@ import { T9TimerHandlers } from './t9-timer-handlers';
 import { PaymentsModule } from '../payments/payments.module';
 import { PricingTimerHandlers } from './pricing/pricing-timer-handlers';
 import { ProviderStandingHooks } from './dispatch/provider-standing.hooks';
+import { SchedulesController } from './scheduling/schedules.controller';
+import { SchedulesService } from './scheduling/schedules.service';
+import { HoldsController } from './execution/holds.controller';
+import { HoldsService } from './execution/holds.service';
+import { NoShowController } from './execution/noshow.controller';
+import { NoShowService } from './execution/noshow.service';
+import { SchedulingTimerHandlers } from './scheduling/scheduling-timer-handlers';
+import { ProgressController } from './execution/progress.controller';
+import { ProgressService } from './execution/progress.service';
+import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
 
 @Module({
   imports: [
@@ -37,7 +47,7 @@ import { ProviderStandingHooks } from './dispatch/provider-standing.hooks';
     UploadsModule,
     PaymentsModule,
   ],
-  controllers: [RequestsController, DispatchController, PricingController],
+  controllers: [RequestsController, DispatchController, PricingController, SchedulesController, HoldsController, NoShowController, ProgressController],
   providers: [
     RequestSnapshotLoader,
     RequestCommandRunner,
@@ -52,6 +62,12 @@ import { ProviderStandingHooks } from './dispatch/provider-standing.hooks';
     T9TimerHandlers,
     PricingTimerHandlers,
     ProviderStandingHooks,
+    SchedulesService,
+    HoldsService,
+    NoShowService,
+    SchedulingTimerHandlers,
+    ProgressService,
+    ExecutionTimerHandlers,
     ApprovalsHooks,
     NotificationDispatcher,
     RequestFileAccess,
