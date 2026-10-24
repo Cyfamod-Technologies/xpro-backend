@@ -19,14 +19,13 @@ import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
-import {
-  hasExpectedSignature,
-  validateFile,
-} from '../storage/file-validation';
+import { hasExpectedSignature, validateFile } from '../storage/file-validation';
 import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
 import { LocationsService } from '../platform/locations/locations.service';
+import { ProviderStandingHooks } from '../requests/dispatch/provider-standing.hooks';
+import { intervalFits, type TimeOff, type WorkingHours } from '../platform/calendar/provider-calendar';
 import {
   ProviderAvailabilityDto,
   CreateProviderUploadDto,
@@ -54,7 +53,57 @@ export class ProvidersService {
     private readonly storage: StorageService,
     private readonly actors: ActorService,
     private readonly locations: LocationsService,
+    private readonly standingHooks: ProviderStandingHooks,
   ) {}
+
+  async recordReliabilityEvent(
+    tx: Prisma.TransactionClient,
+    input: {
+      providerId: string;
+      kind: 'no_show_confirmed' | 'no_show_voided' | 'declined' | 'expired';
+      sourceId: string;
+      requestId?: string;
+      occurredAt: Date;
+      confirmedBy?: string;
+      note?: string;
+    },
+  ): Promise<void> {
+    try {
+      await tx.providerReliabilityEvent.create({
+        data: {
+          providerId: input.providerId,
+          kind: input.kind,
+          sourceId: input.sourceId,
+          requestId: input.requestId,
+          occurredAt: input.occurredAt,
+          confirmedBy: input.confirmedBy,
+          note: input.note,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) return;
+      throw error;
+    }
+
+    const since = new Date(input.occurredAt.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const events = await tx.providerReliabilityEvent.findMany({
+      where: { providerId: input.providerId, kind: { in: ['no_show_confirmed', 'no_show_voided'] }, occurredAt: { gte: since } },
+      select: { kind: true, sourceId: true },
+    });
+    const confirmed = new Set(events.filter((event) => event.kind === 'no_show_confirmed').map((event) => event.sourceId));
+    for (const event of events) {
+      if (event.kind === 'no_show_voided') confirmed.delete(event.sourceId.replace(/:voided$/, ''));
+    }
+    if (confirmed.size >= 2) {
+      await tx.providerProfile.update({
+        where: { id: input.providerId },
+        data: { reliabilityStatus: 'review_due' },
+      });
+    }
+  }
 
   async myProfile(userId: string) {
     await this.requireProvider(userId);
@@ -498,6 +547,7 @@ export class ProvidersService {
       action: 'provider.availability',
       metadata: { available: dto.available },
     });
+    if (!dto.available) await this.standingHooks.onProviderUnavailable(updated.id, 'Provider turned availability off.');
     return this.myProfile(userId);
   }
 
@@ -510,13 +560,24 @@ export class ProvidersService {
         'Submit your provider profile before setting working hours.',
       );
     this.validateCalendar(dto.workingHours, dto.timeOff ?? []);
-    const updated = await this.prisma.providerProfile.update({
-      where: { userId },
-      data: {
-        workingHours: json(dto.workingHours),
-        timeOff: json(dto.timeOff ?? []),
-        version: { increment: 1 },
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${profile.id} FOR UPDATE`);
+      const confirmed = await tx.schedule.findMany({ where: { providerId: profile.id, status: 'confirmed', endAt: { gte: new Date() } }, include: { request: { select: { number: true } } }, orderBy: { startAt: 'asc' } });
+      const providerUser = await tx.user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true } });
+      const displayName = profile.businessName || [providerUser?.firstName, providerUser?.lastName].filter(Boolean).join(' ') || 'Provider';
+      for (const schedule of confirmed) {
+        const problem = intervalFits(dto.workingHours as WorkingHours, (dto.timeOff ?? []) as TimeOff[], schedule.startAt, schedule.endAt, displayName);
+        if (problem) {
+          const date = schedule.startAt.toISOString().slice(0, 10);
+          throw new ConflictException(`You have a confirmed job on ${date} (${schedule.request.number}). Ask XPro to move it before changing these hours.`);
+        }
+      }
+      const proposed = await tx.schedule.findMany({ where: { providerId: profile.id, status: 'proposed' }, select: { id: true, requestId: true, startAt: true, endAt: true } });
+      for (const schedule of proposed) {
+        const problem = intervalFits(dto.workingHours as WorkingHours, (dto.timeOff ?? []) as TimeOff[], schedule.startAt, schedule.endAt, displayName);
+        if (problem) await tx.schedule.update({ where: { id: schedule.id }, data: { status: 'changes_requested', responses: { push: 'Provider: working hours changed' } } });
+      }
+      return tx.providerProfile.update({ where: { userId }, data: { workingHours: json(dto.workingHours), timeOff: json(dto.timeOff ?? []), version: { increment: 1 } } });
     });
     this.audit.record({
       actorType: 'user',
@@ -639,6 +700,7 @@ export class ProvidersService {
       action: `provider.review.${dto.decision}`,
       metadata: { version: updated.version, note: dto.note?.trim() },
     });
+    if (dto.decision !== 'approved') await this.standingHooks.onProviderUnavailable(profile.id, 'Provider verification was rejected.');
     return this.project(updated, false);
   }
 
@@ -847,7 +909,9 @@ export class ProvidersService {
     return {
       services: [...new Set(dto.services)],
       serviceAreas: [
-        ...new Set((dto.serviceAreas ?? []).map((area) => area.trim()).filter(Boolean)),
+        ...new Set(
+          (dto.serviceAreas ?? []).map((area) => area.trim()).filter(Boolean),
+        ),
       ],
       skills: dto.skills,
     };
