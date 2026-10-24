@@ -1,5 +1,16 @@
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
 
 export class QuoteLineDto {
   @IsString() @MinLength(1) @MaxLength(300) description!: string;
@@ -7,7 +18,11 @@ export class QuoteLineDto {
   @IsInt() @Min(1) @Max(Number.MAX_SAFE_INTEGER) unitPrice!: number;
 }
 export class QuoteItemsDto {
-  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => QuoteLineDto) items!: QuoteLineDto[];
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => QuoteLineDto)
+  items!: QuoteLineDto[];
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
 export class EditQuoteDto extends QuoteItemsDto {

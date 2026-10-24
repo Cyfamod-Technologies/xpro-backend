@@ -9,5 +9,10 @@ import { RequestsModule } from '../requests/requests.module';
 import { ApprovalsHooks } from '../requests/approvals.hooks';
 import { SettingsModule } from '../platform/settings/settings.module';
 
-@Module({ imports: [PlatformModule, PrismaModule, RequestsModule, SettingsModule], controllers: [ApprovalsController, EscalationsController], providers: [ApprovalsService, EscalationsService, ApprovalsHooks], exports: [ApprovalsService] })
+@Module({
+  imports: [PlatformModule, PrismaModule, RequestsModule, SettingsModule],
+  controllers: [ApprovalsController, EscalationsController],
+  providers: [ApprovalsService, EscalationsService, ApprovalsHooks],
+  exports: [ApprovalsService],
+})
 export class ApprovalsModule {}

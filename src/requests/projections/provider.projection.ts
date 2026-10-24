@@ -89,7 +89,10 @@ export function providerProjection(
     details: locked ? details : safeSharedDetails(details, shared),
     assignment: { status: assignment.status },
     schedules,
-    schedule: schedules.find((item) => item.status === 'confirmed') ?? schedules[0] ?? null,
+    schedule:
+      schedules.find((item) => item.status === 'confirmed') ??
+      schedules[0] ??
+      null,
     issues: issueProjection(context),
     completion: completionProjection(context),
     attachments: row.attachments

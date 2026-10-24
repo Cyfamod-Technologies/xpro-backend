@@ -1,4 +1,8 @@
-import { extendUntilWorkingMinutes, type TimeOff, type WorkingHours } from '../../platform/calendar/provider-calendar';
+import {
+  extendUntilWorkingMinutes,
+  type TimeOff,
+  type WorkingHours,
+} from '../../platform/calendar/provider-calendar';
 
 export function offerExpiry(
   offeredAt: Date,
@@ -9,5 +13,13 @@ export function offerExpiry(
 ): Date {
   const baseline = new Date(offeredAt.getTime() + hours * 60 * 60 * 1000);
   if (minWorkingHours <= 0) return baseline;
-  return extendUntilWorkingMinutes(workingHours, timeOff, offeredAt, minWorkingHours * 60, baseline) ?? baseline;
+  return (
+    extendUntilWorkingMinutes(
+      workingHours,
+      timeOff,
+      offeredAt,
+      minWorkingHours * 60,
+      baseline,
+    ) ?? baseline
+  );
 }

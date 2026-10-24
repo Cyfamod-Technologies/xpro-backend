@@ -17,9 +17,14 @@ export type ProjectionContext = {
   settings: SettingsSnapshot;
 };
 
-export function scheduleProjection(context: ProjectionContext, assignmentId?: string) {
+export function scheduleProjection(
+  context: ProjectionContext,
+  assignmentId?: string,
+) {
   return context.row.schedules
-    .filter((schedule) => !assignmentId || schedule.assignmentId === assignmentId)
+    .filter(
+      (schedule) => !assignmentId || schedule.assignmentId === assignmentId,
+    )
     .map((schedule) => ({
       id: schedule.id,
       status: schedule.status,

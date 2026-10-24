@@ -250,8 +250,16 @@ export class RequestSnapshotLoader {
         pendingCancellation,
         latestNoShow: row.noShows[0] ? { status: row.noShows[0].status } : null,
         payment: {
-          paid: row.payments.some((payment) => payment.status === 'paid' || payment.status === 'partially_refunded'),
-          pendingPaymentAt: row.payments.find((payment) => payment.status === 'pending' || payment.status === 'recorded')?.createdAt ?? null,
+          paid: row.payments.some(
+            (payment) =>
+              payment.status === 'paid' ||
+              payment.status === 'partially_refunded',
+          ),
+          pendingPaymentAt:
+            row.payments.find(
+              (payment) =>
+                payment.status === 'pending' || payment.status === 'recorded',
+            )?.createdAt ?? null,
         },
         payout:
           latestQuote?.payoutAmount === null || latestQuote === null

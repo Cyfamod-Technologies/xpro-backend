@@ -11,7 +11,13 @@ import {
 import { ProvidersService } from './providers.service';
 
 @Module({
-  imports: [PlatformModule, AuditLogsModule, StorageModule, LocationsModule, RequestsModule],
+  imports: [
+    PlatformModule,
+    AuditLogsModule,
+    StorageModule,
+    LocationsModule,
+    RequestsModule,
+  ],
   controllers: [ProvidersController, ProviderReviewController],
   providers: [ProvidersService],
 })

@@ -25,7 +25,11 @@ import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
 import { LocationsService } from '../platform/locations/locations.service';
 import { ProviderStandingHooks } from '../requests/dispatch/provider-standing.hooks';
-import { intervalFits, type TimeOff, type WorkingHours } from '../platform/calendar/provider-calendar';
+import {
+  intervalFits,
+  type TimeOff,
+  type WorkingHours,
+} from '../platform/calendar/provider-calendar';
 import {
   ProviderAvailabilityDto,
   CreateProviderUploadDto,
@@ -84,18 +88,30 @@ export class ProvidersService {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
-      ) return;
+      )
+        return;
       throw error;
     }
 
-    const since = new Date(input.occurredAt.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const since = new Date(
+      input.occurredAt.getTime() - 90 * 24 * 60 * 60 * 1000,
+    );
     const events = await tx.providerReliabilityEvent.findMany({
-      where: { providerId: input.providerId, kind: { in: ['no_show_confirmed', 'no_show_voided'] }, occurredAt: { gte: since } },
+      where: {
+        providerId: input.providerId,
+        kind: { in: ['no_show_confirmed', 'no_show_voided'] },
+        occurredAt: { gte: since },
+      },
       select: { kind: true, sourceId: true },
     });
-    const confirmed = new Set(events.filter((event) => event.kind === 'no_show_confirmed').map((event) => event.sourceId));
+    const confirmed = new Set(
+      events
+        .filter((event) => event.kind === 'no_show_confirmed')
+        .map((event) => event.sourceId),
+    );
     for (const event of events) {
-      if (event.kind === 'no_show_voided') confirmed.delete(event.sourceId.replace(/:voided$/, ''));
+      if (event.kind === 'no_show_voided')
+        confirmed.delete(event.sourceId.replace(/:voided$/, ''));
     }
     if (confirmed.size >= 2) {
       await tx.providerProfile.update({
@@ -547,7 +563,11 @@ export class ProvidersService {
       action: 'provider.availability',
       metadata: { available: dto.available },
     });
-    if (!dto.available) await this.standingHooks.onProviderUnavailable(updated.id, 'Provider turned availability off.');
+    if (!dto.available)
+      await this.standingHooks.onProviderUnavailable(
+        updated.id,
+        'Provider turned availability off.',
+      );
     return this.myProfile(userId);
   }
 
@@ -561,23 +581,72 @@ export class ProvidersService {
       );
     this.validateCalendar(dto.workingHours, dto.timeOff ?? []);
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw(Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${profile.id} FOR UPDATE`);
-      const confirmed = await tx.schedule.findMany({ where: { providerId: profile.id, status: 'confirmed', endAt: { gte: new Date() } }, include: { request: { select: { number: true } } }, orderBy: { startAt: 'asc' } });
-      const providerUser = await tx.user.findUnique({ where: { id: userId }, select: { firstName: true, lastName: true } });
-      const displayName = profile.businessName || [providerUser?.firstName, providerUser?.lastName].filter(Boolean).join(' ') || 'Provider';
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${profile.id} FOR UPDATE`,
+      );
+      const confirmed = await tx.schedule.findMany({
+        where: {
+          providerId: profile.id,
+          status: 'confirmed',
+          endAt: { gte: new Date() },
+        },
+        include: { request: { select: { number: true } } },
+        orderBy: { startAt: 'asc' },
+      });
+      const providerUser = await tx.user.findUnique({
+        where: { id: userId },
+        select: { firstName: true, lastName: true },
+      });
+      const displayName =
+        profile.businessName ||
+        [providerUser?.firstName, providerUser?.lastName]
+          .filter(Boolean)
+          .join(' ') ||
+        'Provider';
       for (const schedule of confirmed) {
-        const problem = intervalFits(dto.workingHours as WorkingHours, (dto.timeOff ?? []) as TimeOff[], schedule.startAt, schedule.endAt, displayName);
+        const problem = intervalFits(
+          dto.workingHours as WorkingHours,
+          (dto.timeOff ?? []) as TimeOff[],
+          schedule.startAt,
+          schedule.endAt,
+          displayName,
+        );
         if (problem) {
           const date = schedule.startAt.toISOString().slice(0, 10);
-          throw new ConflictException(`You have a confirmed job on ${date} (${schedule.request.number}). Ask XPro to move it before changing these hours.`);
+          throw new ConflictException(
+            `You have a confirmed job on ${date} (${schedule.request.number}). Ask XPro to move it before changing these hours.`,
+          );
         }
       }
-      const proposed = await tx.schedule.findMany({ where: { providerId: profile.id, status: 'proposed' }, select: { id: true, requestId: true, startAt: true, endAt: true } });
+      const proposed = await tx.schedule.findMany({
+        where: { providerId: profile.id, status: 'proposed' },
+        select: { id: true, requestId: true, startAt: true, endAt: true },
+      });
       for (const schedule of proposed) {
-        const problem = intervalFits(dto.workingHours as WorkingHours, (dto.timeOff ?? []) as TimeOff[], schedule.startAt, schedule.endAt, displayName);
-        if (problem) await tx.schedule.update({ where: { id: schedule.id }, data: { status: 'changes_requested', responses: { push: 'Provider: working hours changed' } } });
+        const problem = intervalFits(
+          dto.workingHours as WorkingHours,
+          (dto.timeOff ?? []) as TimeOff[],
+          schedule.startAt,
+          schedule.endAt,
+          displayName,
+        );
+        if (problem)
+          await tx.schedule.update({
+            where: { id: schedule.id },
+            data: {
+              status: 'changes_requested',
+              responses: { push: 'Provider: working hours changed' },
+            },
+          });
       }
-      return tx.providerProfile.update({ where: { userId }, data: { workingHours: json(dto.workingHours), timeOff: json(dto.timeOff ?? []), version: { increment: 1 } } });
+      return tx.providerProfile.update({
+        where: { userId },
+        data: {
+          workingHours: json(dto.workingHours),
+          timeOff: json(dto.timeOff ?? []),
+          version: { increment: 1 },
+        },
+      });
     });
     this.audit.record({
       actorType: 'user',
@@ -700,7 +769,11 @@ export class ProvidersService {
       action: `provider.review.${dto.decision}`,
       metadata: { version: updated.version, note: dto.note?.trim() },
     });
-    if (dto.decision !== 'approved') await this.standingHooks.onProviderUnavailable(profile.id, 'Provider verification was rejected.');
+    if (dto.decision !== 'approved')
+      await this.standingHooks.onProviderUnavailable(
+        profile.id,
+        'Provider verification was rejected.',
+      );
     return this.project(updated, false);
   }
 

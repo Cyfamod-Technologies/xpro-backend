@@ -96,13 +96,16 @@ async function bootstrap() {
   const reflector = app.get(Reflector);
   app.useGlobalInterceptors(new ResponseInterceptor(reflector));
 
-  app.use(bodyParser.json({
-    limit: process.env.JSON_BODY_LIMIT || '10mb',
-    verify: (request, _response, buffer) => {
-      if (request.url?.split('?')[0] === '/webhooks/paystack')
-        (request as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
-    },
-  }));
+  app.use(
+    bodyParser.json({
+      limit: process.env.JSON_BODY_LIMIT || '10mb',
+      verify: (request, _response, buffer) => {
+        if (request.url?.split('?')[0] === '/webhooks/paystack')
+          (request as Request & { rawBody?: Buffer }).rawBody =
+            Buffer.from(buffer);
+      },
+    }),
+  );
   app.use(
     bodyParser.urlencoded({
       limit: process.env.URLENCODED_BODY_LIMIT || '10mb',

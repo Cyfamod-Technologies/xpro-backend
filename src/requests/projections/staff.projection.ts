@@ -117,7 +117,12 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
       })),
     },
     schedules,
-    schedule: schedules.find((item) => item.status === 'proposed' || item.status === 'confirmed') ?? schedules[0] ?? null,
+    schedule:
+      schedules.find(
+        (item) => item.status === 'proposed' || item.status === 'confirmed',
+      ) ??
+      schedules[0] ??
+      null,
     issues: issueProjection(context),
     cancellations: cancellationProjection(context),
     noShows: noShowProjection(context),
