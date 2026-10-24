@@ -33,8 +33,17 @@ import { HoldsService } from './execution/holds.service';
 import { NoShowController } from './execution/noshow.controller';
 import { NoShowService } from './execution/noshow.service';
 import { SchedulingTimerHandlers } from './scheduling/scheduling-timer-handlers';
+import { CompletionController } from './completion/completion.controller';
+import { CompletionService } from './completion/completion.service';
+import { CompletionTimerHandlers } from './completion/completion-timer-handlers';
 import { ProgressController } from './execution/progress.controller';
 import { ProgressService } from './execution/progress.service';
+import { ClosureController } from './completion/closure.controller';
+import { ClosureService } from './completion/closure.service';
+import { IssuesController } from './completion/issues.controller';
+import { IssuesService } from './completion/issues.service';
+import { CancellationController } from './cancellation/cancellation.controller';
+import { CancellationService } from './cancellation/cancellation.service';
 import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
 
 @Module({
@@ -47,7 +56,7 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     UploadsModule,
     PaymentsModule,
   ],
-  controllers: [RequestsController, DispatchController, PricingController, SchedulesController, HoldsController, NoShowController, ProgressController],
+  controllers: [RequestsController, DispatchController, PricingController, SchedulesController, HoldsController, NoShowController, CompletionController, ProgressController, ClosureController, IssuesController, CancellationController],
   providers: [
     RequestSnapshotLoader,
     RequestCommandRunner,
@@ -66,7 +75,12 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     HoldsService,
     NoShowService,
     SchedulingTimerHandlers,
+    CompletionService,
+    CompletionTimerHandlers,
     ProgressService,
+    ClosureService,
+    IssuesService,
+    CancellationService,
     ExecutionTimerHandlers,
     ApprovalsHooks,
     NotificationDispatcher,

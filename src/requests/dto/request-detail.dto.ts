@@ -2,6 +2,38 @@ import type { RequestStage, NextActor } from '../domain/stage';
 import type { RequestStatus } from '../domain/statuses';
 
 export type RequestRole = 'customer' | 'provider' | 'staff';
+export interface RequestScheduleView {
+  id: string;
+  status: string;
+  startAt: Date;
+  endAt: Date;
+  note: string;
+  customer: string;
+  provider: string;
+  confirmedAt: Date | null;
+}
+export interface RequestIssueView {
+  id: string;
+  status: string;
+  note: string;
+  outcome: string | null;
+  createdAt: Date;
+}
+export interface RequestCancellationView {
+  id: string;
+  status: string;
+  reasonCode: string;
+  note: string;
+  refundStatus: string | null;
+  createdAt: Date;
+}
+export interface RequestNoShowView {
+  id: string;
+  scheduleId: string;
+  status: string;
+  note: string;
+  createdAt: Date;
+}
 export interface RequestDetailDto {
   id: string;
   version: number;
@@ -37,11 +69,29 @@ export interface RequestDetailDto {
   unclaimedSince?: Date | null;
   ownershipVersion?: number;
   intake?: { state: string; clarificationCount: number };
-  attachments?: Array<{ id: string; name: string; size: number; type: string; uploadedAt: Date; sharedWithProvider: boolean }>;
+  contactInBrief?: boolean;
+  attachments?: Array<{
+    id: string;
+    name: string;
+    size: number;
+    type: string;
+    uploadedAt: Date;
+    sharedWithProvider: boolean;
+  }>;
   assignment?: Record<string, unknown> | Array<Record<string, unknown>> | null;
   provider?: { businessName: string; trade: string; verified: boolean } | null;
   quote?: Record<string, unknown> | null;
-  schedule?: Record<string, unknown> | null;
+  schedule?: RequestScheduleView | null;
+  schedules?: RequestScheduleView[];
+  issues?: RequestIssueView[];
+  cancellations?: RequestCancellationView[];
+  noShows?: RequestNoShowView[];
+  completion?: {
+    reportedAt: Date | null;
+    confirmationDueAt: Date | null;
+    acknowledgedAt: Date | null;
+    defectsWindowEndsAt: Date | null;
+  } | null;
   contributions?: Array<Record<string, unknown>>;
   dispatch?: Record<string, unknown>;
   createdAt?: Date;
