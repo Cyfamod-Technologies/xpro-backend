@@ -72,7 +72,11 @@ describe('evaluateEligibility', () => {
       effectiveEndDate: '2026-10-29',
     };
     const result = evaluateEligibility(
-      { ...provider, timeOff: [{ from: '2026-10-28', to: '2026-10-29' }] },
+      {
+        ...provider,
+        services: [...provider.services, 'Hire'],
+        timeOff: [{ from: '2026-10-28', to: '2026-10-29' }],
+      },
       hire,
       { requireVerifiedBank: true },
     );

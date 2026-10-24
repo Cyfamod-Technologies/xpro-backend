@@ -1,4 +1,5 @@
 import { ConflictException, Injectable } from '@nestjs/common';
+import { isDeepStrictEqual } from 'node:util';
 import {
   Prisma,
   RequestStatus,
@@ -1005,14 +1006,10 @@ function changedRequestFields(
   ] as const) {
     const next = data[field];
     const previous = row[field];
-    if (
-      next !== undefined &&
-      JSON.stringify(previous ?? null) !== JSON.stringify(next ?? null)
-    )
+    if (next !== undefined && (previous ?? null) !== (next ?? null))
       fields.push(field);
   }
-  if (JSON.stringify(oldDetails) !== JSON.stringify(nextDetails))
-    fields.push('details');
+  if (!isDeepStrictEqual(oldDetails, nextDetails)) fields.push('details');
   return fields;
 }
 

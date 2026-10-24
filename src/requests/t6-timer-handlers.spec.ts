@@ -74,7 +74,12 @@ describe('T6 clarification timer handlers', () => {
     });
     expect(tx.serviceRequest.update).toHaveBeenCalledWith({
       where: { id: request.id },
-      data: { status: 'cancelled', cancellationId: 'cancel-1' },
+      data: expect.objectContaining({
+        status: 'cancelled',
+        cancellationId: 'cancel-1',
+        version: { increment: 1 },
+        updatedAt: expect.any(Date) as unknown,
+      }) as unknown,
     });
     expect(tx.requestMessage.create).toHaveBeenCalledWith({
       data: expect.objectContaining({

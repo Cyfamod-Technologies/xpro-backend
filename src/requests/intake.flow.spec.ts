@@ -108,6 +108,7 @@ describe('request intake command flows', () => {
         findUnique: jest.fn().mockResolvedValue(row),
         update: jest.fn().mockResolvedValue(row),
       },
+      requestEdit: { create: jest.fn() },
       location: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'city-1', kind: 'city', parentId: null, active: true },
@@ -179,6 +180,7 @@ describe('request intake command flows', () => {
         data: { intakeState: 'pending' },
       }),
     );
+    expect(tx.requestEdit.create).not.toHaveBeenCalled();
     expect(timers.stop).toHaveBeenCalledWith([
       TimerKinds.T6Reminder48h,
       TimerKinds.T6Staff5d,
@@ -250,7 +252,7 @@ describe('request intake command flows', () => {
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('hash') } as never,
       {} as never,
-      {} as never,
+      { close: jest.fn(), open: jest.fn() } as never,
     );
     const user: RequestUser = {
       id: 'staff-1',
@@ -357,7 +359,7 @@ describe('request intake command flows', () => {
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('hash') } as never,
       {} as never,
-      {} as never,
+      { close: jest.fn(), open: jest.fn() } as never,
     );
     const user: RequestUser = {
       id: 'staff-1',
