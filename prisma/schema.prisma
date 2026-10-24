@@ -388,6 +388,8 @@ model ProviderProfile {
   workingHours       Json                     @map("working_hours")
   timeOff            Json                     @default("[]") @map("time_off")
   experience         Float                    @default(0)
+  lastOfferedAt      DateTime?                 @map("last_offered_at")
+  reliabilityStatus  String                    @default("normal") @map("reliability_status")
   bio                String
   documents          Json                     @default("[]")
   photo              Json?
@@ -475,6 +477,21 @@ model ProviderReview {
 
   @@index([providerId, createdAt])
   @@map("provider_reviews")
+}
+
+model ProviderReliabilityEvent {
+  id          String   @id @default(uuid())
+  providerId  String   @map("provider_id")
+  kind        String
+  requestId   String?  @map("request_id")
+  sourceId    String   @unique @map("source_id")
+  occurredAt  DateTime @map("occurred_at")
+  confirmedBy String?  @map("confirmed_by")
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([providerId, occurredAt])
+  @@map("provider_reliability_events")
 }
 
 model ProviderUpload {
