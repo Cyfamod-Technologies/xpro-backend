@@ -78,7 +78,7 @@ export class SchedulingTimerHandlers {
         row.requestId,
         new Date(),
       );
-      await this.notifications.dispatch(
+      await (this.notifications as any).dispatch(
         tx,
         'schedule.staff_followup',
         { requestCode: format(row.request.number) },

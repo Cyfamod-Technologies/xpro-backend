@@ -160,7 +160,7 @@ export function evaluateEligibility(
       withdrawn: 'Withdrawn earlier',
       replaced: 'Replaced earlier',
     };
-    const reason = reasonByEnd[provider.earlierEndReasons[0]!];
+    const reason = reasonByEnd[provider.earlierEndReasons[0]];
     if (reason) return exclusion('previous', reason);
   }
   if (options.requireVerifiedBank && !provider.hasVerifiedCurrentBank)

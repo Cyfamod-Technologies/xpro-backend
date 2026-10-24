@@ -115,9 +115,9 @@ export class DispatchService {
         trigger: 'staff_view',
         actorId: userId,
         at,
-        settings: settings as Prisma.InputJsonValue,
-        eligible: eligible as Prisma.InputJsonArray,
-        excluded: excluded as Prisma.InputJsonArray,
+        settings: settings,
+        eligible: eligible,
+        excluded: excluded,
       },
     });
     await this.prisma.serviceRequest.update({
@@ -194,7 +194,7 @@ export class DispatchService {
               providerName: provider.name,
               total,
               factors,
-            })) as Prisma.InputJsonArray,
+            })),
             excluded: [] as Prisma.InputJsonArray,
           },
         });
@@ -218,7 +218,7 @@ export class DispatchService {
           });
           return;
         }
-        const choice = ranked[0]!;
+        const choice = ranked[0];
         const profile = await ctx.tx.$queryRaw<Array<{ id: string }>>(
           Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${choice.provider.id} FOR UPDATE`,
         );
@@ -402,7 +402,7 @@ export class DispatchService {
             reviewedBy: userId,
             reviewedAt: ctx.now,
             reviewNote: dto.note?.trim() || null,
-            sharedDetails: dto.share as Prisma.InputJsonValue | undefined,
+            sharedDetails: dto.share,
           },
         });
         const acceptedQuote = await ctx.tx.quote.findFirst({

@@ -103,13 +103,13 @@ export function validateIntake(
       location.kind === 'city' &&
       location.active &&
       location.parentId === null,
-  );
+  ) as any;
   const district = locations.find(
     (location) =>
       location.id === input.districtId &&
       location.kind === 'district' &&
       location.active,
-  );
+  ) as any;
   if (!city || !district || district.parentId !== city.id)
     fail('Choose your city and district from the list.');
 
@@ -117,10 +117,10 @@ export function validateIntake(
   const phoneInput = text(input.phone) ? input.phone.trim() : '';
   if (address.length < 5 || address.length > 300 || !phoneInput)
     fail('Complete your contact and site details.');
-  const phone = normalizeNigerianPhone(phoneInput);
+  const phone = normalizeNigerianPhone(phoneInput) as any;
   if (!phone) fail('Enter a valid Nigerian phone number.');
 
-  const contactMethod =
+  let contactMethod: any =
     input.contactMethod === undefined ? 'phone' : input.contactMethod;
   if (
     contactMethod !== 'email' &&
@@ -206,7 +206,7 @@ export function validateIntake(
       continue;
     if (!text(value) || !isIsoDate(value))
       fail(`${field.label} must be a valid date.`);
-    details[field.key] = value;
+    (details as any)[field.key] = value;
   }
   if (
     input.startDate !== undefined &&

@@ -269,7 +269,7 @@ export class DispatchTimerHandlers {
           ? (request.details as Record<string, unknown>)
           : {};
       const skill = typeof details.skill === 'string' ? details.skill : null;
-      const dispatchRequest = {
+      const dispatchRequest: any = {
         id: request.id,
         ownerId: request.ownerId,
         service: request.service,
@@ -277,7 +277,7 @@ export class DispatchTimerHandlers {
         cityId: request.cityId,
         districtId: request.districtId,
         cityName: city?.name,
-        districtName: district?.name,
+        districtName: district?.name ?? '',
         startDate: request.startDate,
         effectiveStartDate: request.startDate,
         effectiveEndDate:
@@ -313,13 +313,13 @@ export class DispatchTimerHandlers {
           trigger: 'cascade',
           actorId: null,
           at: now,
-          settings: settings as Prisma.InputJsonValue,
+          settings: settings,
           eligible: ranked.map(({ provider, total, factors }) => ({
             providerId: provider.id,
             providerName: provider.name,
             total,
             factors,
-          })) as Prisma.InputJsonArray,
+          })),
           excluded: excluded as Prisma.InputJsonArray,
         },
       });
@@ -336,7 +336,7 @@ export class DispatchTimerHandlers {
         );
         return { notify: true, requestId: request.id };
       }
-      const choice = ranked[0]!;
+      const choice = ranked[0];
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${choice.provider.id} FOR UPDATE`,
       );

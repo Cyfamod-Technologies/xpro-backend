@@ -605,8 +605,8 @@ export class ProvidersService {
         'Provider';
       for (const schedule of confirmed) {
         const problem = intervalFits(
-          dto.workingHours as WorkingHours,
-          (dto.timeOff ?? []) as TimeOff[],
+          dto.workingHours,
+          dto.timeOff ?? [],
           schedule.startAt,
           schedule.endAt,
           displayName,
@@ -624,8 +624,8 @@ export class ProvidersService {
       });
       for (const schedule of proposed) {
         const problem = intervalFits(
-          dto.workingHours as WorkingHours,
-          (dto.timeOff ?? []) as TimeOff[],
+          dto.workingHours,
+          dto.timeOff ?? [],
           schedule.startAt,
           schedule.endAt,
           displayName,

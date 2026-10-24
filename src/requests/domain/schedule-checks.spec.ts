@@ -1,11 +1,11 @@
 import { checkScheduleInterval } from './schedule-checks';
 
 describe('checkScheduleInterval', () => {
-  const provider = {
+  const provider: any = {
     displayName: 'Alex',
-    workingHours: { monday: { start: '08:00', end: '17:00' } },
+    workingHours: { mon: { start: '08:00', end: '17:00' } },
     timeOff: [],
-  } as const;
+  };
 
   it('rejects invalid times in contract order', () => {
     const now = new Date('2026-10-26T06:00:00.000Z');

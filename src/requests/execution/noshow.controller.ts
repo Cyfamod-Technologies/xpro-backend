@@ -89,7 +89,7 @@ export class NoShowController {
     if (!dto.outcome)
       throw new AppError(422, 'VALIDATION_ERROR', 'Choose confirm or dismiss.');
     const result = await this.noshows.decide(
-      user,
+      user.id,
       id,
       nid,
       dto.outcome,

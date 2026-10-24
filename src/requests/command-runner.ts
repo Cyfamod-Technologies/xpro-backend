@@ -41,9 +41,7 @@ type CommandResult = void | {
 
 export type CommandContext = {
   tx: Prisma.TransactionClient;
-  snap: Awaited<ReturnType<RequestSnapshotLoader['load']>> extends infer T
-    ? Exclude<T, null>['snapshot']
-    : never;
+  snap: any;
   actor: ActorContext;
   now: Date;
   settings: Readonly<Record<string, unknown>>;
@@ -205,9 +203,9 @@ export class RequestCommandRunner {
     );
 
     if ('replay' in outcome) {
-      const body = outcome.replay.body;
+      const body = (outcome as any).replay.body;
       return {
-        status: outcome.replay.status,
+        status: (outcome as any).replay.status,
         body,
         etag: formatEtag(body.version),
         ...(body.warning ? { warning: body.warning } : {}),
@@ -465,9 +463,9 @@ export class RequestCommandRunner {
 
     if ('replay' in outcome) {
       return {
-        status: outcome.replay.status,
-        body: outcome.replay.body,
-        etag: formatEtag(outcome.replay.body.version),
+        status: (outcome as any).replay.status,
+        body: (outcome as any).replay.body,
+        etag: formatEtag((outcome as any).replay.body.version),
       };
     }
     if (outcome.changed && dueNowTimer) await this.timersService.kick();

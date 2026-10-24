@@ -59,10 +59,10 @@ describe('OwnershipService', () => {
     const runner = {
       run: jest.fn(
         async (
-          options: { actor: ActorContext },
+          options: any,
           fn: (value: typeof context) => Promise<void>,
         ) => {
-          await fn({ ...context, actor: options.actor });
+          await fn({ ...(context as any), actor: options.actor });
           return { status: 200, body: {}, etag: 'W/"2"' };
         },
       ),

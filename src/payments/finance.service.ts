@@ -222,7 +222,7 @@ export class FinanceService {
       data: { status: 'approved', secondApprover: userId },
       include: { payment: { select: { method: true } } },
     });
-    if (updated.payment.method === 'paystack') {
+    if (updated.payment?.method === 'paystack') {
       const result = await this.gateway.refund({
         reference: updated.payment.reference,
         amount: Number(updated.amount),
@@ -631,9 +631,7 @@ export class FinanceService {
     };
   }
 
-  async closureState(
-    requestId: string,
-  ): Promise<{
+  async closureState(requestId: string): Promise<{
     state: 'paid' | 'on_hold_with_reason' | 'blocked';
     reason?: string;
   }> {

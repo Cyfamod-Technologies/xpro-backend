@@ -449,7 +449,7 @@ export class SchedulesService {
                   48 * 60 * 60_000,
                 handledAt: null,
               },
-            ],
+            ] as any,
           },
         });
         ctx.audit('Reschedule requested', {

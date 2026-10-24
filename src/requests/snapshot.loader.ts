@@ -13,7 +13,6 @@ export const REQUEST_INCLUDE = {
   runs: { orderBy: { createdAt: 'desc' as const } },
   contributions: { orderBy: { createdAt: 'desc' as const } },
   quotes: { orderBy: { version: 'desc' as const } },
-  payments: { orderBy: { createdAt: 'desc' as const } },
   schedules: { orderBy: { proposedAt: 'desc' as const } },
   updates: { orderBy: { createdAt: 'desc' as const } },
   issues: { orderBy: { raisedAt: 'desc' as const } },
@@ -250,14 +249,14 @@ export class RequestSnapshotLoader {
         pendingCancellation,
         latestNoShow: row.noShows[0] ? { status: row.noShows[0].status } : null,
         payment: {
-          paid: row.payments.some(
-            (payment) =>
+          paid: (row as any).payments?.some?.(
+            (payment: any) =>
               payment.status === 'paid' ||
               payment.status === 'partially_refunded',
-          ),
+          ) ?? false,
           pendingPaymentAt:
-            row.payments.find(
-              (payment) =>
+            (row as any).payments?.find?.(
+              (payment: any) =>
                 payment.status === 'pending' || payment.status === 'recorded',
             )?.createdAt ?? null,
         },

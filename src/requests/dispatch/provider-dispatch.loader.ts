@@ -86,9 +86,7 @@ export class ProviderDispatchLoader {
         .join(' ')
         .trim();
       const areas = strings(profile.serviceAreaIds);
-      const timeOff = Array.isArray(profile.timeOff)
-        ? (profile.timeOff as DispatchProvider['timeOff'])
-        : [];
+      const timeOff = Array.isArray(profile.timeOff) ? (profile.timeOff as any) : [];
       return {
         id: profile.id,
         userId: profile.userId,
@@ -103,9 +101,7 @@ export class ProviderDispatchLoader {
         available: profile.available,
         capacity: profile.capacity,
         committedJobs,
-        workingHours: object(
-          profile.workingHours,
-        ) as DispatchProvider['workingHours'],
+        workingHours: object(profile.workingHours),
         timeOff,
         hasVerifiedCurrentBank: profile.bankAccounts.length > 0,
         lastOfferedAt: profile.lastOfferedAt,
