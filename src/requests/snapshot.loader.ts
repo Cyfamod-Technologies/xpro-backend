@@ -31,6 +31,7 @@ export type RequestDb = Pick<
   | 'location'
   | 'user'
   | 'requestTimer'
+  | 'payment'
   | 'upload'
   | '$queryRaw'
 >;
@@ -124,6 +125,7 @@ export class RequestSnapshotLoader {
       providerUser,
       cascadeTimer,
       uploads,
+      payments,
     ] = await Promise.all([
       assignment
         ? tx.providerProfile.findUnique({
@@ -175,6 +177,11 @@ export class RequestSnapshotLoader {
             },
           })
         : [],
+      tx.payment.findMany({
+        where: { requestId: row.id },
+        select: { status: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      }),
     ]);
 
     return {
@@ -249,14 +256,14 @@ export class RequestSnapshotLoader {
         pendingCancellation,
         latestNoShow: row.noShows[0] ? { status: row.noShows[0].status } : null,
         payment: {
-          paid: (row as any).payments?.some?.(
-            (payment: any) =>
+          paid: payments.some(
+            (payment) =>
               payment.status === 'paid' ||
               payment.status === 'partially_refunded',
-          ) ?? false,
+          ),
           pendingPaymentAt:
-            (row as any).payments?.find?.(
-              (payment: any) =>
+            payments.find(
+              (payment) =>
                 payment.status === 'pending' || payment.status === 'recorded',
             )?.createdAt ?? null,
         },

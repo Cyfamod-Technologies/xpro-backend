@@ -74,7 +74,7 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
       status: item.status,
       source: item.source,
       attempt: item.attempt,
-      note: (item as any).note ?? '',
+      note: item.note ?? '',
       offeredAt: item.offeredAt,
       expiresAt: item.expiresAt,
       score: item.score,
@@ -101,7 +101,7 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
             providerId: item.providerId,
             total: Number(item.total),
             items: item.items,
-            note: (item as any).note ?? '',
+            note: item.note ?? '',
           })),
         }
       : {}),
@@ -116,12 +116,12 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
         outcome: run.outcome,
       })),
     },
-    schedules: schedules as any,
+    schedules,
     schedule:
-      (schedules as any[]).find(
-        (item: any) => item.status === 'proposed' || item.status === 'confirmed',
+      schedules.find(
+        (item) => item.status === 'proposed' || item.status === 'confirmed',
       ) ??
-      (schedules as any[])[0] ??
+      schedules[0] ??
       null,
     issues: issueProjection(context),
     cancellations: cancellationProjection(context),

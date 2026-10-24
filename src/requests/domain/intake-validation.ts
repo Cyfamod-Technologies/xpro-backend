@@ -103,33 +103,37 @@ export function validateIntake(
       location.kind === 'city' &&
       location.active &&
       location.parentId === null,
-  ) as any;
+  );
   const district = locations.find(
     (location) =>
       location.id === input.districtId &&
       location.kind === 'district' &&
       location.active,
-  ) as any;
+  );
   if (!city || !district || district.parentId !== city.id)
-    fail('Choose your city and district from the list.');
+    return fail('Choose your city and district from the list.');
 
   const address = text(input.address) ? input.address.trim() : '';
   const phoneInput = text(input.phone) ? input.phone.trim() : '';
   if (address.length < 5 || address.length > 300 || !phoneInput)
     fail('Complete your contact and site details.');
-  const phone = normalizeNigerianPhone(phoneInput) as any;
-  if (!phone) fail('Enter a valid Nigerian phone number.');
+  const phone = normalizeNigerianPhone(phoneInput);
+  if (!phone) return fail('Enter a valid Nigerian phone number.');
 
-  let contactMethod: any =
+  const contactMethod =
     input.contactMethod === undefined ? 'phone' : input.contactMethod;
   if (
     contactMethod !== 'email' &&
     contactMethod !== 'phone' &&
     contactMethod !== 'both'
   )
-    fail('Choose how XPro should contact you: email, phone or both.');
-  if (!Number.isSafeInteger(input.budget) || Number(input.budget) < 0)
-    fail('Budget must be zero or a positive amount.');
+    return fail('Choose how XPro should contact you: email, phone or both.');
+  if (
+    typeof input.budget !== 'number' ||
+    !Number.isSafeInteger(input.budget) ||
+    input.budget < 0
+  )
+    return fail('Budget must be zero or a positive amount.');
 
   const fields = catalogue[service] ?? intakeFields[service];
   const details: Record<string, string | number> = {};
@@ -205,8 +209,8 @@ export function validateIntake(
     )
       continue;
     if (!text(value) || !isIsoDate(value))
-      fail(`${field.label} must be a valid date.`);
-    (details as any)[field.key] = value;
+      return fail(`${field.label} must be a valid date.`);
+    details[field.key] = value;
   }
   if (
     input.startDate !== undefined &&
@@ -298,7 +302,7 @@ export function validateIntake(
     phone,
     contactMethod,
     description,
-    budget: input.budget as number,
+    budget: input.budget,
     startDate: optionalIsoDate(input.startDate),
     details,
     attachmentIds,

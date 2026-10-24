@@ -25,11 +25,7 @@ import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
 import { LocationsService } from '../platform/locations/locations.service';
 import { ProviderStandingHooks } from '../requests/dispatch/provider-standing.hooks';
-import {
-  intervalFits,
-  type TimeOff,
-  type WorkingHours,
-} from '../platform/calendar/provider-calendar';
+import { intervalFits } from '../platform/calendar/provider-calendar';
 import {
   ProviderAvailabilityDto,
   CreateProviderUploadDto,

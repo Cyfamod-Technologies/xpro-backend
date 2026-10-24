@@ -1,5 +1,5 @@
 import type { GuardRegistry } from './allowed-actions';
-import type { DomainGuard, GuardResult } from './guards/types';
+import type { GuardResult } from './guards/types';
 
 const yes: GuardResult = { ok: true };
 const no = (

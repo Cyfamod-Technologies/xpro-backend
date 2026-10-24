@@ -6,7 +6,10 @@ import { OutboxService } from '../../platform/outbox/outbox.service';
 import { TimersService } from '../../platform/timers/timers.service';
 import { TimerRegistry } from '../../platform/timers/timer-registry';
 import { PrismaService } from '../../prisma/prisma.service';
-import { evaluateEligibility } from '../domain/eligibility';
+import {
+  evaluateEligibility,
+  type DispatchRequest,
+} from '../domain/eligibility';
 import { rankProviders } from '../domain/ranking';
 import { SETTINGS_REGISTRY } from '../../platform/settings/settings.registry';
 import type { DispatchWeights } from '../domain/ranking';
@@ -256,10 +259,6 @@ export class DispatchTimerHandlers {
         return { notify: true, requestId: request.id };
       }
       const providers = await this.providers.list(new Date(), request.id);
-      const city = await tx.location.findUnique({
-        where: { id: request.cityId },
-        select: { name: true },
-      });
       const district = await tx.location.findUnique({
         where: { id: request.districtId },
         select: { name: true },
@@ -269,16 +268,14 @@ export class DispatchTimerHandlers {
           ? (request.details as Record<string, unknown>)
           : {};
       const skill = typeof details.skill === 'string' ? details.skill : null;
-      const dispatchRequest: any = {
+      const dispatchRequest: DispatchRequest = {
         id: request.id,
         ownerId: request.ownerId,
         service: request.service,
         skill,
         cityId: request.cityId,
         districtId: request.districtId,
-        cityName: city?.name,
         districtName: district?.name ?? '',
-        startDate: request.startDate,
         effectiveStartDate: request.startDate,
         effectiveEndDate:
           typeof details.endDate === 'string' ? details.endDate : null,

@@ -83,15 +83,21 @@ export class FinanceService {
         orderBy: { createdAt: 'asc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: { payment: { select: { method: true } } },
       }),
       this.prisma.refund.count(),
     ]);
+    const payments = await this.prisma.payment.findMany({
+      where: { id: { in: items.map((item) => item.paymentId) } },
+      select: { id: true, method: true },
+    });
+    const methodByPaymentId = new Map(
+      payments.map((payment) => [payment.id, payment.method]),
+    );
     return {
-      items: items.map(({ payment, ...row }) => ({
+      items: items.map((row) => ({
         ...row,
         amount: Number(row.amount),
-        method: payment.method,
+        method: methodByPaymentId.get(row.paymentId) ?? null,
       })),
       total,
       page,
@@ -111,7 +117,6 @@ export class FinanceService {
     requirePermission(actor, 'refund.manage');
     const row = await this.prisma.refund.findUnique({
       where: { id },
-      include: { payment: true, cancellation: true },
     });
     if (!row || row.status !== 'pending_approval')
       throw conflict('This refund is no longer awaiting a decision.');
@@ -130,7 +135,16 @@ export class FinanceService {
           },
         }),
       );
-    const workStarted = row.cancellation?.workStarted ?? false;
+    const [payment, cancellation] = await Promise.all([
+      this.prisma.payment.findUnique({ where: { id: row.paymentId } }),
+      row.cancellationId
+        ? this.prisma.cancellation.findUnique({
+            where: { id: row.cancellationId },
+          })
+        : null,
+    ]);
+    if (!payment) throw conflict('The payment for this refund was not found.');
+    const workStarted = cancellation?.workStarted ?? false;
     const amount = dto.amount === undefined ? row.amount : BigInt(dto.amount);
     const otherRefunds = await this.prisma.refund.aggregate({
       where: {
@@ -140,7 +154,7 @@ export class FinanceService {
       },
       _sum: { amount: true },
     });
-    const available = row.payment.amount - (otherRefunds._sum.amount ?? 0n);
+    const available = payment.amount - (otherRefunds._sum.amount ?? 0n);
     if (amount < 0n || amount > available)
       throw invalid('This refund exceeds the amount available.');
     if (workStarted && dto.amount === undefined)
@@ -162,25 +176,21 @@ export class FinanceService {
         reason: dto.reason.trim(),
         ...(status === 'waived' ? { completedAt: new Date() } : {}),
       },
-      include: { payment: { select: { method: true } } },
     });
-    if (
-      updated.status === 'approved' &&
-      updated.payment.method === 'paystack'
-    ) {
+    if (updated.status === 'approved' && payment.method === 'paystack') {
       try {
         const result = await this.gateway.refund({
-          reference: updated.payment.reference,
+          reference: payment.reference,
           amount: Number(updated.amount),
           reason: updated.reason,
         });
-        return refundView(
-          await this.prisma.refund.update({
+        return refundView({
+          ...(await this.prisma.refund.update({
             where: { id },
             data: { status: 'processing', gatewayRefundId: result.id },
-            include: { payment: { select: { method: true } } },
-          }),
-        );
+          })),
+          payment,
+        });
       } catch (error) {
         await this.prisma.refund.update({
           where: { id },
@@ -190,7 +200,7 @@ export class FinanceService {
       }
     }
     if (updated.status === 'waived') await this.resolveCancellation(updated.id);
-    return refundView(updated);
+    return refundView({ ...updated, payment });
   }
 
   async secondApproveRefund(
@@ -220,23 +230,26 @@ export class FinanceService {
     const updated = await this.prisma.refund.update({
       where: { id },
       data: { status: 'approved', secondApprover: userId },
-      include: { payment: { select: { method: true } } },
     });
-    if (updated.payment?.method === 'paystack') {
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: updated.paymentId },
+    });
+    if (!payment) throw conflict('The payment for this refund was not found.');
+    if (payment.method === 'paystack') {
       const result = await this.gateway.refund({
-        reference: updated.payment.reference,
+        reference: payment.reference,
         amount: Number(updated.amount),
         reason: updated.reason,
       });
-      return refundView(
-        await this.prisma.refund.update({
+      return refundView({
+        ...(await this.prisma.refund.update({
           where: { id },
           data: { status: 'processing', gatewayRefundId: result.id },
-          include: { payment: { select: { method: true } } },
-        }),
-      );
+        })),
+        payment,
+      });
     }
-    return refundView(updated);
+    return refundView({ ...updated, payment });
   }
 
   async recordRefundTransfer(
@@ -248,9 +261,11 @@ export class FinanceService {
     requirePermission(actor, 'refund.manage');
     const row = await this.prisma.refund.findUnique({
       where: { id },
-      include: { payment: true },
     });
-    if (!row || row.status !== 'approved' || row.payment.method !== 'offline')
+    const payment = row
+      ? await this.prisma.payment.findUnique({ where: { id: row.paymentId } })
+      : null;
+    if (!row || row.status !== 'approved' || payment?.method !== 'offline')
       throw conflict('This offline refund is not ready for transfer.');
     return this.prisma.$transaction(async (tx) => {
       await this.uploads.attach(
@@ -261,8 +276,8 @@ export class FinanceService {
         'refund',
         id,
       );
-      return refundView(
-        await tx.refund.update({
+      return refundView({
+        ...(await tx.refund.update({
           where: { id },
           data: {
             status: 'processing',
@@ -273,9 +288,9 @@ export class FinanceService {
               ? `${row.reason}\n${dto.note.trim()}`
               : row.reason,
           },
-          include: { payment: { select: { method: true } } },
-        }),
-      );
+        })),
+        payment,
+      });
     });
   }
 
@@ -296,10 +311,13 @@ export class FinanceService {
         completedAt: new Date(),
         reason: `${row.reason}\nReconciled: ${note.trim()}`,
       },
-      include: { payment: { select: { method: true } } },
     });
     await this.resolveCancellation(updated.id);
-    return refundView(updated);
+    const payment = await this.prisma.payment.findUnique({
+      where: { id: updated.paymentId },
+      select: { method: true },
+    });
+    return refundView({ ...updated, ...(payment ? { payment } : {}) });
   }
 
   async payouts(userId: string, page = 1) {
@@ -311,16 +329,22 @@ export class FinanceService {
         orderBy: { createdAt: 'asc' },
         skip: (page - 1) * limit,
         take: limit,
-        include: { provider: { select: { userId: true, businessName: true } } },
       }),
       this.prisma.payout.count(),
     ]);
+    const providers = await this.prisma.providerProfile.findMany({
+      where: { id: { in: items.map((item) => item.providerId) } },
+      select: { id: true, userId: true, businessName: true },
+    });
+    const providerById = new Map(
+      providers.map((provider) => [provider.id, provider]),
+    );
     return {
-      items: items.map(({ provider, ...row }) => ({
+      items: items.map((row) => ({
         ...row,
         amount: Number(row.amount),
-        providerName: provider.businessName,
-        providerUserId: provider.userId,
+        providerName: providerById.get(row.providerId)?.businessName ?? null,
+        providerUserId: providerById.get(row.providerId)?.userId ?? null,
         maskedBankAccount: row.bankLast4 ? `•••• ${row.bankLast4}` : null,
         method: row.transferRecordedBy ? 'offline' : 'paystack',
       })),
@@ -338,11 +362,14 @@ export class FinanceService {
     requirePermission(actor, 'payout.approve');
     const payout = await this.prisma.payout.findUnique({
       where: { id },
-      include: { provider: true },
     });
     if (!payout || payout.status !== 'pending_approval')
       throw conflict('This payout is not awaiting approval.');
-    if (payout.provider.user.status !== 'active')
+    const provider = await this.prisma.providerProfile.findUnique({
+      where: { id: payout.providerId },
+      select: { user: { select: { status: true } } },
+    });
+    if (provider?.user.status !== 'active')
       throw conflict(
         'Provider must be active before this payout can be approved.',
       );
@@ -482,7 +509,6 @@ export class FinanceService {
     requirePermission(actor, 'payout.approve');
     const row = await this.prisma.payout.findUnique({
       where: { id },
-      include: { provider: true },
     });
     if (!row || row.status !== 'approved')
       throw conflict('This payout is not approved for transfer.');

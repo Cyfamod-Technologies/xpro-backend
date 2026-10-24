@@ -68,7 +68,9 @@ export class SchedulingTimerHandlers {
           requestId: timer.requestId,
           status: 'proposed',
         },
-        include: { request: { select: { id: true, number: true } } },
+        include: {
+          request: { select: { id: true, number: true, ownerId: true } },
+        },
       });
       if (!row) return false;
       await this.approvals.open(
@@ -78,11 +80,15 @@ export class SchedulingTimerHandlers {
         row.requestId,
         new Date(),
       );
-      await (this.notifications as any).dispatch(
+      await this.notifications.dispatch(
         tx,
         'schedule.staff_followup',
         { requestCode: format(row.request.number) },
-        { requestId: row.request.id, ownerId: null, actorId: null },
+        {
+          requestId: row.request.id,
+          ownerId: row.request.ownerId,
+          actorId: null,
+        },
       );
       return true;
     });

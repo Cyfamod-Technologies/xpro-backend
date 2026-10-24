@@ -18,6 +18,7 @@ import { RequestSnapshotLoader } from './snapshot.loader';
 import type { DispatchTrigger } from '@prisma/client';
 import type { TimerKind } from '../platform/timers/timer-kinds';
 import { mayAutoClaim } from './domain/auto-claim';
+import type { RequestSnapshot } from './domain/snapshot';
 
 type AuditInput = {
   note?: string;
@@ -41,7 +42,7 @@ type CommandResult = void | {
 
 export type CommandContext = {
   tx: Prisma.TransactionClient;
-  snap: any;
+  snap: RequestSnapshot;
   actor: ActorContext;
   now: Date;
   settings: Readonly<Record<string, unknown>>;
@@ -202,10 +203,10 @@ export class RequestCommandRunner {
       { timeout: 15_000 },
     );
 
-    if ('replay' in outcome) {
-      const body = (outcome as any).replay.body;
+    if (outcome.replay) {
+      const { status, body } = outcome.replay;
       return {
-        status: (outcome as any).replay.status,
+        status,
         body,
         etag: formatEtag(body.version),
         ...(body.warning ? { warning: body.warning } : {}),
@@ -461,11 +462,12 @@ export class RequestCommandRunner {
       { timeout: 15_000 },
     );
 
-    if ('replay' in outcome) {
+    if (outcome.replay) {
+      const { status, body } = outcome.replay;
       return {
-        status: (outcome as any).replay.status,
-        body: (outcome as any).replay.body,
-        etag: formatEtag((outcome as any).replay.body.version),
+        status,
+        body,
+        etag: formatEtag(body.version),
       };
     }
     if (outcome.changed && dueNowTimer) await this.timersService.kick();

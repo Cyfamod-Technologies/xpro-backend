@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { DispatchProvider } from '../domain/eligibility';
+import type { TimeOff } from '../../platform/calendar/provider-calendar';
 
 const COMMITTED_REQUEST_STATUSES = new Set([
   'ready_to_schedule',
@@ -17,6 +18,18 @@ const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+const timeOffEntries = (value: unknown): TimeOff[] =>
+  Array.isArray(value)
+    ? (value as unknown[]).filter(
+        (item): item is TimeOff =>
+          item !== null &&
+          typeof item === 'object' &&
+          'from' in item &&
+          typeof item.from === 'string' &&
+          'to' in item &&
+          typeof item.to === 'string',
+      )
+    : [];
 
 @Injectable()
 export class ProviderDispatchLoader {
@@ -86,7 +99,7 @@ export class ProviderDispatchLoader {
         .join(' ')
         .trim();
       const areas = strings(profile.serviceAreaIds);
-      const timeOff = Array.isArray(profile.timeOff) ? (profile.timeOff as any) : [];
+      const timeOff = timeOffEntries(profile.timeOff);
       return {
         id: profile.id,
         userId: profile.userId,

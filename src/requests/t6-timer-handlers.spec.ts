@@ -45,7 +45,7 @@ describe('T6 clarification timer handlers', () => {
       timers as unknown as TimersService,
       outbox as unknown as OutboxService,
     );
-    const timer: any = {
+    const timer: RequestTimer = {
       id: 'timer-1',
       requestId: request.id,
       kind: TimerKinds.T6AutoCancel,
@@ -58,7 +58,7 @@ describe('T6 clarification timer handlers', () => {
       lastError: null,
       nextAttemptAt: null,
       firedAt: null,
-    } as any;
+    };
     const handler = registry.get(TimerKinds.T6AutoCancel);
 
     await handler?.(timer);
@@ -131,7 +131,7 @@ describe('T6 clarification timer handlers', () => {
       { stop: jest.fn() } as never,
       outbox as never,
     );
-    const timer: any = {
+    const timer: RequestTimer = {
       id: 'timer-1',
       requestId: 'request-42',
       kind: TimerKinds.T6AutoCancel,

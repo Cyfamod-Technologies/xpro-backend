@@ -72,13 +72,13 @@ export function customerProjection(
           status: schedule.status,
           startAt: schedule.startAt,
           endAt: schedule.endAt,
-          note: (schedule as any).note == null ? '' : (schedule as any).note,
+          note: schedule.note ?? '',
           customer: schedule.customer,
           provider: schedule.provider,
           confirmedAt: schedule.confirmedAt,
-        } as any
+        }
       : null,
-    schedules: (scheduleProjection(context) as any[]).map((item: any) => ({ ...item, note: item.note == null ? '' : item.note })) as any,
+    schedules: scheduleProjection(context),
     issues: issueProjection(context),
     cancellations: cancellationProjection(context),
     completion: completionProjection(context),

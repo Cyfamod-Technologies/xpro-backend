@@ -3,6 +3,7 @@ import { providerProjection } from './provider.projection';
 import { staffProjection } from './staff.projection';
 import { listProjection } from './list.projection';
 import type { ActorContext } from '../../platform/actor/actor.types';
+import type { StaffPermission } from '../../staff/staff-permissions';
 import type { RequestSnapshot } from '../domain/snapshot';
 import type { LoadedRequest } from '../snapshot.loader';
 import type { ProjectionContext } from './projection.helpers';
@@ -10,7 +11,7 @@ import type { ProjectionContext } from './projection.helpers';
 const now = new Date('2026-10-23T10:00:00.000Z');
 const actor = (
   kind: ActorContext['kind'],
-  permissions: string[] = [],
+  permissions: StaffPermission[] = [],
 ): ActorContext => ({
   userId: 'user-1',
   kind,
@@ -37,7 +38,7 @@ function context(
   role: 'customer' | 'provider' | 'staff',
   rowOverrides: Partial<LoadedRequest> = {},
   snapshotOverrides: Partial<RequestSnapshot> = {},
-  permissions: string[] = [],
+  permissions: StaffPermission[] = [],
 ): ProjectionContext {
   const row = {
     id: 'request-uuid',

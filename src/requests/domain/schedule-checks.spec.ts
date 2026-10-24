@@ -1,7 +1,10 @@
-import { checkScheduleInterval } from './schedule-checks';
+import {
+  checkScheduleInterval,
+  type ScheduleProviderCalendar,
+} from './schedule-checks';
 
 describe('checkScheduleInterval', () => {
-  const provider: any = {
+  const provider: ScheduleProviderCalendar = {
     displayName: 'Alex',
     workingHours: { mon: { start: '08:00', end: '17:00' } },
     timeOff: [],

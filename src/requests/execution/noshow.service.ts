@@ -3,7 +3,6 @@ import { ActorService } from '../../platform/actor/actor.service';
 import { requirePermission } from '../../platform/actor/actor.guards';
 import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
-import type { RequestUser } from '../../common/types/request-user';
 import { RequestCommandRunner } from '../command-runner';
 
 const conflict = (message: string) =>

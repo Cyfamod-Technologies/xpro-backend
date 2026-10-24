@@ -455,7 +455,10 @@ export class PaymentsService {
     }
     try {
       if (eventName === 'refund.processed') {
-        const refundId = data.id == null ? '' : String(data.id);
+        const refundId =
+          typeof data.id === 'string' || typeof data.id === 'number'
+            ? String(data.id)
+            : '';
         const refund = refundId
           ? await this.prisma.refund.findFirst({
               where: { gatewayRefundId: refundId },
@@ -658,7 +661,7 @@ export class PaymentsService {
     requestId: string,
     paymentId: string,
     reference: string,
-    verified: VerifiedTransaction | null,
+    _verified: VerifiedTransaction | null,
   ) {
     const request = await tx.serviceRequest.findUnique({
       where: { id: requestId },

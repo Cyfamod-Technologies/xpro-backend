@@ -26,8 +26,6 @@ import {
 import { rankProviders, type DispatchWeights } from '../domain/ranking';
 import { ProviderDispatchLoader } from './provider-dispatch.loader';
 
-const noAccess = () =>
-  new AppError(403, 'FORBIDDEN', 'Your staff role does not allow this action.');
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
 const requestNotFound = () =>
@@ -40,10 +38,6 @@ const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-const strings = (value: unknown) =>
-  Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : [];
 
 @Injectable()
 export class DispatchService {
@@ -1120,9 +1114,11 @@ export class DispatchService {
     const skillField = (
       intakeFields[row.service as (typeof serviceLines)[number]] ?? []
     ).find((field) => field.isSkill);
-    const skill = skillField
-      ? String(details[skillField.key] ?? '') || null
-      : null;
+    const skillValue = skillField ? details[skillField.key] : null;
+    const skill =
+      typeof skillValue === 'string' || typeof skillValue === 'number'
+        ? String(skillValue) || null
+        : null;
     return {
       id: row.id,
       ownerId: row.ownerId,

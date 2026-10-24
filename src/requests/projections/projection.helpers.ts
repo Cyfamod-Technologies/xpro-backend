@@ -30,7 +30,7 @@ export function scheduleProjection(
       status: schedule.status,
       startAt: schedule.startAt,
       endAt: schedule.endAt,
-      note: schedule.note,
+      note: schedule.note ?? '',
       customer: schedule.customer,
       provider: schedule.provider,
       confirmedAt: schedule.confirmedAt,
