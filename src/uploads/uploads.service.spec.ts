@@ -20,15 +20,19 @@ describe('UploadsService.attach', () => {
     createdAt: new Date('2026-10-23T00:00:00.000Z'),
   };
 
-  function createService(foundUploads: typeof readyUpload[]) {
+  function createService(foundUploads: (typeof readyUpload)[]) {
+    const findMany = jest.fn().mockResolvedValue(foundUploads);
+    const updateMany = jest
+      .fn()
+      .mockResolvedValue({ count: foundUploads.length });
     const transaction = {
       upload: {
-        findMany: jest.fn().mockResolvedValue(foundUploads),
-        updateMany: jest.fn().mockResolvedValue({ count: foundUploads.length }),
+        findMany,
+        updateMany,
       },
     } as unknown as Prisma.TransactionClient;
     const service = new UploadsService({} as never, {} as never);
-    return { service, transaction };
+    return { service, transaction, findMany, updateMany };
   }
 
   it.each([
@@ -36,7 +40,7 @@ describe('UploadsService.attach', () => {
     { description: 'a pending upload', found: [] },
     { description: 'an upload with the wrong purpose', found: [] },
   ])('rejects $description', async ({ found }) => {
-    const { service, transaction } = createService(found as typeof readyUpload[]);
+    const { service, transaction, findMany } = createService(found);
     await expect(
       service.attach(
         transaction,
@@ -49,18 +53,18 @@ describe('UploadsService.attach', () => {
     ).rejects.toThrow(
       "One of your files didn't finish uploading. Remove it and try again.",
     );
-    expect(transaction.upload.findMany).toHaveBeenCalledWith({
+    expect(findMany).toHaveBeenCalledWith({
       where: expect.objectContaining({
         id: { in: ['upload-id'] },
         ownerId: 'owner-id',
         purpose: UploadPurpose.request_attachment,
         status: UploadStatus.ready,
-      }),
+      }) as unknown,
     });
   });
 
   it('marks owned, ready files attached to the entity inside the caller transaction', async () => {
-    const { service, transaction } = createService([readyUpload]);
+    const { service, transaction, updateMany } = createService([readyUpload]);
     const result = await service.attach(
       transaction,
       ['upload-id'],
@@ -69,21 +73,26 @@ describe('UploadsService.attach', () => {
       'request',
       'request-id',
     );
-    expect(transaction.upload.updateMany).toHaveBeenCalledWith(
+    expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ status: UploadStatus.ready }),
+        where: expect.objectContaining({
+          status: UploadStatus.ready,
+        }) as unknown,
         data: expect.objectContaining({
           status: UploadStatus.attached,
           entityType: 'request',
           entityId: 'request-id',
-        }),
+        }) as unknown,
       }),
     );
-    expect(result[0]).toMatchObject({ status: UploadStatus.attached, entityId: 'request-id' });
+    expect(result[0]).toMatchObject({
+      status: UploadStatus.attached,
+      entityId: 'request-id',
+    });
   });
 
   it('rejects a duplicate id and rolls back the caller transaction', async () => {
-    const { service, transaction } = createService([readyUpload]);
+    const { service, transaction, updateMany } = createService([readyUpload]);
     await expect(
       service.attach(
         transaction,
@@ -94,6 +103,6 @@ describe('UploadsService.attach', () => {
         'request-id',
       ),
     ).rejects.toBeInstanceOf(ConflictException);
-    expect(transaction.upload.updateMany).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
   });
 });

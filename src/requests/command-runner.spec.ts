@@ -7,7 +7,9 @@ describe('RequestCommandRunner idempotency', () => {
     const acquireLock = async () => {
       let release!: () => void;
       const previous = lockTail;
-      lockTail = new Promise<void>((resolve) => { release = resolve; });
+      lockTail = new Promise<void>((resolve) => {
+        release = resolve;
+      });
       await previous;
       return release;
     };
@@ -30,38 +32,58 @@ describe('RequestCommandRunner idempotency', () => {
     const snapshot = { ownerId: actor.userId };
     let stored: { status: number; body: unknown } | null = null;
     const idempotency = {
-      lookup: jest.fn(async (_actorId: string, _key: string, _hash: string, tx?: unknown) => tx ? stored : null),
-      store: jest.fn(async (_actorId: string, _key: string, _hash: string, status: number, body: unknown, tx?: unknown) => {
-        expect(tx).toBeDefined();
-        stored = { status, body };
-      }),
+      lookup: jest.fn(
+        (_actorId: string, _key: string, _hash: string, tx?: unknown) =>
+          Promise.resolve(tx ? stored : null),
+      ),
+      store: jest.fn(
+        (
+          _actorId: string,
+          _key: string,
+          _hash: string,
+          status: number,
+          body: unknown,
+          tx?: unknown,
+        ) => {
+          expect(tx).toBeDefined();
+          stored = { status, body };
+          return Promise.resolve();
+        },
+      ),
     };
     const loader = {
-      load: jest.fn(async () => ({ row, snapshot })),
+      load: jest.fn(() => Promise.resolve({ row, snapshot })),
     };
     let transactionCount = 0;
     let secondLockStarted!: () => void;
-    const secondLockWaiting = new Promise<void>((resolve) => { secondLockStarted = resolve; });
+    const secondLockWaiting = new Promise<void>((resolve) => {
+      secondLockStarted = resolve;
+    });
     const prisma = {
-      $transaction: jest.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        transactionCount += 1;
-        let release: (() => void) | undefined;
-        const tx = {
-          $queryRaw: jest.fn(async () => {
-            if (transactionCount === 2) secondLockStarted();
-            release = await acquireLock();
-            return [];
-          }),
-          serviceRequest: {
-            update: jest.fn(async () => { row.version += 1; return row; }),
-          },
-        };
-        try {
-          return await callback(tx);
-        } finally {
-          release?.();
-        }
-      }),
+      $transaction: jest.fn(
+        async (callback: (tx: unknown) => Promise<unknown>) => {
+          transactionCount += 1;
+          let release: (() => void) | undefined;
+          const tx = {
+            $queryRaw: jest.fn(async () => {
+              if (transactionCount === 2) secondLockStarted();
+              release = await acquireLock();
+              return [];
+            }),
+            serviceRequest: {
+              update: jest.fn(() => {
+                row.version += 1;
+                return Promise.resolve(row);
+              }),
+            },
+          };
+          try {
+            return await callback(tx);
+          } finally {
+            release?.();
+          }
+        },
+      ),
     };
     const runner = new RequestCommandRunner(
       prisma as never,
@@ -72,13 +94,20 @@ describe('RequestCommandRunner idempotency', () => {
       { kick: jest.fn() } as never,
       { kick: jest.fn() } as never,
     );
-    const projected = jest.fn((loadedRow: typeof row) => ({ id: 'XPR-00042', version: loadedRow.version }));
+    const projected = jest.fn((loadedRow: typeof row) => ({
+      id: 'XPR-00042',
+      version: loadedRow.version,
+    }));
     (runner as unknown as { project: typeof projected }).project = projected;
 
     let releaseCommand!: () => void;
-    const commandGate = new Promise<void>((resolve) => { releaseCommand = resolve; });
+    const commandGate = new Promise<void>((resolve) => {
+      releaseCommand = resolve;
+    });
     let commandStarted!: () => void;
-    const started = new Promise<void>((resolve) => { commandStarted = resolve; });
+    const started = new Promise<void>((resolve) => {
+      commandStarted = resolve;
+    });
     const command = jest.fn(async () => {
       if (command.mock.calls.length === 1) {
         commandStarted();

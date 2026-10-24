@@ -68,11 +68,15 @@ describe('hasExpectedSignature', () => {
     [Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png', true],
     [Buffer.from([0xff, 0xd8, 0xff]), 'image/jpeg', true],
     [Buffer.from('RIFF0000WEBP'), 'image/webp', true],
-    [Buffer.from('PK\u0003\u0004'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', true],
+    [
+      Buffer.from('PK\u0003\u0004'),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      true,
+    ],
     [Buffer.from('0000ftypisom'), 'video/mp4', true],
     [Buffer.from('not a pdf'), 'application/pdf', false],
     [Buffer.from(''), 'application/unknown', false],
   ])('checks signature for %s', (bytes, type, expected) => {
-    expect(hasExpectedSignature(bytes as Buffer, type as string)).toBe(expected);
+    expect(hasExpectedSignature(bytes as Buffer, type)).toBe(expected);
   });
 });
