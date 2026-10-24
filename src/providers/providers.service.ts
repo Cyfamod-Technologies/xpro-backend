@@ -19,9 +19,13 @@ import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
+import { hasExpectedSignature, validateFile } from '../storage/file-validation';
 import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
+import { LocationsService } from '../platform/locations/locations.service';
+import { ProviderStandingHooks } from '../requests/dispatch/provider-standing.hooks';
+import { intervalFits } from '../platform/calendar/provider-calendar';
 import {
   ProviderAvailabilityDto,
   CreateProviderUploadDto,
@@ -48,7 +52,70 @@ export class ProvidersService {
     private readonly config: ConfigService,
     private readonly storage: StorageService,
     private readonly actors: ActorService,
+    private readonly locations: LocationsService,
+    private readonly standingHooks: ProviderStandingHooks,
   ) {}
+
+  async recordReliabilityEvent(
+    tx: Prisma.TransactionClient,
+    input: {
+      providerId: string;
+      kind: 'no_show_confirmed' | 'no_show_voided' | 'declined' | 'expired';
+      sourceId: string;
+      requestId?: string;
+      occurredAt: Date;
+      confirmedBy?: string;
+      note?: string;
+    },
+  ): Promise<void> {
+    try {
+      await tx.providerReliabilityEvent.create({
+        data: {
+          providerId: input.providerId,
+          kind: input.kind,
+          sourceId: input.sourceId,
+          requestId: input.requestId,
+          occurredAt: input.occurredAt,
+          confirmedBy: input.confirmedBy,
+          note: input.note,
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      )
+        return;
+      throw error;
+    }
+
+    const since = new Date(
+      input.occurredAt.getTime() - 90 * 24 * 60 * 60 * 1000,
+    );
+    const events = await tx.providerReliabilityEvent.findMany({
+      where: {
+        providerId: input.providerId,
+        kind: { in: ['no_show_confirmed', 'no_show_voided'] },
+        occurredAt: { gte: since },
+      },
+      select: { kind: true, sourceId: true },
+    });
+    const confirmed = new Set(
+      events
+        .filter((event) => event.kind === 'no_show_confirmed')
+        .map((event) => event.sourceId),
+    );
+    for (const event of events) {
+      if (event.kind === 'no_show_voided')
+        confirmed.delete(event.sourceId.replace(/:voided$/, ''));
+    }
+    if (confirmed.size >= 2) {
+      await tx.providerProfile.update({
+        where: { id: input.providerId },
+        data: { reliabilityStatus: 'review_due' },
+      });
+    }
+  }
 
   async myProfile(userId: string) {
     await this.requireProvider(userId);
@@ -107,7 +174,7 @@ export class ProvidersService {
 
   async createUpload(userId: string, dto: CreateProviderUploadDto) {
     await this.requireProvider(userId);
-    this.validateFile(dto.name, dto.type, dto.size, dto.purpose);
+    validateFile(dto.name, dto.type, dto.size, dto.purpose);
     const id = randomUUID();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     const ext = dto.name.split('.').pop()?.toLowerCase() ?? 'bin';
@@ -153,7 +220,7 @@ export class ProvidersService {
         'Uploaded file size or type does not match the upload request.',
       );
     const bytes = await this.storage.read(upload.storageKey);
-    if (!this.hasExpectedSignature(bytes, upload.contentType))
+    if (!hasExpectedSignature(bytes, upload.contentType))
       throw new BadRequestException(
         'The uploaded file content does not match its type.',
       );
@@ -240,6 +307,7 @@ export class ProvidersService {
         'Verify your email before submitting your provider profile.',
       );
     const normalized = this.validateSubmission(dto);
+    const locationValues = await this.locations.resolveProviderLocationIds(dto);
     await this.verifyAttachments(userId, dto);
     const resolved = await this.resolveBank(dto.bankCode, dto.accountNumber);
     const current = await this.prisma.providerProfile.findUnique({
@@ -265,7 +333,10 @@ export class ProvidersService {
       const proposed = {
         trade: dto.trade.trim(),
         services: normalized.services,
-        serviceAreas: normalized.serviceAreas,
+        city: locationValues.cityName,
+        cityId: locationValues.cityId,
+        serviceAreas: locationValues.serviceAreaNames,
+        serviceAreaIds: locationValues.serviceAreaIds,
         skills: normalized.skills,
         capacity: dto.capacity,
         documents: dto.documents,
@@ -277,7 +348,9 @@ export class ProvidersService {
           where: { userId },
           data: {
             phone: dto.phone.trim(),
-            city: dto.city.trim(),
+            city: locationValues.cityName,
+            cityId: locationValues.cityId ?? null,
+            businessName: dto.businessName?.trim() || undefined,
             experience: dto.experience,
             bio: dto.bio.trim(),
             workingHours: json(dto.workingHours),
@@ -301,9 +374,12 @@ export class ProvidersService {
             userId,
             phone: dto.phone.trim(),
             trade: dto.trade.trim(),
-            city: dto.city.trim(),
+            city: locationValues.cityName,
+            cityId: locationValues.cityId ?? null,
+            businessName: dto.businessName?.trim() || undefined,
             services: json(normalized.services),
-            serviceAreas: json(normalized.serviceAreas),
+            serviceAreas: json(locationValues.serviceAreaNames),
+            serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
@@ -318,9 +394,12 @@ export class ProvidersService {
           update: {
             phone: dto.phone.trim(),
             trade: dto.trade.trim(),
-            city: dto.city.trim(),
+            city: locationValues.cityName,
+            cityId: locationValues.cityId ?? null,
+            businessName: dto.businessName?.trim() || null,
             services: json(normalized.services),
-            serviceAreas: json(normalized.serviceAreas),
+            serviceAreas: json(locationValues.serviceAreaNames),
+            serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
@@ -480,6 +559,11 @@ export class ProvidersService {
       action: 'provider.availability',
       metadata: { available: dto.available },
     });
+    if (!dto.available)
+      await this.standingHooks.onProviderUnavailable(
+        updated.id,
+        'Provider turned availability off.',
+      );
     return this.myProfile(userId);
   }
 
@@ -492,13 +576,73 @@ export class ProvidersService {
         'Submit your provider profile before setting working hours.',
       );
     this.validateCalendar(dto.workingHours, dto.timeOff ?? []);
-    const updated = await this.prisma.providerProfile.update({
-      where: { userId },
-      data: {
-        workingHours: json(dto.workingHours),
-        timeOff: json(dto.timeOff ?? []),
-        version: { increment: 1 },
-      },
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${profile.id} FOR UPDATE`,
+      );
+      const confirmed = await tx.schedule.findMany({
+        where: {
+          providerId: profile.id,
+          status: 'confirmed',
+          endAt: { gte: new Date() },
+        },
+        include: { request: { select: { number: true } } },
+        orderBy: { startAt: 'asc' },
+      });
+      const providerUser = await tx.user.findUnique({
+        where: { id: userId },
+        select: { firstName: true, lastName: true },
+      });
+      const displayName =
+        profile.businessName ||
+        [providerUser?.firstName, providerUser?.lastName]
+          .filter(Boolean)
+          .join(' ') ||
+        'Provider';
+      for (const schedule of confirmed) {
+        const problem = intervalFits(
+          dto.workingHours,
+          dto.timeOff ?? [],
+          schedule.startAt,
+          schedule.endAt,
+          displayName,
+        );
+        if (problem) {
+          const date = schedule.startAt.toISOString().slice(0, 10);
+          throw new ConflictException(
+            `You have a confirmed job on ${date} (${schedule.request.number}). Ask XPro to move it before changing these hours.`,
+          );
+        }
+      }
+      const proposed = await tx.schedule.findMany({
+        where: { providerId: profile.id, status: 'proposed' },
+        select: { id: true, requestId: true, startAt: true, endAt: true },
+      });
+      for (const schedule of proposed) {
+        const problem = intervalFits(
+          dto.workingHours,
+          dto.timeOff ?? [],
+          schedule.startAt,
+          schedule.endAt,
+          displayName,
+        );
+        if (problem)
+          await tx.schedule.update({
+            where: { id: schedule.id },
+            data: {
+              status: 'changes_requested',
+              responses: { push: 'Provider: working hours changed' },
+            },
+          });
+      }
+      return tx.providerProfile.update({
+        where: { userId },
+        data: {
+          workingHours: json(dto.workingHours),
+          timeOff: json(dto.timeOff ?? []),
+          version: { increment: 1 },
+        },
+      });
     });
     this.audit.record({
       actorType: 'user',
@@ -621,6 +765,11 @@ export class ProvidersService {
       action: `provider.review.${dto.decision}`,
       metadata: { version: updated.version, note: dto.note?.trim() },
     });
+    if (dto.decision !== 'approved')
+      await this.standingHooks.onProviderUnavailable(
+        profile.id,
+        'Provider verification was rejected.',
+      );
     return this.project(updated, false);
   }
 
@@ -656,6 +805,15 @@ export class ProvidersService {
                 trade,
                 services: json(changes.services),
                 serviceAreas: json(changes.serviceAreas),
+                ...(typeof changes.city === 'string'
+                  ? { city: changes.city }
+                  : {}),
+                ...(typeof changes.cityId === 'string'
+                  ? { cityId: changes.cityId }
+                  : {}),
+                ...(Array.isArray(changes.serviceAreaIds)
+                  ? { serviceAreaIds: changes.serviceAreaIds as string[] }
+                  : {}),
                 skills: json(changes.skills),
                 capacity: Number(changes.capacity),
                 documents: json(changes.documents),
@@ -798,7 +956,7 @@ export class ProvidersService {
   private validateSubmission(dto: ProviderProfileSubmissionDto) {
     if (!dto.services.length)
       throw new BadRequestException('Choose at least one service.');
-    if (!dto.serviceAreas.length)
+    if (!dto.serviceAreaIds?.length && !dto.serviceAreas?.length)
       throw new BadRequestException('Add at least one service area.');
     if (!dto.documents.length)
       throw new BadRequestException(
@@ -820,7 +978,9 @@ export class ProvidersService {
     return {
       services: [...new Set(dto.services)],
       serviceAreas: [
-        ...new Set(dto.serviceAreas.map((area) => area.trim()).filter(Boolean)),
+        ...new Set(
+          (dto.serviceAreas ?? []).map((area) => area.trim()).filter(Boolean),
+        ),
       ],
       skills: dto.skills,
     };
@@ -871,71 +1031,6 @@ export class ProvidersService {
           'Uploaded file details do not match. Select the file again.',
         );
     }
-  }
-
-  private validateFile(
-    name: string,
-    type: string,
-    size: number,
-    purpose: ProviderUploadPurpose,
-  ) {
-    const ext = name.split('.').pop()?.toLowerCase();
-    const allowed: Record<
-      ProviderUploadPurpose,
-      { extensions: string[]; types: string[] }
-    > = {
-      provider_document: {
-        extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'doc', 'docx'],
-        types: [
-          'application/pdf',
-          'image/png',
-          'image/jpeg',
-          'image/webp',
-          'application/msword',
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ],
-      },
-      provider_photo: {
-        extensions: ['png', 'jpg', 'jpeg', 'webp'],
-        types: ['image/png', 'image/jpeg', 'image/webp'],
-      },
-      provider_portfolio: {
-        extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp'],
-        types: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
-      },
-    };
-    if (
-      !allowed[purpose].extensions.includes(ext ?? '') ||
-      !allowed[purpose].types.includes(type)
-    )
-      throw new BadRequestException(
-        'Use a supported file type for this upload.',
-      );
-    if (
-      size > 20 * 1024 * 1024 ||
-      (purpose === ProviderUploadPurpose.provider_photo &&
-        size > 5 * 1024 * 1024)
-    )
-      throw new BadRequestException('This file is too large.');
-  }
-
-  private hasExpectedSignature(bytes: Buffer, type: string) {
-    if (type === 'application/pdf')
-      return bytes.subarray(0, 5).toString() === '%PDF-';
-    if (type === 'image/png')
-      return bytes.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-    if (type === 'image/jpeg')
-      return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-    if (type === 'image/webp')
-      return (
-        bytes.subarray(0, 4).toString() === 'RIFF' &&
-        bytes.subarray(8, 12).toString() === 'WEBP'
-      );
-    if (type.startsWith('application/vnd.openxmlformats-officedocument'))
-      return bytes.subarray(0, 2).toString() === 'PK';
-    if (type === 'application/msword')
-      return bytes.subarray(0, 4).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
-    return false;
   }
 
   private validateCalendar(
@@ -1037,8 +1132,11 @@ export class ProvidersService {
       phone: string;
       trade: string;
       city: string;
+      cityId?: string | null;
+      businessName?: string | null;
       services: Prisma.JsonValue;
       serviceAreas: Prisma.JsonValue;
+      serviceAreaIds?: string[];
       skills: Prisma.JsonValue;
       capacity: number;
       workingHours: Prisma.JsonValue;
@@ -1090,8 +1188,11 @@ export class ProvidersService {
       phone: profile.phone,
       trade: profile.trade,
       city: profile.city,
+      cityId: profile.cityId,
+      businessName: profile.businessName,
       services: profile.services,
       serviceAreas: profile.serviceAreas,
+      serviceAreaIds: profile.serviceAreaIds,
       skills: profile.skills,
       capacity: profile.capacity,
       workingHours: profile.workingHours,

@@ -54,6 +54,10 @@ export function validateEnv(
   validateStorage(config);
 
   if (config['NODE_ENV'] === 'production') {
+    if (String(config['ENABLE_DEV_TOOLS']).toLowerCase() === 'true') {
+      throw new Error('ENABLE_DEV_TOOLS must not be enabled in production');
+    }
+
     const missingSmtpVariables = PRODUCTION_SMTP_VARS.filter(
       (key) => typeof config[key] !== 'string' || !String(config[key]).trim(),
     );

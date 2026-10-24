@@ -2,7 +2,12 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import type { EmailJobData } from '../email/email.types';
-import { OUTBOX_SWEEP_INTERVAL_MS, QUEUE_NAMES } from './jobs.constants';
+import {
+  OUTBOX_SWEEP_INTERVAL_MS,
+  QUEUE_NAMES,
+  TIMERS_SWEEP_INTERVAL_MS,
+  UPLOAD_CLEANUP_INTERVAL_MS,
+} from './jobs.constants';
 
 /**
  * Single entry point for enqueuing background work. Controllers and services
@@ -19,6 +24,7 @@ export class JobsService implements OnModuleInit {
     @InjectQueue('audit-logs') private readonly auditLogsQueue: Queue,
     @InjectQueue('platform') private readonly platformQueue: Queue,
     @InjectQueue('outbox') private readonly outboxQueue: Queue,
+    @InjectQueue('timers') private readonly timersQueue: Queue,
   ) {}
 
   async onModuleInit() {
@@ -31,6 +37,16 @@ export class JobsService implements OnModuleInit {
       'outbox-sweep',
       { every: OUTBOX_SWEEP_INTERVAL_MS },
       { name: 'outbox.sweep', opts: { attempts: 1 } },
+    );
+    await this.timersQueue.upsertJobScheduler(
+      'timers-sweep',
+      { every: TIMERS_SWEEP_INTERVAL_MS },
+      { name: 'timers.sweep', opts: { attempts: 1 } },
+    );
+    await this.platformQueue.upsertJobScheduler(
+      'uploads-cleanup',
+      { every: UPLOAD_CLEANUP_INTERVAL_MS },
+      { name: 'uploads.cleanup' },
     );
   }
 
@@ -47,12 +63,18 @@ export class JobsService implements OnModuleInit {
     return this.outboxQueue.add('outbox.kick', {}, { attempts: 1 });
   }
 
+  /** Row-level retries live on `request_timers`, so the job itself runs once. */
+  addTimersKickJob() {
+    return this.timersQueue.add('timers.kick', {}, { attempts: 1 });
+  }
+
   getQueue(name: string): Queue | null {
     const queues: Record<string, Queue> = {
       email: this.emailQueue,
       'audit-logs': this.auditLogsQueue,
       platform: this.platformQueue,
       outbox: this.outboxQueue,
+      timers: this.timersQueue,
     };
     return queues[name] ?? null;
   }

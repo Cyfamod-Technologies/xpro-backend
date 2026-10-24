@@ -77,7 +77,7 @@ export class InboxService {
       }),
     ]);
     return {
-      items: rows.map((row) => this.toDto(row)),
+      items: await Promise.all(rows.map((row) => this.toDto(row))),
       meta: { unread, total, page: query.page },
     };
   }
@@ -94,14 +94,23 @@ export class InboxService {
     return { updated: result.count };
   }
 
-  private toDto(row: Prisma.InAppNotificationGetPayload<object>): InboxItemDto {
+  private async toDto(
+    row: Prisma.InAppNotificationGetPayload<object>,
+  ): Promise<InboxItemDto> {
+    const request = row.requestId
+      ? await this.prisma.serviceRequest.findUnique({
+          where: { id: row.requestId },
+          select: { number: true },
+        })
+      : null;
     return {
       id: row.id,
       event: row.event,
       title: row.title,
       message: row.message,
-      // TODO(WP-2.3): map the stored service_requests.id to its XPR id once requests exist.
-      requestId: row.requestId,
+      requestId: request
+        ? `XPR-${String(request.number).padStart(5, '0')}`
+        : null,
       link: row.link,
       mandatory: row.mandatory,
       readAt: row.readAt,

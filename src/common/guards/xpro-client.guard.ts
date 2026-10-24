@@ -12,7 +12,8 @@ const supportedClients = new Set(['web', 'mobile_ios', 'mobile_android']);
 export class XProClientGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<Request>();
-    if (!request.path.startsWith('/api/v1/')) return true;
+    if (request.path === '/health' || request.path === '/webhooks/paystack')
+      return true;
 
     const client = request.header('X-XPro-Client');
     if (client && supportedClients.has(client)) return true;

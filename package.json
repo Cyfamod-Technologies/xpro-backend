@@ -27,6 +27,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:int": "jest --config ./test/jest-integration.json --runInBand",
     "generate": "npx prisma generate",
+    "backfill:provider-areas": "DATABASE_URL=$(grep '^DATABASE_URL=' .env.local | cut -d= -f2- | sed 's#/xpro_db?#/xpro_rf?#') DOTENV_CONFIG_PATH=.env.local ts-node -r dotenv/config -r tsconfig-paths/register src/scripts/backfill-provider-areas.ts",
     "migrate": "npx prisma migrate dev",
     "studio": "npx prisma studio"
   },

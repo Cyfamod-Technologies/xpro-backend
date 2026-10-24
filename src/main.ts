@@ -20,8 +20,6 @@ function getCorsOrigins() {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.setGlobalPrefix('api/v1');
-
   const corsOrigins = getCorsOrigins();
 
   const serviceName = process.env.SERVICE || 'Xpro API';
@@ -98,7 +96,16 @@ async function bootstrap() {
   const reflector = app.get(Reflector);
   app.useGlobalInterceptors(new ResponseInterceptor(reflector));
 
-  app.use(bodyParser.json({ limit: process.env.JSON_BODY_LIMIT || '10mb' }));
+  app.use(
+    bodyParser.json({
+      limit: process.env.JSON_BODY_LIMIT || '10mb',
+      verify: (request, _response, buffer) => {
+        if (request.url?.split('?')[0] === '/webhooks/paystack')
+          (request as Request & { rawBody?: Buffer }).rawBody =
+            Buffer.from(buffer);
+      },
+    }),
+  );
   app.use(
     bodyParser.urlencoded({
       limit: process.env.URLENCODED_BODY_LIMIT || '10mb',
@@ -179,7 +186,7 @@ async function bootstrap() {
       'camera=(), microphone=(), geolocation=(), payment=(), usb=(), screen-wake-lock=()',
     );
 
-    if (req.path.startsWith('/api/') || req.path.startsWith('/api/docs')) {
+    if (req.path !== '/health' && !isSwaggerRequest(req.path)) {
       res.setHeader(
         'Cache-Control',
         'no-store, no-cache, must-revalidate, private',

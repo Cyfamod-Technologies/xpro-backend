@@ -144,6 +144,20 @@ enum ProviderUploadStatus {
   expired
 }
 
+enum UploadPurpose {
+  request_attachment
+  message_attachment
+  progress_evidence
+  payment_proof
+}
+
+enum UploadStatus {
+  pending
+  ready
+  attached
+  expired
+}
+
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model User {
@@ -364,13 +378,18 @@ model ProviderProfile {
   phone              String
   trade              String
   city               String
+  cityId             String?                  @map("city_id")
   services           Json
   serviceAreas       Json                     @map("service_areas")
+  serviceAreaIds     String[]                 @default([]) @map("service_area_ids")
+  businessName       String?                  @map("business_name")
   skills             Json
   capacity           Int                      @default(3)
   workingHours       Json                     @map("working_hours")
   timeOff            Json                     @default("[]") @map("time_off")
   experience         Float                    @default(0)
+  lastOfferedAt      DateTime?                 @map("last_offered_at")
+  reliabilityStatus  String                    @default("normal") @map("reliability_status")
   bio                String
   documents          Json                     @default("[]")
   photo              Json?
@@ -388,11 +407,38 @@ model ProviderProfile {
   updatedAt          DateTime                 @updatedAt @map("updated_at")
 
   user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cityLocation Location?     @relation("ProviderCity", fields: [cityId], references: [id], onDelete: SetNull)
   bankAccounts ProviderBankAccount[]
   reviews    ProviderReview[]
 
   @@index([verification, available])
   @@map("provider_profiles")
+}
+
+enum LocationKind {
+  city
+  district
+}
+
+model Location {
+  id        String   @id @default(uuid())
+  kind      LocationKind
+  name      String
+  parentId  String?  @map("parent_id")
+  aliases   String[] @default([])
+  active    Boolean  @default(true)
+  sort      Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children Location[] @relation("LocationHierarchy")
+  providers ProviderProfile[] @relation("ProviderCity")
+
+  @@unique([parentId, name])
+  @@index([kind, active])
+  @@index([parentId, active, sort])
+  @@map("locations")
 }
 
 model ProviderBankAccount {
@@ -403,6 +449,7 @@ model ProviderBankAccount {
   accountNumberEnc   String             @map("account_number_enc")
   accountNameEnc     String             @map("account_name_enc")
   last4              String             @map("last4")
+  recipientCodeEnc   String?            @map("recipient_code_enc")
   state              ProviderBankStatus @default(pending)
   reviewNote         String?            @map("review_note")
   reviewedBy         String?            @map("reviewed_by")
@@ -432,6 +479,21 @@ model ProviderReview {
   @@map("provider_reviews")
 }
 
+model ProviderReliabilityEvent {
+  id          String   @id @default(uuid())
+  providerId  String   @map("provider_id")
+  kind        String
+  requestId   String?  @map("request_id")
+  sourceId    String   @unique @map("source_id")
+  occurredAt  DateTime @map("occurred_at")
+  confirmedBy String?  @map("confirmed_by")
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([providerId, occurredAt])
+  @@map("provider_reliability_events")
+}
+
 model ProviderUpload {
   id          String                 @id @default(uuid())
   ownerId     String                 @map("owner_id")
@@ -451,6 +513,28 @@ model ProviderUpload {
   @@index([ownerId, status, purpose])
   @@index([expiresAt])
   @@map("provider_uploads")
+}
+
+model Upload {
+  id          String        @id @default(uuid())
+  ownerId     String        @map("owner_id")
+  purpose     UploadPurpose
+  status      UploadStatus  @default(pending)
+  fileName    String        @map("file_name")
+  contentType String        @map("content_type")
+  size        Int
+  storageKey  String        @unique @map("storage_key")
+  entityType  String?       @map("entity_type")
+  entityId    String?       @map("entity_id")
+  expiresAt   DateTime      @map("expires_at")
+  completedAt DateTime?     @map("completed_at")
+  attachedAt  DateTime?     @map("attached_at")
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@index([ownerId, status, purpose])
+  @@index([entityType, entityId])
+  @@index([expiresAt])
+  @@map("uploads")
 }
 
 model StaffInvite {
@@ -563,6 +647,35 @@ model InAppNotification {
   @@map("in_app_notifications")
 }
 
+model Setting {
+  key       String   @id
+  value     Json
+  riskClass String   @map("risk_class")
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt @map("updated_at")
+  updatedBy String?  @map("updated_by")
+
+  @@map("settings")
+}
+
+model SettingHistory {
+  id          String   @id @default(uuid())
+  key         String
+  oldValue    Json?    @map("old_value")
+  newValue    Json     @map("new_value")
+  riskClass   String   @map("risk_class")
+  actorId     String   @map("actor_id")
+  actorName   String   @map("actor_name")
+  reason      String
+  changeSetId String   @map("change_set_id")
+  sessionId   String?  @map("session_id")
+  ip          String?  @db.Inet
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([key, createdAt])
+  @@map("settings_history")
+}
+
 model OutboxEvent {
   id            String    @id @default(uuid())
   type          String
@@ -575,4 +688,765 @@ model OutboxEvent {
 
   @@index([processedAt, createdAt])
   @@map("outbox_events")
+}
+
+enum TimerStatus {
+  pending
+  running
+  done
+  cancelled
+  failed
+}
+
+model RequestTimer {
+  id            String      @id @default(uuid())
+  /// No foreign key until the requests table exists (WP-2.1).
+  requestId     String      @map("request_id")
+  kind          String
+  /// Assignment, quote or schedule id; empty string when none.
+  refId         String      @default("") @map("ref_id")
+  dueAt         DateTime    @map("due_at")
+  payload       Json?
+  status        TimerStatus @default(pending)
+  attempts      Int         @default(0)
+  lastError     String?     @map("last_error")
+  /// Retry time after a failure, or the lease expiry while the row is running.
+  nextAttemptAt DateTime?   @map("next_attempt_at")
+  firedAt       DateTime?   @map("fired_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@index([status, dueAt])
+  @@index([requestId, status])
+  @@map("request_timers")
+}
+
+enum RequestStatus {
+  submitted
+  under_review
+  matched
+  quoted
+  awaiting_payment
+  ready_to_schedule
+  scheduled
+  in_progress
+  blocked
+  completion_pending
+  acknowledged
+  cancelling
+  closed
+  cancelled
+  rejected
+}
+
+enum IntakeState {
+  pending
+  clarification
+  approved
+}
+
+enum ContactMethod {
+  email
+  phone
+  both
+}
+
+enum DispatchMode {
+  auto
+  manual
+}
+
+enum NeedsAssignmentReason {
+  manual_mode
+  no_eligible
+  limit_reached
+  declined
+  expired
+  acceptance_rejected
+  withdrawn
+  replaced
+  provider_suspended
+  edited
+}
+
+enum HoldKind {
+  staff
+  no_show
+  provider_suspended
+  customer_suspended
+}
+
+enum AcknowledgedBy {
+  customer
+  system
+  staff
+}
+
+enum DispatchTrigger {
+  intake_approved
+  cascade
+  staff_auto
+  staff_view
+  edited
+  replace
+}
+
+enum AssignmentStatus {
+  offered
+  pending_approval
+  accepted
+  declined
+  expired
+  not_confirmed
+  withdrawn
+  replaced
+  completed
+}
+
+enum AssignmentEndReason {
+  declined
+  expired
+  acceptance_rejected
+  withdrawn
+  replaced
+  provider_suspended
+  request_edited
+  request_cancelled
+  request_rejected
+  request_closed
+}
+
+enum AssignmentSource {
+  auto
+  manual
+}
+
+enum QuoteStatus {
+  draft
+  sent
+  accepted
+  declined
+  revision_requested
+  superseded
+  expired
+}
+
+enum PaymentMethod {
+  paystack
+  offline
+}
+enum PaymentStatus {
+  pending
+  recorded
+  paid
+  failed
+  partially_refunded
+  refunded
+  reversed
+}
+enum RefundStatus {
+  pending_approval
+  awaiting_second_approval
+  approved
+  processing
+  completed
+  rejected
+  waived
+  failed
+}
+enum PayoutKind {
+  primary
+  compensation
+}
+enum PayoutStatus {
+  pending_approval
+  awaiting_second_approval
+  approved
+  processing
+  paid
+  failed
+  on_hold
+  cancelled
+  reversed
+}
+
+enum ScheduleStatus {
+  proposed
+  confirmed
+  changes_requested
+  cancelled
+  superseded
+}
+
+enum PartyResponse {
+  pending
+  accepted
+  changes_requested
+}
+
+enum UpdateKind {
+  start
+  progress
+  blocker
+  resume
+  completion
+  rework
+  rework_completion
+}
+
+enum UpdateTarget {
+  in_progress
+  blocked
+  completion_pending
+}
+
+enum ReviewState {
+  pending
+  approved
+  rejected
+}
+
+enum IssueWindow {
+  completion
+  defects
+}
+
+enum IssueStatus {
+  open
+  rework
+  disputed
+  resolved
+}
+
+enum IssueResolvedWith {
+  rework
+  no_rework
+  dispute_decision
+}
+
+enum CancellationStatus {
+  pending
+  approved
+  rejected
+  withdrawn
+  completed
+}
+
+enum CancellationRequester {
+  customer
+  staff
+  system
+}
+
+enum CancellationReason {
+  customer_changed_mind
+  quote_declined
+  no_response
+  payment_lapsed
+  no_provider
+  provider_no_show
+  provider_suspended
+  customer_suspended
+  scope_dispute
+  duplicate
+  other
+}
+
+enum NoShowStatus {
+  open
+  confirmed
+  dismissed
+  voided
+}
+
+enum MessageChannel {
+  customer
+  provider
+  internal
+}
+
+model ServiceRequest {
+  id                    String                  @id @default(uuid())
+  number                Int                     @unique @default(autoincrement())
+  ownerId               String                  @map("owner_id")
+  customerName          String                  @map("customer_name")
+  title                 String
+  service               String
+  cityId                String                  @map("city_id")
+  districtId            String                  @map("district_id")
+  address               String
+  phone                 String
+  contactMethod         ContactMethod           @default(phone) @map("contact_method")
+  description           String
+  budget                BigInt                  @default(0)
+  startDate             String?                 @map("start_date")
+  details               Json                    @default("{}")
+  status                RequestStatus           @default(submitted)
+  version               Int                     @default(1)
+  contactInBrief        Boolean                 @default(false) @map("contact_in_brief")
+  possibleDuplicateOf   String?                 @map("possible_duplicate_of")
+  intakeState           IntakeState             @default(pending) @map("intake_state")
+  clarificationAskedAt  DateTime?               @map("clarification_asked_at")
+  clarificationCount    Int                     @default(0) @map("clarification_count")
+  intakeApprovedBy      String?                 @map("intake_approved_by")
+  intakeApprovedAt      DateTime?               @map("intake_approved_at")
+  offerBrief            String?                 @map("offer_brief")
+  shareOnConfirm        Json                    @default("{\"description\":true,\"attachmentIds\":[]}") @map("share_on_confirm")
+  staffOwnerId          String?                 @map("staff_owner_id")
+  claimedAt             DateTime?               @map("claimed_at")
+  unclaimedSince        DateTime?               @map("unclaimed_since")
+  ownershipVersion      Int                     @default(1) @map("ownership_version")
+  dispatchMode          DispatchMode            @default(auto) @map("dispatch_mode")
+  autoAttempts          Int                     @default(0) @map("auto_attempts")
+  needsAssignmentReason NeedsAssignmentReason?  @map("needs_assignment_reason")
+  lastRunId             String?                 @map("last_run_id")
+  holdKind              HoldKind?               @map("hold_kind")
+  holdBy                String?                 @map("hold_by")
+  holdReason            String?                 @map("hold_reason")
+  holdAt                DateTime?               @map("hold_at")
+  holdPreviousStatus    RequestStatus?          @map("hold_previous_status")
+  issueCycles           Int                     @default(0) @map("issue_cycles")
+  reportApprovedAt      DateTime?               @map("report_approved_at")
+  confirmDueAt          DateTime?               @map("confirm_due_at")
+  acknowledgedAt        DateTime?               @map("acknowledged_at")
+  acknowledgedBy        AcknowledgedBy?          @map("acknowledged_by")
+  acknowledgedNote      String?                 @map("acknowledged_note")
+  defectsWindowEndsAt   DateTime?               @map("defects_window_ends_at")
+  cancellationId        String?                 @map("cancellation_id")
+  closedAt              DateTime?               @map("closed_at")
+  closedBy              String?                 @map("closed_by")
+  createdAt             DateTime                @default(now()) @map("created_at")
+  updatedAt             DateTime                @updatedAt @map("updated_at")
+
+  attachments   RequestAttachment[]
+  edits         RequestEdit[]
+  runs          DispatchRun[]
+  assignments   Assignment[]
+  contributions Contribution[]
+  quotes        Quote[]
+  schedules     Schedule[]
+  updates       ProgressUpdate[]
+  issues        Issue[]
+  cancellations Cancellation[]
+  noShows       NoShow[]
+  messages      RequestMessage[]
+
+  @@index([ownerId, status])
+  @@index([status, intakeState])
+  @@index([staffOwnerId, status])
+  @@index([service, districtId, createdAt])
+  @@map("service_requests")
+}
+
+model RequestAttachment {
+  requestId          String         @map("request_id")
+  uploadId           String         @unique @map("upload_id")
+  sharedWithProvider Boolean        @default(false) @map("shared_with_provider")
+  sharedAt           DateTime?      @map("shared_at")
+  sharedBy           String?        @map("shared_by")
+  request            ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@id([requestId, uploadId])
+  @@map("request_attachments")
+}
+
+model RequestEdit {
+  id           String         @id @default(uuid())
+  requestId    String         @map("request_id")
+  field        String
+  oldValue     Json?          @map("old_value")
+  newValue     Json?          @map("new_value")
+  byId         String         @map("by_id")
+  byRole       String         @map("by_role")
+  note         String?
+  redispatched Boolean        @default(false)
+  createdAt    DateTime       @default(now()) @map("created_at")
+  request      ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("request_edits")
+}
+
+model DispatchRun {
+  id        String          @id @default(uuid())
+  requestId String          @map("request_id")
+  trigger   DispatchTrigger
+  actorId   String?         @map("actor_id")
+  at        DateTime
+  settings  Json
+  eligible  Json
+  excluded  Json
+  outcome   Json?
+  createdAt DateTime        @default(now()) @map("created_at")
+  request   ServiceRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("dispatch_runs")
+}
+
+model Assignment {
+  id              String               @id @default(uuid())
+  requestId       String               @map("request_id")
+  providerId      String               @map("provider_id")
+  providerUserId  String               @map("provider_user_id")
+  status          AssignmentStatus     @default(offered)
+  endReason       AssignmentEndReason? @map("end_reason")
+  source          AssignmentSource
+  attempt         Int?
+  rankingRunId    String?              @map("ranking_run_id")
+  score           Json?
+  overrideNote    String?              @map("override_note")
+  overriddenRules String[]             @default([]) @map("overridden_rules")
+  note            String?
+  offeredAt       DateTime             @map("offered_at")
+  expiresAt       DateTime             @map("expires_at")
+  response        String?
+  crewConfirmed   Int?                 @map("crew_confirmed")
+  respondedAt     DateTime?            @map("responded_at")
+  reviewedBy      String?              @map("reviewed_by")
+  reviewedAt      DateTime?            @map("reviewed_at")
+  reviewNote      String?              @map("review_note")
+  sharedDetails   Json?                @map("shared_details")
+  endedAt         DateTime?            @map("ended_at")
+  endedBy         String?              @map("ended_by")
+  workStarted     Boolean              @default(false) @map("work_started")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  request         ServiceRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, status])
+  @@index([providerId, status])
+  @@index([providerUserId, status])
+  @@map("assignments")
+}
+
+model Contribution {
+  id           String         @id @default(uuid())
+  requestId    String         @map("request_id")
+  assignmentId String         @map("assignment_id")
+  providerId   String         @map("provider_id")
+  items        Json
+  total        BigInt
+  note         String?
+  createdAt    DateTime       @default(now()) @map("created_at")
+  request      ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, assignmentId, createdAt])
+  @@map("contributions")
+}
+
+model Quote {
+  id                  String         @id @default(uuid())
+  requestId           String         @map("request_id")
+  version             Int
+  revision            Int            @default(1)
+  status              QuoteStatus    @default(draft)
+  items               Json
+  total               BigInt
+  note                String?
+  basedOnAssignmentId String?        @map("based_on_assignment_id")
+  pricingOverrideNote String?        @map("pricing_override_note")
+  lastEditedBy        String         @map("last_edited_by")
+  approvalRequestedBy String?        @map("approval_requested_by")
+  approvalRequestedAt DateTime?      @map("approval_requested_at")
+  approvedBy          String?        @map("approved_by")
+  selfApproved        Boolean        @default(false) @map("self_approved")
+  returnedNote        String?        @map("returned_note")
+  publishedBy         String?        @map("published_by")
+  publishedAt         DateTime?      @map("published_at")
+  validUntil          DateTime?      @map("valid_until")
+  respondedAt         DateTime?      @map("responded_at")
+  responseNote        String?        @map("response_note")
+  acceptedAt          DateTime?      @map("accepted_at")
+  paymentDueAt        DateTime?      @map("payment_due_at")
+  providerChangedAt   DateTime?      @map("provider_changed_at")
+  payoutAmount        BigInt?        @map("payout_amount")
+  payoutAssignmentId  String?        @map("payout_assignment_id")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
+  request             ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, version])
+  @@index([requestId, status])
+  @@map("quotes")
+}
+
+model Payment {
+  id                   String        @id @default(uuid())
+  requestId            String        @map("request_id")
+  quoteId              String        @map("quote_id")
+  quoteVersion         Int           @map("quote_version")
+  amount               BigInt
+  method               PaymentMethod
+  channel              String?
+  status               PaymentStatus
+  reference            String        @unique
+  gatewayTransactionId String?       @unique @map("gateway_transaction_id")
+  gatewayChannel       String?       @map("gateway_channel")
+  paidAt               DateTime?     @map("paid_at")
+  proofUploadId        String?       @map("proof_upload_id")
+  recordedBy           String?       @map("recorded_by")
+  reconciledBy         String?       @map("reconciled_by")
+  reconciledAt         DateTime?     @map("reconciled_at")
+  note                 String?
+  failureReason        String?       @map("failure_reason")
+  lateRefundOpened     Boolean       @default(false) @map("late_refund_opened")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+  @@index([requestId, status])
+  @@map("payments")
+}
+
+model Refund {
+  id                 String       @id @default(uuid())
+  paymentId          String       @map("payment_id")
+  requestId          String       @map("request_id")
+  cancellationId     String?      @map("cancellation_id")
+  amount             BigInt
+  status             RefundStatus @default(pending_approval)
+  reason             String
+  requestedBy        String       @map("requested_by")
+  decidedBy          String?      @map("decided_by")
+  secondApprover     String?      @map("second_approver")
+  transferReference  String?      @map("transfer_reference")
+  transferProofId    String?      @map("transfer_proof_id")
+  transferRecordedBy String?     @map("transfer_recorded_by")
+  gatewayRefundId    String?      @unique @map("gateway_refund_id")
+  reconciledBy       String?      @map("reconciled_by")
+  completedAt        DateTime?    @map("completed_at")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+  @@index([requestId, status])
+  @@map("refunds")
+}
+
+model Payout {
+  id                  String       @id @default(uuid())
+  requestId           String       @map("request_id")
+  assignmentId        String       @map("assignment_id")
+  providerId          String       @map("provider_id")
+  kind                PayoutKind   @default(primary)
+  amount              BigInt
+  status              PayoutStatus @default(pending_approval)
+  holdReason          String?      @map("hold_reason")
+  holdSource          String?      @map("hold_source")
+  approvalDueAt       DateTime?    @map("approval_due_at")
+  bankAccountId       String?      @map("bank_account_id")
+  bankLast4           String?      @map("bank_last4")
+  transferReference   String?      @map("transfer_reference")
+  transferProofId     String?      @map("transfer_proof_id")
+  transferRecordedBy  String?      @map("transfer_recorded_by")
+  reconciledBy        String?      @map("reconciled_by")
+  paidAt              DateTime?    @map("paid_at")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+  approvals           PayoutApproval[]
+  transferAttempts    TransferAttempt[]
+  @@index([requestId, kind])
+  @@index([status])
+  @@map("payouts")
+}
+
+model PayoutApproval {
+  id         String   @id @default(uuid())
+  payoutId   String   @map("payout_id")
+  step       Int
+  actorId    String   @map("actor_id")
+  note       String?
+  bankVersion String? @map("bank_version")
+  createdAt  DateTime @default(now()) @map("created_at")
+  payout     Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  @@map("payout_approvals")
+}
+
+model TransferAttempt {
+  id                String   @id @default(uuid())
+  payoutId          String   @map("payout_id")
+  reference         String   @unique
+  gatewayTransferId String?  @unique @map("gateway_transfer_id")
+  amount            BigInt
+  status            String
+  failureCode       String?  @map("failure_code")
+  submittedAt       DateTime @map("submitted_at")
+  settledAt         DateTime? @map("settled_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  payout            Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  @@index([payoutId, createdAt])
+  @@map("transfer_attempts")
+}
+
+model GatewayEvent {
+  id             String    @id @default(uuid())
+  fingerprint    String    @unique
+  event          String
+  reference      String?
+  rawBodyDigest  String    @map("raw_body_digest")
+  signatureValid Boolean   @map("signature_valid")
+  status         String
+  attempts       Int       @default(0)
+  lastError      String?   @map("last_error")
+  receivedAt     DateTime  @default(now()) @map("received_at")
+  processedAt    DateTime? @map("processed_at")
+  @@index([status, receivedAt])
+  @@map("gateway_events")
+}
+
+model ApprovalDeadline {
+  id          String    @id @default(uuid())
+  kind        String
+  itemId      String    @map("item_id")
+  requestId   String?   @map("request_id")
+  openedAt    DateTime  @map("opened_at")
+  dueAt       DateTime  @map("due_at")
+  remindedAt  DateTime? @map("reminded_at")
+  escalatedAt DateTime? @map("escalated_at")
+  closedAt    DateTime? @map("closed_at")
+  openedBy    String?   @map("opened_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([closedAt, dueAt])
+  @@index([requestId, closedAt])
+  @@map("approval_deadlines")
+}
+
+model RequestEscalation {
+  id         String    @id @default(uuid())
+  requestId  String    @map("request_id")
+  target     String
+  source     String    @default("staff")
+  note       String
+  raisedBy   String?   @map("raised_by")
+  raisedAt   DateTime  @map("raised_at")
+  resolvedBy String?   @map("resolved_by")
+  resolvedAt DateTime? @map("resolved_at")
+  resolution String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([requestId, resolvedAt])
+  @@map("request_escalations")
+}
+
+model Schedule {
+  id                 String         @id @default(uuid())
+  requestId          String         @map("request_id")
+  assignmentId       String         @map("assignment_id")
+  providerId         String         @map("provider_id")
+  quoteId            String         @map("quote_id")
+  startAt            DateTime       @map("start_at")
+  endAt              DateTime       @map("end_at")
+  note               String?
+  status             ScheduleStatus @default(proposed)
+  customer           PartyResponse  @default(pending)
+  provider           PartyResponse  @default(pending)
+  responses          String[]       @default([])
+  replacesScheduleId String?        @map("replaces_schedule_id")
+  changeRequests     Json           @default("[]") @map("change_requests")
+  proposedBy         String         @map("proposed_by")
+  proposedAt         DateTime       @map("proposed_at")
+  confirmedAt        DateTime?      @map("confirmed_at")
+  request            ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, status])
+  @@index([providerId, status, startAt])
+  @@map("schedules")
+}
+
+model ProgressUpdate {
+  id           String         @id @default(uuid())
+  requestId    String         @map("request_id")
+  assignmentId String         @map("assignment_id")
+  authorId     String         @map("author_id")
+  kind         UpdateKind
+  target       UpdateTarget
+  note         String
+  issueId      String?        @map("issue_id")
+  onBehalf     Json?          @map("on_behalf")
+  state        ReviewState    @default(pending)
+  reviewNote   String?        @map("review_note")
+  reviewedBy   String?        @map("reviewed_by")
+  reviewedAt   DateTime?      @map("reviewed_at")
+  systemReason String?        @map("system_reason")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  request      ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, state, createdAt])
+  @@map("progress_updates")
+}
+
+model Issue {
+  id                String             @id @default(uuid())
+  requestId         String             @map("request_id")
+  window            IssueWindow
+  note              String
+  raisedBy          String             @map("raised_by")
+  raisedAt          DateTime           @map("raised_at")
+  cycle             Int
+  status            IssueStatus        @default(open)
+  acceptedBy        String?            @map("accepted_by")
+  acceptedAt        DateTime?          @map("accepted_at")
+  resolution        String?
+  resolvedBy        String?            @map("resolved_by")
+  resolvedAt        DateTime?          @map("resolved_at")
+  resolvedWith      IssueResolvedWith? @map("resolved_with")
+  evidenceUpdateIds String[]           @default([]) @map("evidence_update_ids")
+  request           ServiceRequest     @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, status])
+  @@map("issues")
+}
+
+model Cancellation {
+  id                       String                @id @default(uuid())
+  requestId                String                @map("request_id")
+  status                   CancellationStatus    @default(pending)
+  requestedBy              CancellationRequester @map("requested_by")
+  requestedById            String?               @map("requested_by_id")
+  reasonCode               CancellationReason    @map("reason_code")
+  note                     String
+  stage                    RequestStatus
+  decidedBy                String?               @map("decided_by")
+  decidedAt                DateTime?             @map("decided_at")
+  decisionNote             String?               @map("decision_note")
+  workStarted              Boolean               @default(false) @map("work_started")
+  paid                     Boolean               @default(false)
+  refundDue                Boolean               @default(false) @map("refund_due")
+  compensationCandidateIds String[]              @default([]) @map("compensation_candidate_ids")
+  createdAt                DateTime              @default(now()) @map("created_at")
+  request                  ServiceRequest        @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, status])
+  @@map("cancellations")
+}
+
+model NoShow {
+  id           String         @id @default(uuid())
+  requestId    String         @map("request_id")
+  assignmentId String         @map("assignment_id")
+  providerId   String         @map("provider_id")
+  scheduleId   String         @map("schedule_id")
+  status       NoShowStatus   @default(open)
+  detectedAt   DateTime       @map("detected_at")
+  reportedBy   String         @map("reported_by")
+  note         String
+  decidedBy    String?        @map("decided_by")
+  decidedAt    DateTime?      @map("decided_at")
+  decisionNote String?        @map("decision_note")
+  version      Int            @default(1)
+  request      ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, status])
+  @@map("no_shows")
+}
+
+model RequestMessage {
+  id         String         @id @default(uuid())
+  requestId  String         @map("request_id")
+  channel    MessageChannel
+  providerId String?        @map("provider_id")
+  authorId   String?        @map("author_id")
+  authorRole String         @map("author_role")
+  text       String
+  createdAt  DateTime       @default(now()) @map("created_at")
+  request    ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, channel, createdAt])
+  @@map("request_messages")
 }

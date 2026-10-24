@@ -9,7 +9,12 @@ import {
 
 /** 02 §6.8: 1 gated on a request, 2 gated off-request, 3 informational, 4 pricing, 5 customer messages. */
 export type StaffRoutingRule =
-  'gated' | 'gated_unscoped' | 'informational' | 'pricing' | 'customer_message';
+  | 'gated'
+  | 'gated_unscoped'
+  | 'informational'
+  | 'unclaimed'
+  | 'pricing'
+  | 'customer_message';
 
 export type StaffRoutingInput = {
   requestId?: string | null;
@@ -64,6 +69,11 @@ export class StaffRoutingService {
       case 'informational':
         if (owner) return [owner.userId];
         return this.membersWhoCanOwn();
+      case 'unclaimed':
+        return [
+          ...(await this.membersWhoCanOwn()),
+          ...(await this.holders('request.clarify', input.actorId)),
+        ];
       case 'pricing':
         return [
           ...(owner ? [owner.userId] : []),

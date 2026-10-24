@@ -13,12 +13,20 @@ import { JobsModule } from './jobs/jobs.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { OutboxModule } from './platform/outbox/outbox.module';
 import { PlatformModule } from './platform/platform.module';
+import { TimersModule } from './platform/timers/timers.module';
+import { SettingsModule } from './platform/settings/settings.module';
+import { LocationsModule } from './platform/locations/locations.module';
+import { CatalogModule } from './platform/catalog/catalog.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
 import { XProClientGuard } from './common/guards/xpro-client.guard';
 import { StaffModule } from './staff/staff.module';
 import { ProvidersModule } from './providers/providers.module';
+import { UploadsModule } from './uploads/uploads.module';
+import { RequestsModule } from './requests/requests.module';
+import { ApprovalsModule } from './approvals/approvals.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -32,6 +40,10 @@ import { ProvidersModule } from './providers/providers.module';
     PrismaModule,
     PlatformModule,
     OutboxModule,
+    TimersModule,
+    SettingsModule,
+    LocationsModule,
+    CatalogModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
     BullModule.forRootAsync({
       imports: [ConfigModule],
@@ -54,13 +66,16 @@ import { ProvidersModule } from './providers/providers.module';
     AuthModule,
     StaffModule,
     ProvidersModule,
+    UploadsModule,
+    RequestsModule,
+    ApprovalsModule,
+    PaymentsModule,
     UsersModule,
     AuditLogsModule,
     NotificationsModule,
     JobsModule,
     HealthModule,
-    // StorageModule is opt-in — import it here once STORAGE_DRIVER is set.
-    // See docs/storage/README.md.
+    // UploadsModule imports optional storage infrastructure; file endpoints return 503 when disabled.
   ],
   providers: [
     {
