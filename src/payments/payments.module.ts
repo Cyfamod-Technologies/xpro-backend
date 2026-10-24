@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OutboxModule } from '../platform/outbox/outbox.module';
 import { PlatformModule } from '../platform/platform.module';
@@ -49,6 +50,7 @@ import { TestPaymentGateway } from './test-payment.gateway';
     },
     PaymentsService,
     FinanceService,
+    NotificationDispatcher,
   ],
   exports: [PaymentsService, FinanceService],
 })
