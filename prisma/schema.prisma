@@ -447,6 +447,7 @@ model ProviderBankAccount {
   accountNumberEnc   String             @map("account_number_enc")
   accountNameEnc     String             @map("account_name_enc")
   last4              String             @map("last4")
+  recipientCodeEnc   String?            @map("recipient_code_enc")
   state              ProviderBankStatus @default(pending)
   reviewNote         String?            @map("review_note")
   reviewedBy         String?            @map("reviewed_by")
@@ -812,6 +813,45 @@ enum QuoteStatus {
   expired
 }
 
+enum PaymentMethod {
+  paystack
+  offline
+}
+enum PaymentStatus {
+  pending
+  recorded
+  paid
+  failed
+  partially_refunded
+  refunded
+  reversed
+}
+enum RefundStatus {
+  pending_approval
+  awaiting_second_approval
+  approved
+  processing
+  completed
+  rejected
+  waived
+  failed
+}
+enum PayoutKind {
+  primary
+  compensation
+}
+enum PayoutStatus {
+  pending_approval
+  awaiting_second_approval
+  approved
+  processing
+  paid
+  failed
+  on_hold
+  cancelled
+  reversed
+}
+
 enum ScheduleStatus {
   proposed
   confirmed
@@ -1110,6 +1150,126 @@ model Quote {
   @@unique([requestId, version])
   @@index([requestId, status])
   @@map("quotes")
+}
+
+model Payment {
+  id                   String        @id @default(uuid())
+  requestId            String        @map("request_id")
+  quoteId              String        @map("quote_id")
+  quoteVersion         Int           @map("quote_version")
+  amount               BigInt
+  method               PaymentMethod
+  channel              String?
+  status               PaymentStatus
+  reference            String        @unique
+  gatewayTransactionId String?       @unique @map("gateway_transaction_id")
+  gatewayChannel       String?       @map("gateway_channel")
+  paidAt               DateTime?     @map("paid_at")
+  proofUploadId        String?       @map("proof_upload_id")
+  recordedBy           String?       @map("recorded_by")
+  reconciledBy         String?       @map("reconciled_by")
+  reconciledAt         DateTime?     @map("reconciled_at")
+  note                 String?
+  failureReason        String?       @map("failure_reason")
+  lateRefundOpened     Boolean       @default(false) @map("late_refund_opened")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+  @@index([requestId, status])
+  @@map("payments")
+}
+
+model Refund {
+  id                 String       @id @default(uuid())
+  paymentId          String       @map("payment_id")
+  requestId          String       @map("request_id")
+  cancellationId     String?      @map("cancellation_id")
+  amount             BigInt
+  status             RefundStatus @default(pending_approval)
+  reason             String
+  requestedBy        String       @map("requested_by")
+  decidedBy          String?      @map("decided_by")
+  secondApprover     String?      @map("second_approver")
+  transferReference  String?      @map("transfer_reference")
+  transferProofId    String?      @map("transfer_proof_id")
+  transferRecordedBy String?     @map("transfer_recorded_by")
+  gatewayRefundId    String?      @unique @map("gateway_refund_id")
+  reconciledBy       String?      @map("reconciled_by")
+  completedAt        DateTime?    @map("completed_at")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+  @@index([requestId, status])
+  @@map("refunds")
+}
+
+model Payout {
+  id                  String       @id @default(uuid())
+  requestId           String       @map("request_id")
+  assignmentId        String       @map("assignment_id")
+  providerId          String       @map("provider_id")
+  kind                PayoutKind   @default(primary)
+  amount              BigInt
+  status              PayoutStatus @default(pending_approval)
+  holdReason          String?      @map("hold_reason")
+  holdSource          String?      @map("hold_source")
+  approvalDueAt       DateTime?    @map("approval_due_at")
+  bankAccountId       String?      @map("bank_account_id")
+  bankLast4           String?      @map("bank_last4")
+  transferReference   String?      @map("transfer_reference")
+  transferProofId     String?      @map("transfer_proof_id")
+  transferRecordedBy  String?      @map("transfer_recorded_by")
+  reconciledBy        String?      @map("reconciled_by")
+  paidAt              DateTime?    @map("paid_at")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+  approvals           PayoutApproval[]
+  transferAttempts    TransferAttempt[]
+  @@index([requestId, kind])
+  @@index([status])
+  @@map("payouts")
+}
+
+model PayoutApproval {
+  id         String   @id @default(uuid())
+  payoutId   String   @map("payout_id")
+  step       Int
+  actorId    String   @map("actor_id")
+  note       String?
+  bankVersion String? @map("bank_version")
+  createdAt  DateTime @default(now()) @map("created_at")
+  payout     Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  @@map("payout_approvals")
+}
+
+model TransferAttempt {
+  id                String   @id @default(uuid())
+  payoutId          String   @map("payout_id")
+  reference         String   @unique
+  gatewayTransferId String?  @unique @map("gateway_transfer_id")
+  amount            BigInt
+  status            String
+  failureCode       String?  @map("failure_code")
+  submittedAt       DateTime @map("submitted_at")
+  settledAt         DateTime? @map("settled_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  payout            Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  @@index([payoutId, createdAt])
+  @@map("transfer_attempts")
+}
+
+model GatewayEvent {
+  id             String    @id @default(uuid())
+  fingerprint    String    @unique
+  event          String
+  reference      String?
+  rawBodyDigest  String    @map("raw_body_digest")
+  signatureValid Boolean   @map("signature_valid")
+  status         String
+  attempts       Int       @default(0)
+  lastError      String?   @map("last_error")
+  receivedAt     DateTime  @default(now()) @map("received_at")
+  processedAt    DateTime? @map("processed_at")
+  @@index([status, receivedAt])
+  @@map("gateway_events")
 }
 
 model ApprovalDeadline {

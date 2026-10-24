@@ -13,6 +13,7 @@ export const REQUEST_INCLUDE = {
   runs: { orderBy: { createdAt: 'desc' as const } },
   contributions: { orderBy: { createdAt: 'desc' as const } },
   quotes: { orderBy: { version: 'desc' as const } },
+  payments: { orderBy: { createdAt: 'desc' as const } },
   schedules: { orderBy: { proposedAt: 'desc' as const } },
   updates: { orderBy: { createdAt: 'desc' as const } },
   issues: { orderBy: { raisedAt: 'desc' as const } },
@@ -24,7 +25,16 @@ export const REQUEST_INCLUDE = {
 export type LoadedRequest = Prisma.ServiceRequestGetPayload<{
   include: typeof REQUEST_INCLUDE;
 }>;
-export type RequestDb = Pick<Prisma.TransactionClient, 'serviceRequest' | 'providerProfile' | 'location' | 'user' | 'requestTimer' | 'upload' | '$queryRaw'>;
+export type RequestDb = Pick<
+  Prisma.TransactionClient,
+  | 'serviceRequest'
+  | 'providerProfile'
+  | 'location'
+  | 'user'
+  | 'requestTimer'
+  | 'upload'
+  | '$queryRaw'
+>;
 
 const CURRENT_ASSIGNMENT_STATUSES: AssignmentSnapshot['status'][] = [
   'offered',
@@ -43,10 +53,21 @@ export class RequestSnapshotLoader {
     let uuid = requestId;
     if (options.forUpdate) {
       const sequence = parseRequestId(requestId);
-      if (sequence === null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) return null;
-      const rows = sequence === null
-        ? await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT id FROM service_requests WHERE id = ${requestId}::uuid FOR UPDATE`)
-        : await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT id FROM service_requests WHERE number = ${sequence} FOR UPDATE`);
+      if (
+        sequence === null &&
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          requestId,
+        )
+      )
+        return null;
+      const rows =
+        sequence === null
+          ? await tx.$queryRaw<Array<{ id: string }>>(
+              Prisma.sql`SELECT id FROM service_requests WHERE id = ${requestId}::uuid FOR UPDATE`,
+            )
+          : await tx.$queryRaw<Array<{ id: string }>>(
+              Prisma.sql`SELECT id FROM service_requests WHERE number = ${sequence} FOR UPDATE`,
+            );
       if (!rows[0]) return null;
       uuid = rows[0].id;
     } else if (parseRequestId(requestId) !== null) {
@@ -56,7 +77,11 @@ export class RequestSnapshotLoader {
       });
       if (!row) return null;
       uuid = row.id;
-    } else if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) {
+    } else if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        requestId,
+      )
+    ) {
       return null;
     }
 
@@ -73,33 +98,84 @@ export class RequestSnapshotLoader {
     const schedules = row.schedules;
     // A live reschedule proposal supersedes the prior confirmed schedule even
     // if imported/legacy proposedAt values do not sort after it.
-    const currentSchedule = schedules.find((item) => item.status === 'proposed' || item.status === 'changes_requested')
-      ?? schedules.find((item) => item.status === 'confirmed')
-      ?? null;
+    const currentSchedule =
+      schedules.find(
+        (item) =>
+          item.status === 'proposed' || item.status === 'changes_requested',
+      ) ??
+      schedules.find((item) => item.status === 'confirmed') ??
+      null;
     const replacedSchedule = currentSchedule?.replacesScheduleId
-      ? schedules.find((item) => item.id === currentSchedule.replacesScheduleId) ?? null
+      ? (schedules.find(
+          (item) => item.id === currentSchedule.replacesScheduleId,
+        ) ?? null)
       : null;
     const latestQuote = row.quotes[0] ?? null;
-    const openIssues = row.issues.filter((issue) => issue.status !== 'resolved');
-    const pendingCancellation = row.cancellations.some((item) => item.status === 'pending');
-    const [providerCardRow, city, district, customer, providerUser, cascadeTimer, uploads] = await Promise.all([
-      assignment ? tx.providerProfile.findUnique({
-        where: { userId: assignment.providerUserId },
-        select: {
-          trade: true,
-          verification: true,
-          user: { select: { firstName: true, lastName: true } },
+    const openIssues = row.issues.filter(
+      (issue) => issue.status !== 'resolved',
+    );
+    const pendingCancellation = row.cancellations.some(
+      (item) => item.status === 'pending',
+    );
+    const [
+      providerCardRow,
+      city,
+      district,
+      customer,
+      providerUser,
+      cascadeTimer,
+      uploads,
+    ] = await Promise.all([
+      assignment
+        ? tx.providerProfile.findUnique({
+            where: { userId: assignment.providerUserId },
+            select: {
+              trade: true,
+              verification: true,
+              user: { select: { firstName: true, lastName: true } },
+            },
+          })
+        : null,
+      tx.location.findUnique({
+        where: { id: row.cityId },
+        select: { name: true },
+      }),
+      tx.location.findUnique({
+        where: { id: row.districtId },
+        select: { name: true },
+      }),
+      tx.user.findUnique({
+        where: { id: row.ownerId },
+        select: { status: true },
+      }),
+      assignment
+        ? tx.user.findUnique({
+            where: { id: assignment.providerUserId },
+            select: { status: true },
+          })
+        : null,
+      tx.requestTimer.findFirst({
+        where: {
+          requestId: row.id,
+          kind: 'dispatch.cascade',
+          status: 'pending',
         },
-      }) : null,
-      tx.location.findUnique({ where: { id: row.cityId }, select: { name: true } }),
-      tx.location.findUnique({ where: { id: row.districtId }, select: { name: true } }),
-      tx.user.findUnique({ where: { id: row.ownerId }, select: { status: true } }),
-      assignment ? tx.user.findUnique({ where: { id: assignment.providerUserId }, select: { status: true } }) : null,
-      tx.requestTimer.findFirst({ where: { requestId: row.id, kind: 'dispatch.cascade', status: 'pending' }, select: { id: true } }),
-      row.attachments.length ? tx.upload.findMany({
-        where: { id: { in: row.attachments.map(({ uploadId }) => uploadId) } },
-        select: { id: true, fileName: true, size: true, contentType: true, createdAt: true },
-      }) : [],
+        select: { id: true },
+      }),
+      row.attachments.length
+        ? tx.upload.findMany({
+            where: {
+              id: { in: row.attachments.map(({ uploadId }) => uploadId) },
+            },
+            select: {
+              id: true,
+              fileName: true,
+              size: true,
+              contentType: true,
+              createdAt: true,
+            },
+          })
+        : [],
     ]);
 
     return {
@@ -110,15 +186,17 @@ export class RequestSnapshotLoader {
         ownerId: row.ownerId,
         staffOwnerId: row.staffOwnerId,
         currentProviderUserId: assignment?.providerUserId ?? null,
-        providerCard: providerCardRow ? {
-          // businessName belongs to the later provider-profile schema work;
-          // keep the projection's documented name/trade fallback available.
-          businessName: null,
-          trade: providerCardRow.trade,
-          verification: providerCardRow.verification,
-          firstName: providerCardRow.user.firstName,
-          lastName: providerCardRow.user.lastName,
-        } : null,
+        providerCard: providerCardRow
+          ? {
+              // businessName belongs to the later provider-profile schema work;
+              // keep the projection's documented name/trade fallback available.
+              businessName: null,
+              trade: providerCardRow.trade,
+              verification: providerCardRow.verification,
+              firstName: providerCardRow.user.firstName,
+              lastName: providerCardRow.user.lastName,
+            }
+          : null,
         cityName: city?.name ?? null,
         districtName: district?.name ?? null,
         attachmentInfo: uploads.map((upload) => ({
@@ -137,14 +215,16 @@ export class RequestSnapshotLoader {
         contactInBrief: row.contactInBrief,
         currentAssignment: assignment ? assignmentSnapshot(assignment) : null,
         assignments: row.assignments.map(assignmentSnapshot),
-        latestQuote: latestQuote ? {
-          status: latestQuote.status,
-          version: latestQuote.version,
-          approvalRequestedAt: latestQuote.approvalRequestedAt,
-          validUntil: latestQuote.validUntil,
-          payoutAmount: latestQuote.payoutAmount,
-          basedOnAssignmentId: latestQuote.basedOnAssignmentId ?? undefined,
-        } : null,
+        latestQuote: latestQuote
+          ? {
+              status: latestQuote.status,
+              version: latestQuote.version,
+              approvalRequestedAt: latestQuote.approvalRequestedAt,
+              validUntil: latestQuote.validUntil,
+              payoutAmount: latestQuote.payoutAmount,
+              basedOnAssignmentId: latestQuote.basedOnAssignmentId ?? undefined,
+            }
+          : null,
         quotes: row.quotes.map((quote) => ({
           status: quote.status,
           version: quote.version,
@@ -153,40 +233,62 @@ export class RequestSnapshotLoader {
           payoutAmount: quote.payoutAmount,
           basedOnAssignmentId: quote.basedOnAssignmentId ?? undefined,
         })),
-        currentSchedule: currentSchedule ? scheduleSnapshot(currentSchedule) : null,
-        replacedSchedule: replacedSchedule ? scheduleSnapshot(replacedSchedule) : null,
-        pendingUpdates: row.updates.filter((item) => item.state === 'pending').map((item) => ({
-          kind: item.kind,
-          state: item.state,
-          createdAt: item.createdAt,
-        })),
+        currentSchedule: currentSchedule
+          ? scheduleSnapshot(currentSchedule)
+          : null,
+        replacedSchedule: replacedSchedule
+          ? scheduleSnapshot(replacedSchedule)
+          : null,
+        pendingUpdates: row.updates
+          .filter((item) => item.state === 'pending')
+          .map((item) => ({
+            kind: item.kind,
+            state: item.state,
+            createdAt: item.createdAt,
+          })),
         openIssues: openIssues.map((issue) => ({ status: issue.status })),
         pendingCancellation,
         latestNoShow: row.noShows[0] ? { status: row.noShows[0].status } : null,
-        // Payment attempts are added by WP-5; quote acceptance is not itself a
-        // payment attempt, so do not mislabel acceptedAt as pendingPaymentAt.
-        payment: { paid: false, pendingPaymentAt: null },
-        payout: latestQuote?.payoutAmount === null || latestQuote === null
-          ? null
-          : { amount: latestQuote.payoutAmount, assignmentId: latestQuote.payoutAssignmentId },
-        customerStanding: customer?.status === 'suspended' ? 'suspended' : 'active',
-        providerStanding: assignment ? (providerUser?.status === 'suspended' ? 'suspended' : 'active') : null,
+        payment: {
+          paid: row.payments.some((payment) => payment.status === 'paid' || payment.status === 'partially_refunded'),
+          pendingPaymentAt: row.payments.find((payment) => payment.status === 'pending' || payment.status === 'recorded')?.createdAt ?? null,
+        },
+        payout:
+          latestQuote?.payoutAmount === null || latestQuote === null
+            ? null
+            : {
+                amount: latestQuote.payoutAmount,
+                assignmentId: latestQuote.payoutAssignmentId,
+              },
+        customerStanding:
+          customer?.status === 'suspended' ? 'suspended' : 'active',
+        providerStanding: assignment
+          ? providerUser?.status === 'suspended'
+            ? 'suspended'
+            : 'active'
+          : null,
         cascadePending: cascadeTimer !== null,
         hold: row.holdKind ? { kind: row.holdKind } : null,
         defectsWindowEndsAt: row.defectsWindowEndsAt,
         completionReportApprovedAt: row.reportApprovedAt,
-        providerCostingSubmitted: assignment !== null && row.contributions.some((item) => item.assignmentId === assignment.id),
-        paymentLapsed: latestQuote?.status === 'expired' && latestQuote.acceptedAt !== null,
-        replacementPayoutPending: row.status === 'ready_to_schedule'
-          && latestQuote?.status === 'accepted'
-          && latestQuote.providerChangedAt !== null
-          && (!assignment || latestQuote.payoutAssignmentId !== assignment.id),
+        providerCostingSubmitted:
+          assignment !== null &&
+          row.contributions.some((item) => item.assignmentId === assignment.id),
+        paymentLapsed:
+          latestQuote?.status === 'expired' && latestQuote.acceptedAt !== null,
+        replacementPayoutPending:
+          row.status === 'ready_to_schedule' &&
+          latestQuote?.status === 'accepted' &&
+          latestQuote.providerChangedAt !== null &&
+          (!assignment || latestQuote.payoutAssignmentId !== assignment.id),
       },
     };
   }
 }
 
-function assignmentSnapshot(assignment: LoadedRequest['assignments'][number]): AssignmentSnapshot {
+function assignmentSnapshot(
+  assignment: LoadedRequest['assignments'][number],
+): AssignmentSnapshot {
   return {
     status: assignment.status,
     attempt: assignment.attempt,
@@ -194,9 +296,11 @@ function assignmentSnapshot(assignment: LoadedRequest['assignments'][number]): A
   };
 }
 
-function scheduleSnapshot(schedule: LoadedRequest['schedules'][number]): ScheduleSnapshot {
+function scheduleSnapshot(
+  schedule: LoadedRequest['schedules'][number],
+): ScheduleSnapshot {
   const changes = Array.isArray(schedule.changeRequests)
-    ? schedule.changeRequests as Array<{ handledAt?: string | null }>
+    ? (schedule.changeRequests as Array<{ handledAt?: string | null }>)
     : [];
   return {
     status: schedule.status,

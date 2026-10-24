@@ -26,6 +26,7 @@ import { ProvidersModule } from './providers/providers.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { RequestsModule } from './requests/requests.module';
 import { ApprovalsModule } from './approvals/approvals.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { ApprovalsModule } from './approvals/approvals.module';
     UploadsModule,
     RequestsModule,
     ApprovalsModule,
+    PaymentsModule,
     UsersModule,
     AuditLogsModule,
     NotificationsModule,
