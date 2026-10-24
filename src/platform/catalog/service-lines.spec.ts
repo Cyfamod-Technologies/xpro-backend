@@ -19,9 +19,12 @@ describe('service catalogue', () => {
   });
 
   it('makes Procurement category required and Waste access sensitive', () => {
-    expect(intakeFields.Procurement.find(({ key }) => key === 'category')?.required).toBe(true);
-    expect(intakeFields['Waste management'].find(({ key }) => key === 'access'))
-      .toMatchObject({ required: true, sensitive: true });
+    expect(
+      intakeFields.Procurement.find(({ key }) => key === 'category')?.required,
+    ).toBe(true);
+    expect(
+      intakeFields['Waste management'].find(({ key }) => key === 'access'),
+    ).toMatchObject({ required: true, sensitive: true });
   });
 
   it('covers each Hire trade exactly once across the three groups', () => {
@@ -32,7 +35,9 @@ describe('service catalogue', () => {
   });
 
   it('marks Hire quantity as a number and includes the stated range', () => {
-    expect(intakeFields.Hire.find(({ key }) => key === 'quantity')).toMatchObject({
+    expect(
+      intakeFields.Hire.find(({ key }) => key === 'quantity'),
+    ).toMatchObject({
       type: 'number',
       min: 1,
       max: 10,

@@ -7,7 +7,10 @@ import {
 import { Prisma, Upload, UploadPurpose, UploadStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { hasExpectedSignature, validateGeneralFile } from '../storage/file-validation';
+import {
+  hasExpectedSignature,
+  validateGeneralFile,
+} from '../storage/file-validation';
 import { StorageService } from '../storage/storage.service';
 import { CreateUploadDto } from './dto/create-upload.dto';
 
@@ -36,7 +39,9 @@ export class UploadsService {
       uploadUrl = await this.storage.signedUploadUrl(key, dto.type, 600);
     } catch (error) {
       if (error instanceof ServiceUnavailableException)
-        throw new ServiceUnavailableException('File uploads are not configured.');
+        throw new ServiceUnavailableException(
+          'File uploads are not configured.',
+        );
       throw error;
     }
     await this.prisma.upload.create({
@@ -64,36 +69,51 @@ export class UploadsService {
     const upload = await this.prisma.upload.findFirst({
       where: { id, ownerId, status: UploadStatus.pending },
     });
-    if (!upload) throw new NotFoundException('Upload not found or already completed.');
+    if (!upload)
+      throw new NotFoundException('Upload not found or already completed.');
     if (upload.expiresAt <= new Date())
-      throw new ConflictException('This upload has expired. Start the upload again.');
+      throw new ConflictException(
+        'This upload has expired. Start the upload again.',
+      );
 
     let object: { contentType?: string; contentLength?: number };
     try {
       object = await this.storage.head(upload.storageKey);
     } catch (error) {
       if (error instanceof ServiceUnavailableException)
-        throw new ServiceUnavailableException('File uploads are not configured.');
+        throw new ServiceUnavailableException(
+          'File uploads are not configured.',
+        );
       throw error;
     }
-    if (object.contentLength !== upload.size || object.contentType !== upload.contentType)
-      throw new ConflictException('Uploaded file size or type does not match the upload request.');
+    if (
+      object.contentLength !== upload.size ||
+      object.contentType !== upload.contentType
+    )
+      throw new ConflictException(
+        'Uploaded file size or type does not match the upload request.',
+      );
     let bytes: Buffer;
     try {
       bytes = await this.storage.read(upload.storageKey);
     } catch (error) {
       if (error instanceof ServiceUnavailableException)
-        throw new ServiceUnavailableException('File uploads are not configured.');
+        throw new ServiceUnavailableException(
+          'File uploads are not configured.',
+        );
       throw error;
     }
     if (!hasExpectedSignature(bytes, upload.contentType))
-      throw new ConflictException('The uploaded file content does not match its type.');
+      throw new ConflictException(
+        'The uploaded file content does not match its type.',
+      );
 
     const updated = await this.prisma.upload.updateMany({
       where: { id, ownerId, status: UploadStatus.pending },
       data: { status: UploadStatus.ready, completedAt: new Date() },
     });
-    if (updated.count !== 1) throw new NotFoundException('Upload not found or already completed.');
+    if (updated.count !== 1)
+      throw new NotFoundException('Upload not found or already completed.');
     return {
       id: upload.id,
       name: upload.fileName,
@@ -104,7 +124,9 @@ export class UploadsService {
   }
 
   async delete(ownerId: string, id: string) {
-    const upload = await this.prisma.upload.findFirst({ where: { id, ownerId } });
+    const upload = await this.prisma.upload.findFirst({
+      where: { id, ownerId },
+    });
     if (!upload) throw new NotFoundException('File not found.');
     if (upload.status === UploadStatus.attached)
       throw new ConflictException('Attached files cannot be discarded.'); // new message: not in spec
@@ -118,7 +140,9 @@ export class UploadsService {
       await this.storage.delete(upload.storageKey);
     } catch (error) {
       if (error instanceof ServiceUnavailableException)
-        throw new ServiceUnavailableException('File uploads are not configured.');
+        throw new ServiceUnavailableException(
+          'File uploads are not configured.',
+        );
       throw error;
     }
     await this.prisma.upload.delete({ where: { id } });
@@ -149,7 +173,10 @@ export class UploadsService {
     });
     if (uploads.length !== uniqueIds.length)
       throw new ConflictException(UPLOAD_NOT_FINISHED);
-    if (uploads.reduce((total, upload) => total + upload.size, 0) > 25 * 1024 * 1024)
+    if (
+      uploads.reduce((total, upload) => total + upload.size, 0) >
+      25 * 1024 * 1024
+    )
       throw new ConflictException('Keep the combined file size under 25 MB.');
 
     const attachedAt = new Date();
@@ -181,7 +208,10 @@ export class UploadsService {
   async cleanupUnattachedOlderThan24Hours(now = new Date()): Promise<number> {
     const cutoff = new Date(now.getTime() - ORPHAN_TTL_MS);
     const stale = await this.prisma.upload.findMany({
-      where: { status: { not: UploadStatus.attached }, createdAt: { lt: cutoff } },
+      where: {
+        status: { not: UploadStatus.attached },
+        createdAt: { lt: cutoff },
+      },
       select: { id: true, storageKey: true },
     });
     let deleted = 0;

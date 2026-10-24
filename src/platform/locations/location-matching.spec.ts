@@ -17,7 +17,9 @@ describe('matchLocationName', () => {
   });
 
   it('can restrict matches to a location kind', () => {
-    expect(matchLocationName('Abuja Municipal', locations, 'district')).toBeUndefined();
+    expect(
+      matchLocationName('Abuja Municipal', locations, 'district'),
+    ).toBeUndefined();
   });
 
   it('returns no match for unknown legacy values', () => {

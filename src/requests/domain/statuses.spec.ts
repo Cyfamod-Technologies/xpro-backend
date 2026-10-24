@@ -1,4 +1,10 @@
-import { FROZEN, formatRequestId, isOpen, parseRequestId, TERMINAL } from './statuses';
+import {
+  FROZEN,
+  formatRequestId,
+  isOpen,
+  parseRequestId,
+  TERMINAL,
+} from './statuses';
 
 describe('request status helpers', () => {
   it('marks only closed, cancelled and rejected as terminal', () => {
@@ -23,7 +29,9 @@ describe('request status helpers', () => {
 
   it('rejects out-of-range sequences when formatting', () => {
     expect(() => formatRequestId(0)).toThrow(RangeError);
-    expect(() => formatRequestId(Number.MAX_SAFE_INTEGER + 1)).toThrow(RangeError);
+    expect(() => formatRequestId(Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      RangeError,
+    );
     expect(parseRequestId('XPR-999999999999999999')).toBeNull();
   });
 });

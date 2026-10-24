@@ -12,15 +12,19 @@ export function listProjection(
   now: Date,
   settings: SettingsSnapshot,
 ): Record<string, unknown> {
-  const role: RequestRole = actor.kind === 'system' || (actor.kind === 'staff' && actor.staff?.status === 'active')
-    ? 'staff'
-    : snapshot.ownerId === actor.userId
-      ? 'customer'
-      : actor.platformRoles.includes('provider')
-        ? 'provider'
-        : 'customer';
-  const providerOwnsAcceptedAssignment = snapshot.currentProviderUserId === actor.userId &&
-    (snapshot.currentAssignment?.status === 'accepted' || snapshot.currentAssignment?.status === 'completed');
+  const role: RequestRole =
+    actor.kind === 'system' ||
+    (actor.kind === 'staff' && actor.staff?.status === 'active')
+      ? 'staff'
+      : snapshot.ownerId === actor.userId
+        ? 'customer'
+        : actor.platformRoles.includes('provider')
+          ? 'provider'
+          : 'customer';
+  const providerOwnsAcceptedAssignment =
+    snapshot.currentProviderUserId === actor.userId &&
+    (snapshot.currentAssignment?.status === 'accepted' ||
+      snapshot.currentAssignment?.status === 'completed');
   const showTitle = role !== 'provider' || providerOwnsAcceptedAssignment;
   return {
     ...commonProjection({ row, snapshot, actor, role, now, settings }),

@@ -29,7 +29,9 @@ async function main() {
     const city = matchLocationName(profile.city, locations, 'city');
     const matchedAreas = areas
       .map((name) => matchLocationName(name, locations))
-      .filter((location): location is (typeof locations)[number] => Boolean(location));
+      .filter((location): location is (typeof locations)[number] =>
+        Boolean(location),
+      );
     const areaIds = [
       ...new Set([
         ...profile.serviceAreaIds,

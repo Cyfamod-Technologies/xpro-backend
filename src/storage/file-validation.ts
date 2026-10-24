@@ -1,7 +1,4 @@
-import {
-  ProviderUploadPurpose,
-  UploadPurpose,
-} from '@prisma/client';
+import { ProviderUploadPurpose, UploadPurpose } from '@prisma/client';
 import { BadRequestException } from '@nestjs/common';
 
 const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
@@ -11,7 +8,18 @@ type FileRule = { extensions: readonly string[]; types: readonly string[] };
 
 const GENERAL_RULES: Record<UploadPurpose, FileRule> = {
   request_attachment: {
-    extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'doc', 'docx', 'xls', 'xlsx', 'mp4'],
+    extensions: [
+      'pdf',
+      'png',
+      'jpg',
+      'jpeg',
+      'webp',
+      'doc',
+      'docx',
+      'xls',
+      'xlsx',
+      'mp4',
+    ],
     types: [
       'application/pdf',
       'image/png',
@@ -25,7 +33,18 @@ const GENERAL_RULES: Record<UploadPurpose, FileRule> = {
     ],
   },
   message_attachment: {
-    extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'doc', 'docx', 'xls', 'xlsx', 'mp4'],
+    extensions: [
+      'pdf',
+      'png',
+      'jpg',
+      'jpeg',
+      'webp',
+      'doc',
+      'docx',
+      'xls',
+      'xlsx',
+      'mp4',
+    ],
     types: [
       'application/pdf',
       'image/png',
@@ -40,10 +59,27 @@ const GENERAL_RULES: Record<UploadPurpose, FileRule> = {
   },
   progress_evidence: {
     extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'mp4'],
-    types: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp', 'video/mp4'],
+    types: [
+      'application/pdf',
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'video/mp4',
+    ],
   },
   payment_proof: {
-    extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'doc', 'docx', 'xls', 'xlsx', 'mp4'],
+    extensions: [
+      'pdf',
+      'png',
+      'jpg',
+      'jpeg',
+      'webp',
+      'doc',
+      'docx',
+      'xls',
+      'xlsx',
+      'mp4',
+    ],
     types: [
       'application/pdf',
       'image/png',
@@ -133,8 +169,10 @@ export function hasExpectedSignature(bytes: Buffer, type: string): boolean {
     type.startsWith('application/vnd.openxmlformats-officedocument') ||
     type === 'video/mp4'
   )
-    return bytes.subarray(0, 2).toString() === 'PK' ||
-      (type === 'video/mp4' && bytes.subarray(4, 8).toString() === 'ftyp');
+    return (
+      bytes.subarray(0, 2).toString() === 'PK' ||
+      (type === 'video/mp4' && bytes.subarray(4, 8).toString() === 'ftyp')
+    );
   if (type === 'application/vnd.ms-excel')
     return bytes.subarray(0, 4).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
   if (type === 'application/msword')

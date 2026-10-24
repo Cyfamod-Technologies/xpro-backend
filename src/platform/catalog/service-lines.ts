@@ -24,7 +24,11 @@ export type IntakeField = {
   maxLength?: number;
 };
 
-const designTypes = ['Architectural plan', 'Structural plan', 'Interior design'];
+const designTypes = [
+  'Architectural plan',
+  'Structural plan',
+  'Interior design',
+];
 const workTypes = [
   'Floor finishing',
   'Wall finishing',
@@ -147,18 +151,38 @@ const field = (
 export const intakeFields: Record<ServiceLine, IntakeField[]> = {
   Design: [
     field('designType', 'Design service', serviceSkills.Design, true, true),
-    field('delivery', 'Project delivery', ['Design only', 'Design and build with XPro'], true),
+    field(
+      'delivery',
+      'Project delivery',
+      ['Design only', 'Design and build with XPro'],
+      true,
+    ),
   ],
   Construction: [
     field('workType', 'Work required', serviceSkills.Construction, true, true),
-    field('area', 'Approximate area (sqm)', undefined, false, false, 'number', false, {
-      min: 0,
-      exclusiveMinimum: true,
-    }),
+    field(
+      'area',
+      'Approximate area (sqm)',
+      undefined,
+      false,
+      false,
+      'number',
+      false,
+      {
+        min: 0,
+        exclusiveMinimum: true,
+      },
+    ),
   ],
   Hire: [
     field('hireType', 'Hire category', Object.keys(hireTradeGroups), true),
-    field('trade', 'Trade or equipment required', serviceSkills.Hire, true, true),
+    field(
+      'trade',
+      'Trade or equipment required',
+      serviceSkills.Hire,
+      true,
+      true,
+    ),
     field('quantity', 'Quantity', undefined, true, false, 'number', false, {
       min: 1,
       max: 10,
@@ -168,32 +192,105 @@ export const intakeFields: Record<ServiceLine, IntakeField[]> = {
     field('operator', 'Operator required?', ['Yes', 'No', 'Not applicable']),
   ],
   Procurement: [
-    field('materials', 'Materials and quantities required', undefined, true, false, 'text', false, {
-      minLength: 5,
-      maxLength: 2000,
-    }),
-    field('category', 'Material category', serviceSkills.Procurement, true, true),
-    field('brands', 'Preferred brands', undefined, false, false, 'text', false, {
-      maxLength: 500,
-    }),
-    field('deliveryDate', 'Required delivery date', undefined, true, false, 'date'),
+    field(
+      'materials',
+      'Materials and quantities required',
+      undefined,
+      true,
+      false,
+      'text',
+      false,
+      {
+        minLength: 5,
+        maxLength: 2000,
+      },
+    ),
+    field(
+      'category',
+      'Material category',
+      serviceSkills.Procurement,
+      true,
+      true,
+    ),
+    field(
+      'brands',
+      'Preferred brands',
+      undefined,
+      false,
+      false,
+      'text',
+      false,
+      {
+        maxLength: 500,
+      },
+    ),
+    field(
+      'deliveryDate',
+      'Required delivery date',
+      undefined,
+      true,
+      false,
+      'date',
+    ),
   ],
   'Facility management': [
-    field('propertyType', 'Property type', ['Residential', 'Commercial', 'Industrial'], true),
-    field('serviceNeeds', 'Facility services required', serviceSkills['Facility management'], true, true),
+    field(
+      'propertyType',
+      'Property type',
+      ['Residential', 'Commercial', 'Industrial'],
+      true,
+    ),
+    field(
+      'serviceNeeds',
+      'Facility services required',
+      serviceSkills['Facility management'],
+      true,
+      true,
+    ),
     field('visitDate', 'Preferred visit date', undefined, false, false, 'date'),
   ],
   'Waste management': [
-    field('wasteType', 'Waste type', serviceSkills['Waste management'], true, true),
-    field('quantity', 'Estimated quantity and unit', undefined, true, false, 'text', false, {
-      minLength: 2,
-      maxLength: 200,
-    }),
-    field('access', 'Pickup access instructions', undefined, true, false, 'text', true, {
-      minLength: 5,
-      maxLength: 1000,
-    }),
-    field('pickupDate', 'Preferred pickup date', undefined, true, false, 'date'),
+    field(
+      'wasteType',
+      'Waste type',
+      serviceSkills['Waste management'],
+      true,
+      true,
+    ),
+    field(
+      'quantity',
+      'Estimated quantity and unit',
+      undefined,
+      true,
+      false,
+      'text',
+      false,
+      {
+        minLength: 2,
+        maxLength: 200,
+      },
+    ),
+    field(
+      'access',
+      'Pickup access instructions',
+      undefined,
+      true,
+      false,
+      'text',
+      true,
+      {
+        minLength: 5,
+        maxLength: 1000,
+      },
+    ),
+    field(
+      'pickupDate',
+      'Preferred pickup date',
+      undefined,
+      true,
+      false,
+      'date',
+    ),
   ],
 };
 
@@ -206,7 +303,8 @@ export const effectiveDateRules = {
     default: 'startDate',
   },
   effectiveEndDate: { Hire: 'endDate', default: null },
-  dateRange: 'Every date is an ISO date in WAT, from today through today + 365 days.',
+  dateRange:
+    'Every date is an ISO date in WAT, from today through today + 365 days.',
 };
 
 export const serviceCatalogue = serviceLines.map((name) => ({

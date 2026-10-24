@@ -9,7 +9,12 @@ import {
 
 /** 02 §6.8: 1 gated on a request, 2 gated off-request, 3 informational, 4 pricing, 5 customer messages. */
 export type StaffRoutingRule =
-  'gated' | 'gated_unscoped' | 'informational' | 'unclaimed' | 'pricing' | 'customer_message';
+  | 'gated'
+  | 'gated_unscoped'
+  | 'informational'
+  | 'unclaimed'
+  | 'pricing'
+  | 'customer_message';
 
 export type StaffRoutingInput = {
   requestId?: string | null;

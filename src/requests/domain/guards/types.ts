@@ -1,6 +1,14 @@
 import type { ActorView, RequestSnapshot } from '../snapshot';
 
-export type ErrorCode = 'VALIDATION_ERROR' | 'NOT_FOUND' | 'FORBIDDEN' | 'STATE_CONFLICT' | 'VERSION_CONFLICT' | 'IDEMPOTENCY_KEY_REUSED' | 'RATE_LIMITED' | 'PAYMENT_IN_PROGRESS';
+export type ErrorCode =
+  | 'VALIDATION_ERROR'
+  | 'NOT_FOUND'
+  | 'FORBIDDEN'
+  | 'STATE_CONFLICT'
+  | 'VERSION_CONFLICT'
+  | 'IDEMPOTENCY_KEY_REUSED'
+  | 'RATE_LIMITED'
+  | 'PAYMENT_IN_PROGRESS';
 
 export type GuardFailure = {
   ok: false;

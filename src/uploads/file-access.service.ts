@@ -45,7 +45,9 @@ export class FileAccessService {
       );
     } catch (error) {
       if (error instanceof ServiceUnavailableException)
-        throw new ServiceUnavailableException('File uploads are not configured.');
+        throw new ServiceUnavailableException(
+          'File uploads are not configured.',
+        );
       throw error;
     }
     return {

@@ -31,7 +31,11 @@ describe('FileAccessService', () => {
     const prisma = {
       upload: { findFirst: jest.fn().mockResolvedValue(upload) },
     };
-    const storage = { signedDownloadUrl: jest.fn().mockResolvedValue('https://signed.test/file') };
+    const storage = {
+      signedDownloadUrl: jest
+        .fn()
+        .mockResolvedValue('https://signed.test/file'),
+    };
     return {
       service: new FileAccessService(prisma as never, storage as never),
       prisma,

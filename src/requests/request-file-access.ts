@@ -4,7 +4,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { FileAccessService } from '../uploads/file-access.service';
 import type { RequestUser } from '../common/types/request-user';
 
-const ACCESSIBLE_ASSIGNMENTS = ['offered', 'pending_approval', 'accepted', 'completed'] as const;
+const ACCESSIBLE_ASSIGNMENTS = [
+  'offered',
+  'pending_approval',
+  'accepted',
+  'completed',
+] as const;
 
 @Injectable()
 export class RequestFileAccess implements OnModuleInit {
@@ -27,17 +32,34 @@ export class RequestFileAccess implements OnModuleInit {
             take: 1,
             select: { id: true, providerUserId: true, status: true },
           },
-          attachments: { where: { uploadId: upload.id }, select: { sharedWithProvider: true } },
-          schedules: { where: { status: 'confirmed' }, select: { assignmentId: true } },
+          attachments: {
+            where: { uploadId: upload.id },
+            select: { sharedWithProvider: true },
+          },
+          schedules: {
+            where: { status: 'confirmed' },
+            select: { assignmentId: true },
+          },
         },
       });
       if (!request) return false;
       if (request.ownerId === user.id) return true;
-      if (actor.kind === 'staff' && actor.staff?.status === 'active') return true;
+      if (actor.kind === 'staff' && actor.staff?.status === 'active')
+        return true;
       const currentAssignment = request.assignments[0];
-      if (!actor.platformRoles.includes('provider') || currentAssignment?.providerUserId !== user.id || !new Set<string>(ACCESSIBLE_ASSIGNMENTS).has(currentAssignment.status)) return false;
-      const scheduleLocked = request.schedules.some((schedule) => schedule.assignmentId === currentAssignment.id);
-      return scheduleLocked || request.attachments.some((attachment) => attachment.sharedWithProvider);
+      if (
+        !actor.platformRoles.includes('provider') ||
+        currentAssignment?.providerUserId !== user.id ||
+        !new Set<string>(ACCESSIBLE_ASSIGNMENTS).has(currentAssignment.status)
+      )
+        return false;
+      const scheduleLocked = request.schedules.some(
+        (schedule) => schedule.assignmentId === currentAssignment.id,
+      );
+      return (
+        scheduleLocked ||
+        request.attachments.some((attachment) => attachment.sharedWithProvider)
+      );
     });
 
     this.access.register('message', async (user, upload) => {
@@ -46,30 +68,55 @@ export class RequestFileAccess implements OnModuleInit {
       const message = await this.prisma.requestMessage.findUnique({
         where: { id: upload.entityId },
         select: {
-          requestId: true, channel: true, providerId: true,
+          requestId: true,
+          channel: true,
+          providerId: true,
           request: {
             select: {
               ownerId: true,
-              assignments: { orderBy: { createdAt: 'desc' }, select: { providerId: true, providerUserId: true, status: true } },
+              assignments: {
+                orderBy: { createdAt: 'desc' },
+                select: {
+                  providerId: true,
+                  providerUserId: true,
+                  status: true,
+                },
+              },
             },
           },
         },
       });
       if (!message) return false;
       if (message.channel === 'customer') {
-        if (actor.kind === 'customer') return message.request.ownerId === user.id;
-        if (actor.kind === 'staff') return actor.staff?.status === 'active' && actor.staff.permissions.has('message.customer');
+        if (actor.kind === 'customer')
+          return message.request.ownerId === user.id;
+        if (actor.kind === 'staff')
+          return (
+            actor.staff?.status === 'active' &&
+            actor.staff.permissions.has('message.customer')
+          );
         return false;
       }
       if (message.channel === 'internal')
-        return actor.kind === 'staff' && actor.staff?.status === 'active' && actor.staff.permissions.has('message.internal');
+        return (
+          actor.kind === 'staff' &&
+          actor.staff?.status === 'active' &&
+          actor.staff.permissions.has('message.internal')
+        );
       if (actor.kind === 'staff')
-        return actor.staff?.status === 'active' && actor.staff.permissions.has('message.provider');
+        return (
+          actor.staff?.status === 'active' &&
+          actor.staff.permissions.has('message.provider')
+        );
       if (actor.kind !== 'provider' || !message.providerId) return false;
       const current = message.request.assignments[0];
-      return current?.providerId === message.providerId
-        && current.providerUserId === user.id
-        && ACCESSIBLE_ASSIGNMENTS.includes(current.status as typeof ACCESSIBLE_ASSIGNMENTS[number]);
+      return (
+        current?.providerId === message.providerId &&
+        current.providerUserId === user.id &&
+        ACCESSIBLE_ASSIGNMENTS.includes(
+          current.status as (typeof ACCESSIBLE_ASSIGNMENTS)[number],
+        )
+      );
     });
   }
 }

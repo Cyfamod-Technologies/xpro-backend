@@ -94,7 +94,9 @@ export class InboxService {
     return { updated: result.count };
   }
 
-  private async toDto(row: Prisma.InAppNotificationGetPayload<object>): Promise<InboxItemDto> {
+  private async toDto(
+    row: Prisma.InAppNotificationGetPayload<object>,
+  ): Promise<InboxItemDto> {
     const request = row.requestId
       ? await this.prisma.serviceRequest.findUnique({
           where: { id: row.requestId },
@@ -106,7 +108,9 @@ export class InboxService {
       event: row.event,
       title: row.title,
       message: row.message,
-      requestId: request ? `XPR-${String(request.number).padStart(5, '0')}` : null,
+      requestId: request
+        ? `XPR-${String(request.number).padStart(5, '0')}`
+        : null,
       link: row.link,
       mandatory: row.mandatory,
       readAt: row.readAt,

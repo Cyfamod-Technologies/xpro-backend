@@ -74,7 +74,8 @@ export class LocationsService {
     );
     return rows.filter(
       ({ kind, parentId }) =>
-        kind === 'city' || (kind === 'district' && parentId && activeCityIds.has(parentId)),
+        kind === 'city' ||
+        (kind === 'district' && parentId && activeCityIds.has(parentId)),
     );
   }
 
@@ -98,7 +99,9 @@ export class LocationsService {
       throw new BadRequestException('Choose an active city from the list.');
     if (!city) {
       // new message: not in spec.
-      throw new BadRequestException('Choose your city from the active location list.');
+      throw new BadRequestException(
+        'Choose your city from the active location list.',
+      );
     }
 
     let areaIds: string[];
@@ -145,7 +148,9 @@ export class LocationsService {
     if (dto.kind === 'district') {
       if (!dto.parentId)
         // new message: not in spec.
-        throw new BadRequestException('Choose a parent city for this district.');
+        throw new BadRequestException(
+          'Choose a parent city for this district.',
+        );
       const parent = await this.prisma.location.findFirst({
         where: { id: dto.parentId, kind: 'city', active: true },
       });
@@ -174,7 +179,9 @@ export class LocationsService {
         }
       }
     }
-    const aliases = [...new Set(dto.aliases.map((alias) => alias.trim()).filter(Boolean))];
+    const aliases = [
+      ...new Set(dto.aliases.map((alias) => alias.trim()).filter(Boolean)),
+    ];
     const data = {
       kind: dto.kind,
       name: dto.name.trim(),
@@ -184,12 +191,10 @@ export class LocationsService {
       sort: dto.sort,
     };
     const row = id
-      ? await this.prisma.location
-          .update({ where: { id }, data })
-          .catch(() => {
-            // new message: not in spec.
-            throw new NotFoundException('Location not found.');
-          })
+      ? await this.prisma.location.update({ where: { id }, data }).catch(() => {
+          // new message: not in spec.
+          throw new NotFoundException('Location not found.');
+        })
       : await this.prisma.location.create({ data });
     this.audit.record({
       actorType: 'staff',
