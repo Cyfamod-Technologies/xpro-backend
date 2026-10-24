@@ -13,13 +13,15 @@ import {
 import { Type } from 'class-transformer';
 
 export class AcceptedTermsDto {
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  termsVersion: string;
+  termsVersion?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  privacyVersion: string;
+  privacyVersion?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -52,14 +54,16 @@ export class RegisterDto {
   @Matches(/^(customer|provider)$/)
   role: 'customer' | 'provider';
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description:
-      'Current terms and privacy document versions accepted by the user.',
+      'Versions of currently published legal documents accepted by the user, when available.',
     example: { termsVersion: '2026-10-01', privacyVersion: '2026-10-01' },
   })
+  @IsOptional()
+  @IsObject()
   @ValidateNested()
   @Type(() => AcceptedTermsDto)
-  acceptedTerms: AcceptedTermsDto;
+  acceptedTerms?: AcceptedTermsDto;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -221,19 +221,21 @@ export class AuthService {
               ? ['terms', 'privacy', 'provider_agreement']
               : ['terms', 'privacy'],
         },
+        publishedAt: { lte: new Date() },
       },
       orderBy: { publishedAt: 'desc' },
       distinct: ['kind'],
     });
-    const versions = new Map(
-      documents.map((document) => [document.kind, document.version]),
-    );
+    const acceptedVersions = {
+      terms: dto.acceptedTerms?.termsVersion,
+      privacy: dto.acceptedTerms?.privacyVersion,
+      provider_agreement: dto.acceptedTerms?.providerAgreementVersion,
+      staff_policy: undefined,
+    };
     if (
-      versions.get('terms') !== dto.acceptedTerms.termsVersion ||
-      versions.get('privacy') !== dto.acceptedTerms.privacyVersion ||
-      (dto.role === 'provider' &&
-        versions.get('provider_agreement') !==
-          dto.acceptedTerms.providerAgreementVersion)
+      documents.some(
+        (document) => acceptedVersions[document.kind] !== document.version,
+      )
     ) {
       throw new BadRequestException('Accept the current terms to continue.');
     }
@@ -265,19 +267,14 @@ export class AuthService {
           metadata: dto.returnTo ? { returnTo: dto.returnTo } : undefined,
         },
       });
-      const accepted = documents.filter(
-        (document) =>
-          document.version === dto.acceptedTerms.termsVersion ||
-          document.version === dto.acceptedTerms.privacyVersion ||
-          document.version === dto.acceptedTerms.providerAgreementVersion,
-      );
-      await tx.legalAcceptance.createMany({
-        data: accepted.map((document) => ({
-          userId: created.id,
-          documentId: document.id,
-          source: 'signup',
-        })),
-      });
+      if (documents.length > 0)
+        await tx.legalAcceptance.createMany({
+          data: documents.map((document) => ({
+            userId: created.id,
+            documentId: document.id,
+            source: 'signup',
+          })),
+        });
       return created;
     });
 
