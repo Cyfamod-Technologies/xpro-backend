@@ -529,8 +529,8 @@ export class IntakeService {
             clarificationCount: { increment: 1 },
           },
         });
-        await this.approvals.close(context.tx, 'intake', row.id, context.now);
-        await this.approvals.open(context.tx, 'clarification_overdue', row.id, row.id, context.now, actor.userId);
+        await this.approvals.close(context.tx, 'intake', context.snap.id, context.now);
+        await this.approvals.open(context.tx, 'clarification_overdue', context.snap.id, context.snap.id, context.now, actor.userId);
         context.timers.stop(T6_TIMERS);
         context.timers.start(
           TimerKinds.T6Reminder48h,

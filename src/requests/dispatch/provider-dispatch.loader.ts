@@ -30,7 +30,7 @@ export class ProviderDispatchLoader {
       const providerAssignments = assignments.filter(({ providerId }) => providerId === profile.id);
       const committedJobs = new Set(providerAssignments.filter((assignment) => assignment.requestId !== requestId && (
         assignment.status === 'offered' || assignment.status === 'pending_approval' ||
-        (assignment.status === 'accepted' && COMMITTED_REQUEST_STATUSES.has(assignment.request.status)),
+        (assignment.status === 'accepted' && COMMITTED_REQUEST_STATUSES.has(assignment.request.status))
       )).map(({ requestId }) => requestId)).size;
       const providerEvents = events.filter(({ providerId }) => providerId === profile.id);
       const voided = new Set(providerEvents.filter(({ kind }) => kind === 'no_show_voided').map(({ sourceId }) => sourceId.replace(/:voided$/, '')));
