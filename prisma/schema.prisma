@@ -1112,6 +1112,41 @@ model Quote {
   @@map("quotes")
 }
 
+model ApprovalDeadline {
+  id          String    @id @default(uuid())
+  kind        String
+  itemId      String    @map("item_id")
+  requestId   String?   @map("request_id")
+  openedAt    DateTime  @map("opened_at")
+  dueAt       DateTime  @map("due_at")
+  remindedAt  DateTime? @map("reminded_at")
+  escalatedAt DateTime? @map("escalated_at")
+  closedAt    DateTime? @map("closed_at")
+  openedBy    String?   @map("opened_by")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@index([closedAt, dueAt])
+  @@index([requestId, closedAt])
+  @@map("approval_deadlines")
+}
+
+model RequestEscalation {
+  id         String    @id @default(uuid())
+  requestId  String    @map("request_id")
+  target     String
+  source     String    @default("staff")
+  note       String
+  raisedBy   String?   @map("raised_by")
+  raisedAt   DateTime  @map("raised_at")
+  resolvedBy String?   @map("resolved_by")
+  resolvedAt DateTime? @map("resolved_at")
+  resolution String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([requestId, resolvedAt])
+  @@map("request_escalations")
+}
+
 model Schedule {
   id                 String         @id @default(uuid())
   requestId          String         @map("request_id")

@@ -529,6 +529,8 @@ export class IntakeService {
             clarificationCount: { increment: 1 },
           },
         });
+        await this.approvals.close(context.tx, 'intake', row.id, context.now);
+        await this.approvals.open(context.tx, 'clarification_overdue', row.id, row.id, context.now, actor.userId);
         context.timers.stop(T6_TIMERS);
         context.timers.start(
           TimerKinds.T6Reminder48h,
@@ -651,6 +653,7 @@ export class IntakeService {
           },
         });
         await this.approvals.close(context.tx, 'intake', row.id, context.now);
+        await this.approvals.close(context.tx, 'clarification_overdue', row.id, context.now);
         context.timers.stop(T6_TIMERS);
         if (mode === 'auto') context.enqueueCascade('intake_approved');
         else
