@@ -20,14 +20,16 @@ export class OfflinePaymentDto {
     'bank_transfer' | 'cash' | 'cheque';
   @IsString() @MinLength(1) @MaxLength(200) reference!: string;
   @IsISO8601() paidAt!: string;
-  @IsString() proofFileId!: string;
+  // A missing proof is refused by the payment.recordOffline guard with the 05 §6.2 message.
+  @IsOptional() @IsString() @MaxLength(100) proofFileId?: string;
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
+// The guards give blank notes and reasons their 05 §6.2 messages.
 export class PaymentNoteDto {
-  @IsString() @MinLength(3) @MaxLength(1000) note!: string;
+  @IsString() @MaxLength(1000) note!: string;
 }
 export class RejectPaymentDto {
-  @IsString() @MinLength(3) @MaxLength(1000) reason!: string;
+  @IsString() @MaxLength(1000) reason!: string;
 }
 export class RefundDecisionDto {
   @IsBoolean() approve!: boolean;

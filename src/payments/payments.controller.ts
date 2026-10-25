@@ -13,6 +13,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -20,6 +21,7 @@ import type { RequestUser } from '../common/types/request-user';
 import { IdempotencyKey } from '../platform/idempotency/idempotency-key.decorator';
 import { AppError } from '../platform/errors/app-error';
 import { PaymentsService } from './payments.service';
+import { PaystackEventsService } from './paystack-events.service';
 import { FinanceService } from './finance.service';
 import {
   FinanceNoteDto,
@@ -72,7 +74,7 @@ export class AdminPaymentsController {
   constructor(private readonly payments: PaymentsService) {}
   @Post('requests/:id/payments/offline')
   @HttpCode(HttpStatus.CREATED)
-  async record(
+  record(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -84,12 +86,11 @@ export class AdminPaymentsController {
     )
     dto: OfflinePaymentDto,
   ) {
-    const row = await this.payments.recordOffline(user.id, id, dto);
-    return { ...row, amount: Number(row.amount) };
+    return this.payments.recordOffline(user.id, id, dto);
   }
   @Post('payments/:id/reconcile')
   @HttpCode(HttpStatus.OK)
-  async reconcile(
+  reconcile(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -101,12 +102,11 @@ export class AdminPaymentsController {
     )
     dto: PaymentNoteDto,
   ) {
-    const row = await this.payments.reconcile(user.id, id, dto.note);
-    return { ...row, amount: Number(row.amount) };
+    return this.payments.reconcile(user.id, id, dto.note);
   }
   @Post('payments/:id/reject')
   @HttpCode(HttpStatus.OK)
-  async reject(
+  reject(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -118,26 +118,22 @@ export class AdminPaymentsController {
     )
     dto: RejectPaymentDto,
   ) {
-    const row = await this.payments.rejectOffline(user.id, id, dto.reason);
-    return { ...row, amount: Number(row.amount) };
+    return this.payments.rejectOffline(user.id, id, dto.reason);
   }
 }
 
 @ApiTags('Paystack webhooks')
 @Controller('webhooks/paystack')
+@SkipThrottle()
 export class PaystackWebhookController {
-  constructor(private readonly payments: PaymentsService) {}
+  constructor(private readonly events: PaystackEventsService) {}
   @Post()
   @HttpCode(HttpStatus.OK)
   receive(
     @Headers('x-paystack-signature') signature: string | undefined,
     @Req() req: Request & { rawBody?: Buffer },
   ) {
-    return this.payments.handleWebhook(
-      req.rawBody ?? Buffer.alloc(0),
-      signature,
-      req.body,
-    );
+    return this.events.handleWebhook(req.rawBody ?? Buffer.alloc(0), signature);
   }
 }
 

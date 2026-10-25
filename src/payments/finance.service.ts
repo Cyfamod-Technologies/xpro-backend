@@ -5,7 +5,9 @@ import { AppError } from '../platform/errors/app-error';
 import { PrismaService } from '../prisma/prisma.service';
 import { UploadsService } from '../uploads/uploads.service';
 import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
+import { RequestEventsService } from '../requests/events/request-events.service';
 import { PAYMENT_GATEWAY } from './payments.service';
+import { refreshPaymentRefundStatus } from './refund-status';
 import type { PaymentGateway } from './payment-gateway';
 
 const denied = () =>
@@ -36,6 +38,7 @@ export class FinanceService {
     private readonly actors: ActorService,
     private readonly uploads: UploadsService,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
+    private readonly requestEvents: RequestEventsService,
   ) {}
 
   async createPrimary(
@@ -199,7 +202,15 @@ export class FinanceService {
         throw error;
       }
     }
-    if (updated.status === 'waived') await this.resolveCancellation(updated.id);
+    if (updated.status === 'waived') {
+      const resolved = await this.prisma.$transaction(async (tx) => {
+        await refreshPaymentRefundStatus(tx, updated.paymentId);
+        return updated.cancellationId
+          ? this.requestEvents.onRefundsResolved(tx, updated.cancellationId)
+          : null;
+      });
+      await resolved?.afterCommit();
+    }
     return refundView({ ...updated, payment });
   }
 
@@ -303,16 +314,23 @@ export class FinanceService {
     if (row.transferRecordedBy === userId)
       throw conflict('Another Finance user must reconcile this refund.');
     if (!note.trim()) throw invalid('Add a reconciliation note.');
-    const updated = await this.prisma.refund.update({
-      where: { id },
-      data: {
-        status: 'completed',
-        reconciledBy: userId,
-        completedAt: new Date(),
-        reason: `${row.reason}\nReconciled: ${note.trim()}`,
-      },
+    const { updated, resolved } = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.refund.update({
+        where: { id },
+        data: {
+          status: 'completed',
+          reconciledBy: userId,
+          completedAt: new Date(),
+          reason: `${row.reason}\nReconciled: ${note.trim()}`,
+        },
+      });
+      await refreshPaymentRefundStatus(tx, updated.paymentId);
+      const resolved = updated.cancellationId
+        ? await this.requestEvents.onRefundsResolved(tx, updated.cancellationId)
+        : null;
+      return { updated, resolved };
     });
-    await this.resolveCancellation(updated.id);
+    await resolved?.afterCommit();
     const payment = await this.prisma.payment.findUnique({
       where: { id: updated.paymentId },
       select: { method: true },
@@ -684,57 +702,5 @@ export class FinanceService {
         reason: 'A provider payout is still pending.',
       };
     return { state: 'paid' };
-  }
-
-  private async resolveCancellation(refundId: string) {
-    const row = await this.prisma.refund.findUnique({
-      where: { id: refundId },
-      select: { cancellationId: true, requestId: true, paymentId: true },
-    });
-    if (!row) return;
-    const payment = await this.prisma.payment.findUnique({
-      where: { id: row.paymentId },
-      select: { amount: true },
-    });
-    const completed = await this.prisma.refund.aggregate({
-      where: {
-        paymentId: row.paymentId,
-        status: { in: ['completed', 'waived'] },
-      },
-      _sum: { amount: true },
-    });
-    const refundedAmount = completed._sum.amount ?? 0n;
-    if (payment && refundedAmount > 0n)
-      await this.prisma.payment.update({
-        where: { id: row.paymentId },
-        data: {
-          status:
-            refundedAmount >= payment.amount
-              ? 'refunded'
-              : 'partially_refunded',
-        },
-      });
-    if (!row.cancellationId) return;
-    const unresolved = await this.prisma.refund.count({
-      where: {
-        cancellationId: row.cancellationId,
-        status: { notIn: ['completed', 'waived'] },
-      },
-    });
-    if (unresolved) return;
-    await this.prisma.$transaction([
-      this.prisma.cancellation.updateMany({
-        where: { id: row.cancellationId, status: 'approved' },
-        data: { status: 'completed' },
-      }),
-      this.prisma.serviceRequest.updateMany({
-        where: { id: row.requestId, status: 'cancelling' },
-        data: {
-          status: 'cancelled',
-          updatedAt: new Date(),
-          version: { increment: 1 },
-        },
-      }),
-    ]);
   }
 }

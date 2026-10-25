@@ -1,32 +1,49 @@
-import {
-  createHash,
-  createHmac,
-  randomUUID,
-  timingSafeEqual,
-} from 'node:crypto';
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { Inject } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable } from '@nestjs/common';
+import { Payment, Prisma } from '@prisma/client';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 import { ActorService } from '../platform/actor/actor.service';
-import {
-  requireCustomer,
-  requirePermission,
-} from '../platform/actor/actor.guards';
+import { requirePermission } from '../platform/actor/actor.guards';
 import { AppError } from '../platform/errors/app-error';
 import {
+  IDEMPOTENCY_TTL_MS,
   IdempotencyService,
   hashRequest,
 } from '../platform/idempotency/idempotency.service';
-import { NotificationDispatcher } from '../notifications/notification-dispatcher';
-import { OutboxService } from '../platform/outbox/outbox.service';
-import { TimersService } from '../platform/timers/timers.service';
+import { RequestCommandRunner } from '../requests/command-runner';
+import { RequestEventsService } from '../requests/events/request-events.service';
+import { formatRequestId } from '../requests/domain/statuses';
+import { resolveRequestId } from '../requests/request-ref';
 import { PrismaService } from '../prisma/prisma.service';
 import { UploadsService } from '../uploads/uploads.service';
 import type { RequestUser } from '../common/types/request-user';
+import { amountDue } from './domain/amount-due';
+import {
+  PENDING_ATTEMPT_WINDOW_MS,
+  pendingCheckDueAt,
+} from './domain/pending-attempt';
+import { compareTransaction } from './domain/transaction-match';
 import type { PaymentGateway, VerifiedTransaction } from './payment-gateway';
+import { toPaymentDto } from './payment.projection';
 
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
+
+export const NOT_AWAITING_PAYMENT = 'This quote is no longer awaiting payment.';
+export const PAYMENT_IN_PROGRESS =
+  'A payment is already in progress. Check its status before trying again.';
+export const AMOUNT_MISMATCH = 'The payment amount must match the amount due.';
+export const SAME_ACTOR_RECONCILE =
+  'Another staff member must reconcile this payment.';
+const NOT_AWAITING_RECONCILIATION =
+  'This payment is not awaiting reconciliation.';
+// new message: not in spec
+const REFERENCE_USED = 'This payment reference has already been used.';
+// new message: not in spec
+const FUTURE_PAID_AT = 'The payment date cannot be in the future.';
+
+/** Paystack statuses that confirm no charge happened (05 §8: release the attempt only then). */
+const NO_CHARGE_STATUSES = new Set(['failed', 'abandoned']);
+
 const notFound = () =>
   new AppError(
     404,
@@ -37,19 +54,25 @@ const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
 const validation = (message: string) =>
   new AppError(422, 'VALIDATION_ERROR', message);
-const asRecord = (value: unknown): Record<string, unknown> =>
-  value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-const metadataRecord = (value: unknown): Record<string, unknown> => {
-  if (typeof value === 'string') {
-    try {
-      return asRecord(JSON.parse(value));
-    } catch {
-      return {};
-    }
-  }
-  return asRecord(value);
+
+type InitiateResponse = {
+  paymentId: string;
+  authorizationUrl: string;
+  reference: string;
+};
+type StoredInitiate = Partial<InitiateResponse> & { inFlight?: boolean };
+
+export type RecheckResult = 'settled' | 'failed' | 'pending' | 'quarantined';
+
+type QuarantineInput = {
+  payment: {
+    id: string;
+    requestId: string;
+    reference: string;
+    quoteId: string;
+  } | null;
+  reference: string;
+  reason: string;
 };
 
 @Injectable()
@@ -59,11 +82,10 @@ export class PaymentsService {
     private readonly actors: ActorService,
     private readonly idempotency: IdempotencyService,
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
-    private readonly config: ConfigService,
     private readonly uploads: UploadsService,
-    private readonly notifications: NotificationDispatcher,
-    private readonly timers: TimersService,
-    private readonly outbox: OutboxService,
+    private readonly requestEvents: RequestEventsService,
+    private readonly runner: RequestCommandRunner,
+    private readonly dispatcher: NotificationDispatcher,
   ) {}
 
   async openForCancellation(
@@ -100,26 +122,33 @@ export class PaymentsService {
   async getRequestPayments(user: RequestUser, ref: string) {
     const actor = await this.actors.resolve(user.id);
     const request = await this.findRequest(ref);
-    if (actor.kind !== 'staff' && request.ownerId !== user.id) throw notFound();
-    if (actor.kind === 'staff' && actor.staff?.status !== 'active')
-      throw new AppError(403, 'FORBIDDEN', 'Your staff account is not active.');
-    const quote = await this.prisma.quote.findFirst({
-      where: { requestId: request.id, status: 'accepted' },
-      orderBy: { version: 'desc' },
-    });
-    const rows = await this.prisma.payment.findMany({
-      where: { requestId: request.id },
-      orderBy: { createdAt: 'desc' },
-    });
-    const refunds = await this.prisma.refund.findMany({
-      where: { requestId: request.id },
-      orderBy: { createdAt: 'desc' },
-    });
+    const isStaff = actor.kind === 'staff';
+    if (!isStaff && request.ownerId !== user.id) throw notFound();
+    if (isStaff && actor.staff?.status !== 'active') throw notFound();
+    const [quote, rows, refunds] = await Promise.all([
+      this.prisma.quote.findFirst({
+        where: { requestId: request.id, status: 'accepted' },
+        orderBy: { version: 'desc' },
+      }),
+      this.prisma.payment.findMany({
+        where: { requestId: request.id },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.refund.findMany({
+        where: { requestId: request.id },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
     const canViewAmount =
-      actor.kind !== 'staff' ||
-      actor.staff?.permissions.has('view.pricing') === true;
+      !isStaff || actor.staff?.permissions.has('view.pricing') === true;
+    const completedRefunds = refunds
+      .filter((refund) => refund.status === 'completed')
+      .reduce((sum, refund) => sum + refund.amount, 0n);
     return {
-      amountDue: canViewAmount && quote ? Number(quote.total) : 0,
+      amountDue:
+        canViewAmount && quote
+          ? Number(amountDue(quote.total, rows, completedRefunds))
+          : null,
       dueAt: quote?.paymentDueAt ?? null,
       offlineInstructions:
         (
@@ -128,78 +157,178 @@ export class PaymentsService {
             select: { value: true },
           })
         )?.value ?? null,
-      payments: rows.map((row) => ({
-        id: row.id,
-        amount: canViewAmount ? Number(row.amount) : null,
-        method: row.method,
-        status: row.status,
-        reference: row.reference,
-        channel: row.channel,
-        paidAt: row.paidAt,
-        createdAt: row.createdAt,
-      })),
+      // Staff without view.pricing see status flags only: no figures, references or channels (05 §10).
+      payments: rows.map((row) =>
+        canViewAmount
+          ? {
+              id: row.id,
+              amount: Number(row.amount),
+              method: row.method,
+              status: row.status,
+              reference: row.reference,
+              channel: row.channel,
+              paidAt: row.paidAt,
+              createdAt: row.createdAt,
+            }
+          : {
+              id: row.id,
+              amount: null,
+              method: row.method,
+              status: row.status,
+              paidAt: row.paidAt,
+              createdAt: row.createdAt,
+            },
+      ),
       refunds: refunds.map((row) => ({
         id: row.id,
-        amount: canViewAmount ? Number(row.amount) : undefined,
+        amount: canViewAmount ? Number(row.amount) : null,
         status: row.status,
-        reason: row.reason,
+        reason: canViewAmount ? row.reason : null,
       })),
     };
   }
 
-  async initiate(user: RequestUser, ref: string, key: string, url: string) {
-    const actor = await this.actors.resolve(user.id);
-    requireCustomer(actor);
+  async initiate(
+    user: RequestUser,
+    ref: string,
+    key: string,
+    url: string,
+  ): Promise<InitiateResponse> {
     const requestHash = hashRequest('POST', url, { method: 'paystack' });
     const replay = await this.idempotency.lookup(user.id, key, requestHash);
-    if (replay)
-      return replay.body as {
+    if (replay) {
+      const stored = replay.body as StoredInitiate;
+      if (stored.inFlight)
+        throw new AppError(409, 'PAYMENT_IN_PROGRESS', PAYMENT_IN_PROGRESS);
+      return stored as InitiateResponse;
+    }
+    const actor = await this.actors.resolve(user.id);
+    const attempt: {
+      requestId?: string;
+      quoteId?: string;
+      paymentId?: string;
+      reference?: string;
+      email?: string;
+      amount?: number;
+    } = {};
+    // 05 §6.1: the pending row, its 30-minute check and the idempotency reservation commit before Paystack is called.
+    await this.runner.run(
+      {
+        command: 'payment.initiate',
+        actor,
+        requestRef: ref,
+        input: { method: 'paystack' },
+      },
+      async (ctx) => {
+        const quote = await ctx.tx.quote.findFirst({
+          where: { requestId: ctx.snap.id, status: 'accepted' },
+          orderBy: { version: 'desc' },
+        });
+        if (!quote) throw conflict(NOT_AWAITING_PAYMENT);
+        const owner = await ctx.tx.user.findUnique({
+          where: { id: ctx.snap.ownerId },
+          select: { email: true },
+        });
+        if (!owner?.email)
+          throw validation(
+            'Add an email address to your account before paying.',
+          );
+        const reference = `xpro_${randomUUID().replaceAll('-', '')}`;
+        const payment = await ctx.tx.payment.create({
+          data: {
+            requestId: ctx.snap.id,
+            quoteId: quote.id,
+            quoteVersion: quote.version,
+            amount: quote.total,
+            method: 'paystack',
+            status: 'pending',
+            reference,
+          },
+        });
+        ctx.timers.start(
+          'payment.pendingCheck',
+          pendingCheckDueAt(ctx.now),
+          payment.id,
+        );
+        ctx.audit('Payment initiated', {
+          resourceType: 'payment',
+          resourceId: payment.id,
+          changes: {
+            reference,
+            amount: Number(quote.total),
+            quoteVersion: quote.version,
+          },
+        });
+        await ctx.tx.idempotencyKey.deleteMany({
+          where: { actorId: user.id, key, expiresAt: { lte: ctx.now } },
+        });
+        await ctx.tx.idempotencyKey.createMany({
+          data: [
+            {
+              actorId: user.id,
+              key,
+              requestHash,
+              status: 202,
+              response: {
+                inFlight: true,
+                paymentId: payment.id,
+                reference,
+              },
+              createdAt: ctx.now,
+              expiresAt: new Date(
+                ctx.now.getTime() + PENDING_ATTEMPT_WINDOW_MS,
+              ),
+            },
+          ],
+          skipDuplicates: true,
+        });
+        Object.assign(attempt, {
+          requestId: ctx.snap.id,
+          quoteId: quote.id,
+          paymentId: payment.id,
+          reference,
+          email: owner.email,
+          amount: Number(quote.total),
+        });
+        return { bumpVersion: false };
+      },
+    );
+    const { requestId, quoteId, paymentId, reference, email, amount } =
+      attempt as {
+        requestId: string;
+        quoteId: string;
         paymentId: string;
-        authorizationUrl: string;
         reference: string;
+        email: string;
+        amount: number;
       };
-    const request = await this.findRequest(ref);
-    if (request.ownerId !== user.id) throw notFound();
-    const quote = await this.prisma.quote.findFirst({
-      where: { requestId: request.id, status: 'accepted' },
-      orderBy: { version: 'desc' },
-    });
-    if (request.status !== 'awaiting_payment' || !quote)
-      throw conflict('There is no accepted quote awaiting payment.');
-    const owner = await this.prisma.user.findUnique({
-      where: { id: user.id },
-      select: { email: true },
-    });
-    if (!owner?.email)
-      throw validation('Add an email address to your account before paying.');
-    const reference = `xpro_${randomUUID().replaceAll('-', '')}`;
-    const payment = await this.prisma.payment.create({
-      data: {
-        requestId: request.id,
-        quoteId: quote.id,
-        quoteVersion: quote.version,
-        amount: quote.total,
-        method: 'paystack',
-        status: 'pending',
+    let authorizationUrl: string;
+    try {
+      ({ authorizationUrl } = await this.gateway.initialize({
+        email,
+        amount,
         reference,
-      },
-    });
-    const result = await this.gateway.initialize({
-      email: owner.email,
-      amount: Number(quote.total),
-      reference,
-      metadata: {
-        requestId: request.id,
-        quoteId: quote.id,
-        paymentId: payment.id,
-      },
-    });
-    const response = {
-      paymentId: payment.id,
-      authorizationUrl: result.authorizationUrl,
+        metadata: { requestId, quoteId, paymentId },
+      }));
+    } catch (error) {
+      await this.failInitialization(requestId, paymentId);
+      await this.prisma.idempotencyKey.deleteMany({
+        where: { actorId: user.id, key, requestHash },
+      });
+      throw error;
+    }
+    const response: InitiateResponse = {
+      paymentId,
+      authorizationUrl,
       reference,
     };
-    await this.idempotency.store(user.id, key, requestHash, 202, response);
+    await this.prisma.idempotencyKey.updateMany({
+      where: { actorId: user.id, key, requestHash },
+      data: {
+        response,
+        expiresAt: new Date(Date.now() + IDEMPOTENCY_TTL_MS),
+      },
+    });
     return response;
   }
 
@@ -211,151 +340,252 @@ export class PaymentsService {
       channel: string;
       reference: string;
       paidAt: string;
-      proofFileId: string;
+      proofFileId?: string;
       note?: string;
     },
   ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payment.record');
-    const request = await this.findRequest(ref);
-    const quote = await this.prisma.quote.findFirst({
-      where: { requestId: request.id, status: 'accepted' },
-      orderBy: { version: 'desc' },
-    });
-    if (!quote || request.status !== 'awaiting_payment')
-      throw conflict('There is no accepted quote awaiting payment.');
-    if (BigInt(dto.amount) !== quote.total)
-      throw validation('The payment amount must match the amount due.');
-    if (
-      await this.prisma.payment.findUnique({
-        where: { reference: dto.reference },
-      })
-    )
-      throw conflict('This payment reference has already been used.');
     const paymentId = randomUUID();
-    return this.prisma.$transaction(async (tx) => {
-      await this.uploads.attach(
-        tx,
-        [dto.proofFileId],
-        userId,
-        'payment_proof',
-        'payment',
-        paymentId,
-      );
-      return tx.payment.create({
-        data: {
-          id: paymentId,
-          requestId: request.id,
-          quoteId: quote.id,
-          quoteVersion: quote.version,
-          amount: BigInt(dto.amount),
-          method: 'offline',
-          channel: dto.channel,
-          status: 'recorded',
-          reference: dto.reference,
-          paidAt: new Date(dto.paidAt),
-          proofUploadId: dto.proofFileId,
-          recordedBy: userId,
-          note: dto.note?.trim() || null,
+    const recorded: { row?: Payment } = {};
+    try {
+      await this.runner.run(
+        {
+          command: 'payment.recordOffline',
+          actor,
+          requestRef: ref,
+          input: dto,
         },
-      });
-    });
+        async (ctx) => {
+          const quote = await ctx.tx.quote.findFirst({
+            where: { requestId: ctx.snap.id, status: 'accepted' },
+            orderBy: { version: 'desc' },
+          });
+          if (!quote) throw conflict(NOT_AWAITING_PAYMENT);
+          const collected = await ctx.tx.payment.findMany({
+            where: { requestId: ctx.snap.id },
+            select: { amount: true, status: true },
+          });
+          if (BigInt(dto.amount) !== amountDue(quote.total, collected))
+            throw validation(AMOUNT_MISMATCH);
+          const paidAt = new Date(dto.paidAt);
+          if (paidAt.getTime() > ctx.now.getTime())
+            throw validation(FUTURE_PAID_AT);
+          if (
+            await ctx.tx.payment.findUnique({
+              where: { reference: dto.reference },
+              select: { id: true },
+            })
+          )
+            throw conflict(REFERENCE_USED);
+          await this.uploads.attach(
+            ctx.tx,
+            [dto.proofFileId ?? ''],
+            userId,
+            'payment_proof',
+            'payment',
+            paymentId,
+          );
+          recorded.row = await ctx.tx.payment.create({
+            data: {
+              id: paymentId,
+              requestId: ctx.snap.id,
+              quoteId: quote.id,
+              quoteVersion: quote.version,
+              amount: BigInt(dto.amount),
+              method: 'offline',
+              channel: dto.channel,
+              status: 'recorded',
+              reference: dto.reference,
+              paidAt,
+              proofUploadId: dto.proofFileId,
+              recordedBy: userId,
+              note: dto.note?.trim() || null,
+            },
+          });
+          ctx.audit('Offline payment recorded', {
+            resourceType: 'payment',
+            resourceId: paymentId,
+            note: dto.note?.trim() || undefined,
+            changes: {
+              reference: dto.reference,
+              channel: dto.channel,
+              amount: dto.amount,
+              proofFileId: dto.proofFileId,
+              recordedBy: userId,
+            },
+          });
+          ctx.approvals.open('offline_payment', paymentId);
+          ctx.notify('payment.offline_recorded', {
+            requestCode: ctx.snap.number,
+          });
+          return { bumpVersion: false };
+        },
+      );
+    } catch (error) {
+      // Another request took the reference between the check and the insert.
+      if (isUniqueViolation(error)) throw conflict(REFERENCE_USED);
+      throw error;
+    }
+    return toPaymentDto(recorded.row!);
   }
 
   async reconcile(userId: string, paymentId: string, note: string) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payment.record');
-    const payment = await this.prisma.payment.findUnique({
+    const known = await this.prisma.payment.findUnique({
       where: { id: paymentId },
+      select: { requestId: true },
     });
-    if (
-      !payment ||
-      payment.method !== 'offline' ||
-      payment.status !== 'recorded'
-    )
-      throw conflict('This payment is not awaiting reconciliation.');
-    if (payment.recordedBy === userId)
-      throw conflict('Another staff member must reconcile this payment.');
-    if (!note.trim()) throw validation('Add a reconciliation note.');
-    const settled = await this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string }>>(
-        Prisma.sql`SELECT id FROM service_requests WHERE id = ${payment.requestId}::uuid FOR UPDATE`,
-      );
-      if (!locked.length) throw notFound();
-      const request = await tx.serviceRequest.findUnique({
-        where: { id: payment.requestId },
-      });
-      const quote = await tx.quote.findUnique({
-        where: { id: payment.quoteId },
-      });
-      if (!request || !quote) throw notFound();
-      if (payment.amount !== quote.total)
-        throw validation('The payment amount must match the amount due.');
-      if (request.status !== 'awaiting_payment' || quote.status !== 'accepted')
-        throw conflict(
-          'This payment is no longer due for the current request.',
+    if (!known) throw conflict(NOT_AWAITING_RECONCILIATION);
+    const settled: {
+      row?: Payment;
+      afterCommit?: () => Promise<void>;
+    } = {};
+    await this.runner.run(
+      {
+        command: 'payment.reconcile',
+        actor,
+        requestRef: known.requestId,
+        input: { note },
+      },
+      async (ctx) => {
+        const payment = await ctx.tx.payment.findUnique({
+          where: { id: paymentId },
+        });
+        if (
+          !payment ||
+          payment.method !== 'offline' ||
+          payment.status !== 'recorded'
+        )
+          throw conflict(NOT_AWAITING_RECONCILIATION);
+        // Needs the recorder's id, which the snapshot lacks (05 §6.2, §11: 403 same actor).
+        if (payment.recordedBy === userId)
+          throw new AppError(403, 'FORBIDDEN', SAME_ACTOR_RECONCILE);
+        const quote = await ctx.tx.quote.findUnique({
+          where: { id: payment.quoteId },
+        });
+        if (!quote) throw notFound();
+        if (payment.amount !== quote.total) throw validation(AMOUNT_MISMATCH);
+        const claimed = await ctx.tx.payment.updateMany({
+          where: {
+            id: payment.id,
+            status: 'recorded',
+            recordedBy: { not: userId },
+          },
+          data: {
+            status: 'paid',
+            reconciledBy: userId,
+            reconciledAt: ctx.now,
+            note: `${payment.note ?? ''}${payment.note ? '\n' : ''}${note.trim()}`,
+          },
+        });
+        if (claimed.count !== 1)
+          throw conflict('This payment is no longer awaiting reconciliation.');
+        // The money was received, so it settles even when the request has lapsed or was cancelled; the late branch opens the full refund (05 §7).
+        const events = await this.requestEvents.onPaymentSettled(
+          ctx.tx,
+          payment.requestId,
+          payment.quoteId,
+          payment.id,
         );
-      const changed = await tx.payment.updateMany({
-        where: {
-          id: payment.id,
-          status: 'recorded',
-          recordedBy: { not: userId },
-        },
-        data: {
-          status: 'paid',
-          reconciledBy: userId,
-          reconciledAt: new Date(),
-          note: `${payment.note ?? ''}${payment.note ? '\n' : ''}${note.trim()}`,
-        },
-      });
-      if (!changed.count)
-        throw conflict('This payment is no longer awaiting reconciliation.');
-      await this.settleRequest(
-        tx,
-        request.id,
-        payment.id,
-        payment.reference,
-        null,
-      );
-      return tx.payment.findUniqueOrThrow({ where: { id: payment.id } });
-    });
-    await this.timers.stop(this.prisma, {
-      requestId: payment.requestId,
-      kinds: ['T9.reminder24h', 'T9.reminder72h', 'T9.lapse'],
-      refId: payment.quoteId,
-    });
-    await this.outbox.kick();
-    return settled;
+        settled.afterCommit = events.afterCommit;
+        ctx.approvals.close('offline_payment', payment.id, 'reconciled');
+        ctx.audit('Offline payment reconciled', {
+          resourceType: 'payment',
+          resourceId: payment.id,
+          note: note.trim(),
+          changes: {
+            reference: payment.reference,
+            recordedBy: payment.recordedBy,
+            reconciledBy: userId,
+            before: { status: 'recorded' },
+            after: { status: 'paid' },
+            requestSettled: events.settled,
+          },
+        });
+        settled.row = await ctx.tx.payment.findUniqueOrThrow({
+          where: { id: payment.id },
+        });
+        return { bumpVersion: false };
+      },
+    );
+    await settled.afterCommit?.();
+    return toPaymentDto(settled.row!);
   }
 
   async rejectOffline(userId: string, paymentId: string, reason: string) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payment.record');
-    const payment = await this.prisma.payment.findUnique({
+    const known = await this.prisma.payment.findUnique({
       where: { id: paymentId },
+      select: { requestId: true },
     });
-    if (
-      !payment ||
-      payment.method !== 'offline' ||
-      payment.status !== 'recorded'
-    )
-      throw conflict('This payment is not awaiting reconciliation.');
-    if (payment.recordedBy === userId)
-      throw conflict('Another staff member must review this payment.');
-    if (!reason.trim())
-      throw validation('Add a reason for rejecting this payment.');
-    return this.prisma.payment.update({
-      where: { id: paymentId },
-      data: {
-        status: 'failed',
-        failureReason: reason.trim(),
-        reconciledBy: userId,
-        reconciledAt: new Date(),
+    if (!known) throw conflict(NOT_AWAITING_RECONCILIATION);
+    const rejected: { row?: Payment } = {};
+    await this.runner.run(
+      {
+        command: 'payment.rejectOffline',
+        actor,
+        requestRef: known.requestId,
+        input: { reason },
       },
-    });
+      async (ctx) => {
+        const payment = await ctx.tx.payment.findUnique({
+          where: { id: paymentId },
+        });
+        if (
+          !payment ||
+          payment.method !== 'offline' ||
+          payment.status !== 'recorded'
+        )
+          throw conflict(NOT_AWAITING_RECONCILIATION);
+        // 05 §7: the recorder is never the reviewer; same message and 403 as reconcile.
+        if (payment.recordedBy === userId)
+          throw new AppError(403, 'FORBIDDEN', SAME_ACTOR_RECONCILE);
+        const claimed = await ctx.tx.payment.updateMany({
+          where: {
+            id: payment.id,
+            status: 'recorded',
+            recordedBy: { not: userId },
+          },
+          data: {
+            status: 'failed',
+            failureReason: reason.trim(),
+            reconciledBy: userId,
+            reconciledAt: ctx.now,
+          },
+        });
+        if (claimed.count !== 1)
+          throw conflict('This payment is no longer awaiting reconciliation.');
+        ctx.approvals.close('offline_payment', payment.id, 'rejected');
+        ctx.audit('Offline payment rejected', {
+          resourceType: 'payment',
+          resourceId: payment.id,
+          note: reason.trim(),
+          changes: {
+            reference: payment.reference,
+            recordedBy: payment.recordedBy,
+            reconciledBy: userId,
+            before: { status: 'recorded' },
+            after: { status: 'failed' },
+          },
+        });
+        rejected.row = await ctx.tx.payment.findUniqueOrThrow({
+          where: { id: payment.id },
+        });
+        return { bumpVersion: false };
+      },
+    );
+    return toPaymentDto(rejected.row!);
   }
 
-  async recheckPending(paymentId: string) {
+  /**
+   * Asks Paystack what became of a pending attempt (05 §8). A matching success
+   * settles it; a mismatch is quarantined; `failed` or `abandoned` releases
+   * the attempt once it is 30 minutes old; anything else stays pending.
+   */
+  async recheckPending(paymentId: string): Promise<RecheckResult | null> {
     const payment = await this.prisma.payment.findUnique({
       where: { id: paymentId },
     });
@@ -364,439 +594,242 @@ export class PaymentsService {
       payment.status !== 'pending' ||
       payment.method !== 'paystack'
     )
-      return false;
+      return null;
     const verified = await this.gateway.verify(payment.reference);
+    if (verified.status === 'success') {
+      const outcome = await this.matchOrQuarantine(payment, verified);
+      if (!outcome.matches) return 'quarantined';
+      const result = await this.settleCharge(payment, verified, {
+        source: 'recheck',
+      });
+      return result.claimed ? 'settled' : 'pending';
+    }
+    const age = Date.now() - payment.createdAt.getTime();
     if (
-      !this.matches(
-        verified,
-        payment,
-        await this.getOwnerEmail(payment.requestId),
-      )
-    )
-      return false;
-    await this.prisma.$transaction(async (tx) => {
-      const current = await tx.payment.findUnique({
-        where: { id: payment.id },
-      });
-      if (!current || current.status !== 'pending') return;
-      await tx.payment.update({
-        where: { id: payment.id },
-        data: {
-          status: 'paid',
-          paidAt: verified.paidAt ? new Date(verified.paidAt) : new Date(),
-          gatewayTransactionId:
-            verified.id == null ? null : String(verified.id),
-          gatewayChannel: verified.channel ?? null,
-        },
-      });
-      await this.settleRequest(
-        tx,
+      NO_CHARGE_STATUSES.has(verified.status) &&
+      age >= PENDING_ATTEMPT_WINDOW_MS
+    ) {
+      await this.failAttempt(
         payment.requestId,
         payment.id,
-        payment.reference,
-        verified,
+        'Checkout was not completed.',
+        'Payment attempt closed (no charge)',
       );
-    });
-    await this.timers.stop(this.prisma, {
-      requestId: payment.requestId,
-      kinds: ['T9.reminder24h', 'T9.reminder72h', 'T9.lapse'],
-      refId: payment.quoteId,
-    });
-    await this.outbox.kick();
-    return true;
+      return 'failed';
+    }
+    return 'pending';
   }
 
-  verifyWebhookSignature(rawBody: Buffer, signature: string | undefined) {
-    const secret = this.config.get<string>('PAYSTACK_SECRET_KEY');
-    if (!secret || !signature) return false;
-    const expected = createHmac('sha512', secret).update(rawBody).digest();
-    let actual: Buffer;
-    try {
-      actual = Buffer.from(signature, 'hex');
-    } catch {
-      return false;
-    }
-    return (
-      actual.length === expected.length && timingSafeEqual(actual, expected)
-    );
-  }
-
-  async handleWebhook(
-    rawBody: Buffer,
-    signature: string | undefined,
-    body: unknown,
-  ) {
-    if (!this.verifyWebhookSignature(rawBody, signature))
-      throw new UnauthorizedException('Invalid Paystack signature.');
-    const digest = createHash('sha256').update(rawBody).digest('hex');
-    const event = asRecord(body);
-    const eventName = typeof event.event === 'string' ? event.event : 'unknown';
-    const data = asRecord(event.data);
-    const reference =
-      typeof data.reference === 'string' ? data.reference : null;
-    try {
-      await this.prisma.gatewayEvent.create({
-        data: {
-          fingerprint: digest,
-          event: eventName,
-          reference,
-          rawBodyDigest: digest,
-          signatureValid: true,
-          status: 'processing',
-        },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      )
-        return { accepted: true, duplicate: true };
-      throw error;
-    }
-    try {
-      if (eventName === 'refund.processed') {
-        const refundId =
-          typeof data.id === 'string' || typeof data.id === 'number'
-            ? String(data.id)
-            : '';
-        const refund = refundId
-          ? await this.prisma.refund.findFirst({
-              where: { gatewayRefundId: refundId },
-            })
-          : null;
-        const verified = refund
-          ? await this.gateway.verifyRefund(refundId)
-          : null;
-        if (
-          !refund ||
-          !verified ||
-          verified.status.toLowerCase() !== 'processed' ||
-          (verified.amount != null && verified.amount !== Number(refund.amount))
-        ) {
-          await this.prisma.gatewayEvent.update({
-            where: { fingerprint: digest },
-            data: {
-              status: 'ignored',
-              lastError:
-                'Refund status could not be verified against an approved refund.',
-              processedAt: new Date(),
-            },
-          });
-          return { accepted: true, duplicate: false };
-        }
-        await this.prisma.$transaction([
-          this.prisma.refund.update({
-            where: { id: refund.id },
-            data: { status: 'completed', completedAt: new Date() },
-          }),
-          this.prisma.gatewayEvent.update({
-            where: { fingerprint: digest },
-            data: { status: 'processed', processedAt: new Date() },
-          }),
-        ]);
-        await this.resolveCancellation(refund.id);
-        return { accepted: true, duplicate: false };
-      }
-      if (
-        ['transfer.success', 'transfer.failed', 'transfer.reversed'].includes(
-          eventName,
-        ) &&
-        reference
-      ) {
-        const attempt = await this.prisma.transferAttempt.findUnique({
-          where: { reference },
-          include: { payout: true },
-        });
-        const verified = attempt
-          ? await this.gateway.verifyTransfer(reference)
-          : null;
-        const expectedStatus =
-          eventName === 'transfer.success'
-            ? 'success'
-            : eventName === 'transfer.reversed'
-              ? 'reversed'
-              : 'failed';
-        if (
-          !attempt ||
-          !verified ||
-          verified.reference !== reference ||
-          verified.status.toLowerCase() !== expectedStatus
-        ) {
-          await this.prisma.gatewayEvent.update({
-            where: { fingerprint: digest },
-            data: {
-              status: 'ignored',
-              lastError: 'Transfer status could not be verified.',
-              processedAt: new Date(),
-            },
-          });
-          return { accepted: true, duplicate: false };
-        }
-        await this.prisma.$transaction([
-          this.prisma.transferAttempt.update({
-            where: { id: attempt.id },
-            data: { status: expectedStatus, settledAt: new Date() },
-          }),
-          this.prisma.payout.update({
-            where: { id: attempt.payoutId },
-            data: {
-              status:
-                expectedStatus === 'success'
-                  ? 'paid'
-                  : expectedStatus === 'reversed'
-                    ? 'reversed'
-                    : 'failed',
-              ...(expectedStatus === 'success' ? { paidAt: new Date() } : {}),
-            },
-          }),
-          this.prisma.gatewayEvent.update({
-            where: { fingerprint: digest },
-            data: { status: 'processed', processedAt: new Date() },
-          }),
-        ]);
-        return { accepted: true, duplicate: false };
-      }
-      if (eventName !== 'charge.success' || !reference) {
-        await this.prisma.gatewayEvent.update({
-          where: { fingerprint: digest },
-          data: { status: 'ignored', processedAt: new Date() },
-        });
-        return { accepted: true, duplicate: false };
-      }
-      const verified = await this.gateway.verify(reference);
-      const payment = await this.prisma.payment.findUnique({
-        where: { reference },
-      });
-      if (
-        !payment ||
-        !this.matches(
-          verified,
-          payment,
-          await this.getOwnerEmail(payment.requestId),
-        )
-      ) {
-        await this.prisma.gatewayEvent.update({
-          where: { fingerprint: digest },
-          data: {
-            status: 'ignored',
-            lastError: 'Verified transaction did not match the payment record.',
-            processedAt: new Date(),
+  /**
+   * 05 §7 and C.4: lock the request, claim `pending -> paid` conditionally,
+   * and only then move the request in the same transaction. A claim that
+   * matches no row (a duplicate or out-of-order event) has no effect at all.
+   * A `failed` Paystack attempt can still be claimed: a verified charge means
+   * money arrived, and the late branch refunds it when the request moved on.
+   */
+  async settleCharge(
+    payment: { id: string; requestId: string; quoteId: string; status: string },
+    verified: VerifiedTransaction,
+    options: {
+      source: 'webhook' | 'recheck';
+      onSettled?: (tx: Prisma.TransactionClient) => Promise<void>;
+    },
+  ): Promise<{ claimed: boolean }> {
+    const outcome = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM service_requests WHERE id = ${payment.requestId} FOR UPDATE`,
+        );
+        const claimed = await tx.payment.updateMany({
+          where: {
+            id: payment.id,
+            method: 'paystack',
+            status: { in: ['pending', 'failed'] },
           },
-        });
-        return { accepted: true, duplicate: false };
-      }
-      if (payment.status === 'paid') {
-        await this.prisma.gatewayEvent.update({
-          where: { fingerprint: digest },
-          data: { status: 'processed', processedAt: new Date() },
-        });
-        return { accepted: true, duplicate: true };
-      }
-      await this.prisma.$transaction(async (tx) => {
-        await tx.payment.update({
-          where: { id: payment.id },
           data: {
             status: 'paid',
             paidAt: verified.paidAt ? new Date(verified.paidAt) : new Date(),
             gatewayTransactionId:
               verified.id == null ? null : String(verified.id),
             gatewayChannel: verified.channel ?? null,
+            failureReason: null,
           },
         });
-        await this.settleRequest(
+        if (claimed.count !== 1) {
+          await options.onSettled?.(tx);
+          return { claimed: false, afterCommit: undefined };
+        }
+        await tx.auditLog.create({
+          data: {
+            actorType: 'system',
+            entityType: 'payment',
+            entityId: payment.id,
+            action: 'Payment settled',
+            metadata: {
+              requestId: payment.requestId,
+              reference: verified.reference,
+              source: options.source,
+              before: { status: payment.status },
+              after: { status: 'paid' },
+            },
+          },
+        });
+        const events = await this.requestEvents.onPaymentSettled(
           tx,
           payment.requestId,
+          payment.quoteId,
           payment.id,
-          payment.reference,
-          verified,
         );
-        await tx.gatewayEvent.update({
-          where: { fingerprint: digest },
-          data: { status: 'processed', processedAt: new Date() },
-        });
-      });
-      await this.timers.stop(this.prisma, {
-        requestId: payment.requestId,
-        kinds: ['T9.reminder24h', 'T9.reminder72h', 'T9.lapse'],
-        refId: payment.quoteId,
-      });
-      await this.outbox.kick();
-      return { accepted: true, duplicate: false };
-    } catch (error) {
-      await this.prisma.gatewayEvent.update({
-        where: { fingerprint: digest },
-        data: {
-          status: 'failed',
-          attempts: { increment: 1 },
-          lastError:
-            error instanceof Error
-              ? error.message
-              : 'Webhook processing failed.',
-        },
-      });
-      throw error;
-    }
-  }
-
-  private matches(
-    verified: VerifiedTransaction,
-    payment: { id: string; amount: bigint; requestId: string; quoteId: string },
-    ownerEmail: string | null,
-  ) {
-    const metadata = metadataRecord(verified.metadata);
-    return (
-      verified.status === 'success' &&
-      verified.reference &&
-      verified.amount === Number(payment.amount) &&
-      verified.currency === 'NGN' &&
-      verified.customer?.email?.toLowerCase() === ownerEmail?.toLowerCase() &&
-      metadata.paymentId === payment.id &&
-      metadata.requestId === payment.requestId &&
-      metadata.quoteId === payment.quoteId
-    );
-  }
-
-  private async settleRequest(
-    tx: Prisma.TransactionClient,
-    requestId: string,
-    paymentId: string,
-    reference: string,
-    _verified: VerifiedTransaction | null,
-  ) {
-    const request = await tx.serviceRequest.findUnique({
-      where: { id: requestId },
-    });
-    const payment = await tx.payment.findUnique({ where: { id: paymentId } });
-    if (!request || !payment) throw notFound();
-    const quote = await tx.quote.findUnique({ where: { id: payment.quoteId } });
-    if (!quote) throw notFound();
-    if (request.status !== 'awaiting_payment' || quote.status !== 'accepted') {
-      if (!payment.lateRefundOpened) {
-        await tx.refund.create({
-          data: {
-            paymentId,
-            requestId,
-            amount: payment.amount,
-            status: 'pending_approval',
-            reason:
-              'Late payment received after the request was no longer awaiting payment.',
-            requestedBy: 'system',
-          },
-        });
-        await tx.payment.update({
-          where: { id: paymentId },
-          data: { lateRefundOpened: true },
-        });
-      }
-      await this.notifications.dispatch(
-        tx,
-        'payment.late',
-        {
-          requestCode: `XPR-${String(request.number).padStart(5, '0')}`,
-          reference,
-        },
-        { requestId, ownerId: request.ownerId, actorId: null },
-      );
-      return;
-    }
-    await tx.serviceRequest.update({
-      where: { id: requestId },
-      data: {
-        status: 'ready_to_schedule',
-        version: { increment: 1 },
-        updatedAt: new Date(),
+        await options.onSettled?.(tx);
+        return { claimed: true, afterCommit: events.afterCommit };
       },
-    });
-    await this.notifications.dispatch(
-      tx,
-      'payment.settled_customer',
-      { requestCode: `XPR-${String(request.number).padStart(5, '0')}` },
-      { requestId, ownerId: request.ownerId, actorId: null },
+      { timeout: 15_000 },
     );
-    await this.notifications.dispatch(
-      tx,
-      'payment.settled_provider',
-      { requestCode: `XPR-${String(request.number).padStart(5, '0')}` },
-      { requestId, ownerId: request.ownerId, actorId: null },
-    );
+    await outcome.afterCommit?.();
+    return { claimed: outcome.claimed };
   }
 
-  private async getOwnerEmail(requestId: string) {
+  /** The verified transaction, payment and customer email agree, or the money is quarantined for Finance. */
+  async matchOrQuarantine(
+    payment: {
+      id: string;
+      requestId: string;
+      quoteId: string;
+      reference: string;
+      amount: bigint;
+    },
+    verified: VerifiedTransaction,
+    inTx?: (tx: Prisma.TransactionClient) => Promise<void>,
+  ): Promise<{ matches: boolean; reason?: string }> {
+    const result = compareTransaction(
+      verified,
+      payment,
+      await this.getOwnerEmail(payment.requestId),
+    );
+    if (result.matches) return { matches: true };
+    await this.quarantine(
+      { payment, reference: payment.reference, reason: result.reason },
+      inTx,
+    );
+    return { matches: false, reason: result.reason };
+  }
+
+  /**
+   * 05 §7: a verified charge that does not match is never unlocked and never
+   * dropped. It is audited and Finance and super admins get a mandatory alert.
+   * Repeats for the same payment and reason are not re-alerted.
+   */
+  async quarantine(
+    input: QuarantineInput,
+    inTx?: (tx: Prisma.TransactionClient) => Promise<void>,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await inTx?.(tx);
+      const entityId = input.payment?.id ?? input.reference;
+      const action = 'Payment quarantined';
+      const alerted = await tx.auditLog.findFirst({
+        where: { entityId, action },
+        select: { id: true },
+      });
+      if (alerted) return;
+      await tx.auditLog.create({
+        data: {
+          actorType: 'system',
+          entityType: input.payment ? 'payment' : 'gateway_event',
+          entityId,
+          action,
+          metadata: {
+            requestId: input.payment?.requestId ?? null,
+            reference: input.reference,
+            reason: input.reason,
+          },
+        },
+      });
+      if (input.payment) {
+        const request = await tx.serviceRequest.findUnique({
+          where: { id: input.payment.requestId },
+          select: { number: true },
+        });
+        await this.dispatcher.dispatchAlert(tx, 'payment.quarantined', {
+          requestCode: formatRequestCode(request?.number),
+          reference: input.reference,
+          reason: input.reason,
+        });
+      } else {
+        await this.dispatcher.dispatchAlert(
+          tx,
+          'payment.quarantined_unmatched',
+          { reference: input.reference, reason: input.reason },
+        );
+      }
+    });
+  }
+
+  async getOwnerEmail(requestId: string): Promise<string | null> {
     const request = await this.prisma.serviceRequest.findUnique({
       where: { id: requestId },
       select: { ownerId: true },
     });
     if (!request) return null;
-    return (
-      (
-        await this.prisma.user.findUnique({
-          where: { id: request.ownerId },
-          select: { email: true },
-        })
-      )?.email ?? null
+    const owner = await this.prisma.user.findUnique({
+      where: { id: request.ownerId },
+      select: { email: true },
+    });
+    return owner?.email ?? null;
+  }
+
+  private async failInitialization(requestId: string, paymentId: string) {
+    await this.failAttempt(
+      requestId,
+      paymentId,
+      'Checkout could not be started.',
+      'Payment initialization failed',
     );
   }
 
-  private async resolveCancellation(refundId: string) {
-    const refund = await this.prisma.refund.findUnique({
-      where: { id: refundId },
-      select: { cancellationId: true, requestId: true, paymentId: true },
-    });
-    if (!refund) return;
-    const payment = await this.prisma.payment.findUnique({
-      where: { id: refund.paymentId },
-      select: { amount: true },
-    });
-    const completed = await this.prisma.refund.aggregate({
-      where: {
-        paymentId: refund.paymentId,
-        status: { in: ['completed', 'waived'] },
+  /** `pending -> failed` for an attempt that can no longer be charged. A row that already moved is left alone. */
+  private async failAttempt(
+    requestId: string,
+    paymentId: string,
+    failureReason: string,
+    action: string,
+  ) {
+    await this.runner.runSystem(
+      'payment.attemptFailed',
+      requestId,
+      async (ctx) => {
+        const claimed = await ctx.tx.payment.updateMany({
+          where: { id: paymentId, status: 'pending' },
+          data: { status: 'failed', failureReason },
+        });
+        if (claimed.count !== 1) return { changed: false };
+        ctx.timers.stop('payment.pendingCheck', paymentId);
+        ctx.audit(action, {
+          resourceType: 'payment',
+          resourceId: paymentId,
+          changes: {
+            before: { status: 'pending' },
+            after: { status: 'failed' },
+          },
+        });
+        return { bumpVersion: false };
       },
-      _sum: { amount: true },
-    });
-    const refundedAmount = completed._sum.amount ?? 0n;
-    if (payment && refundedAmount > 0n)
-      await this.prisma.payment.update({
-        where: { id: refund.paymentId },
-        data: {
-          status:
-            refundedAmount >= payment.amount
-              ? 'refunded'
-              : 'partially_refunded',
-        },
-      });
-    if (!refund.cancellationId) return;
-    const open = await this.prisma.refund.count({
-      where: {
-        cancellationId: refund.cancellationId,
-        status: { notIn: ['completed', 'waived'] },
-      },
-    });
-    if (open) return;
-    await this.prisma.$transaction([
-      this.prisma.cancellation.updateMany({
-        where: { id: refund.cancellationId, status: 'approved' },
-        data: { status: 'completed' },
-      }),
-      this.prisma.serviceRequest.updateMany({
-        where: { id: refund.requestId, status: 'cancelling' },
-        data: {
-          status: 'cancelled',
-          version: { increment: 1 },
-          updatedAt: new Date(),
-        },
-      }),
-    ]);
+    );
   }
 
   private async findRequest(ref: string) {
-    const number = /^XPR-(\d+)$/i.exec(ref)?.[1];
-    const request = number
-      ? await this.prisma.serviceRequest.findUnique({
-          where: { number: Number(number) },
-        })
-      : await this.prisma.serviceRequest.findUnique({ where: { id: ref } });
+    const id = await resolveRequestId(this.prisma, ref);
+    const request = id
+      ? await this.prisma.serviceRequest.findUnique({ where: { id } })
+      : null;
     if (!request) throw notFound();
     return request;
   }
 }
+
+const isUniqueViolation = (error: unknown) =>
+  error instanceof Prisma.PrismaClientKnownRequestError &&
+  error.code === 'P2002';
+
+const formatRequestCode = (number: number | undefined) =>
+  number === undefined ? 'A request' : formatRequestId(number);
