@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ActorService } from '../../platform/actor/actor.service';
-import { requirePermission } from '../../platform/actor/actor.guards';
+import { requireAnyPermission } from '../../platform/actor/actor.guards';
 import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import type { RequestUser } from '../../common/types/request-user';
@@ -24,18 +24,19 @@ export class HoldsService {
       kind: 'staff' | 'no_show' | 'provider_suspended' | 'customer_suspended';
       customerNote?: string;
     },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
     const actor = await this.actors.resolve(userId);
-    requirePermission(actor, 'progress.review');
+    requireAnyPermission(actor, ['progress.review', 'dispatch.manage']);
     return this.runner.run(
       {
         command: 'request.hold',
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -44,10 +45,6 @@ export class HoldsService {
           : {}),
       },
       async (ctx) => {
-        if (!['scheduled', 'in_progress'].includes(ctx.snap.status))
-          throw conflict(
-            'Only a scheduled job or work in progress can be put on hold.',
-          );
         await ctx.tx.serviceRequest.update({
           where: { id: ctx.snap.id },
           data: {
@@ -86,18 +83,19 @@ export class HoldsService {
     user: RequestUser,
     requestId: string,
     dto: { note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
     const actor = await this.actors.resolve(user.id);
-    requirePermission(actor, 'progress.review');
+    requireAnyPermission(actor, ['progress.review', 'dispatch.manage']);
     return this.runner.run(
       {
         command: 'request.releaseHold',
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -110,12 +108,8 @@ export class HoldsService {
           where: { id: ctx.snap.id },
           select: { holdPreviousStatus: true, holdKind: true },
         });
-        if (!row?.holdKind || !row.holdPreviousStatus)
-          throw conflict("This job isn't on hold.");
-        if (ctx.snap.providerStanding === 'suspended')
-          throw conflict(
-            'This provider is suspended. Replace them or wait for reactivation.',
-          );
+        // 04 §6.15 row 1 is the runner guard; the previous status is a row column the snapshot lacks.
+        if (!row?.holdPreviousStatus) throw conflict("This job isn't on hold.");
         if (row.holdPreviousStatus === 'scheduled') {
           const schedule = await ctx.tx.schedule.findFirst({
             where: { requestId: ctx.snap.id, status: 'confirmed' },

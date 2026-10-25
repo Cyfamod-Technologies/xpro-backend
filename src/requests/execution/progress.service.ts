@@ -6,10 +6,12 @@ import {
 } from '../../platform/actor/actor.guards';
 import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
+import { PROGRESS_UPDATE_ENTITY } from '../../uploads/entity-types';
 import { UploadsService } from '../../uploads/uploads.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { RequestCommandRunner } from '../command-runner';
+import { resolveRequestId } from '../request-ref';
 import {
   deriveProgressKind,
   progressEvidenceSatisfied,
@@ -29,13 +31,16 @@ export class ProgressService {
     private readonly uploads: UploadsService,
   ) {}
 
-  async list(user: RequestUser, requestId: string) {
+  async list(user: RequestUser, requestRef: string) {
     const actor = await this.actors.resolve(user.id);
-    const request = await this.prisma.serviceRequest.findUnique({
-      where: { id: requestId },
-      select: { id: true, ownerId: true },
-    });
-    if (!request)
+    const requestId = await resolveRequestId(this.prisma, requestRef);
+    const request = requestId
+      ? await this.prisma.serviceRequest.findUnique({
+          where: { id: requestId },
+          select: { id: true, ownerId: true },
+        })
+      : null;
+    if (!request || !requestId)
       throw new AppError(
         404,
         'NOT_FOUND',
@@ -74,7 +79,7 @@ export class ProgressService {
     const uploads = rows.length
       ? await this.prisma.upload.findMany({
           where: {
-            entityType: 'progress_update',
+            entityType: PROGRESS_UPDATE_ENTITY,
             entityId: { in: rows.map((row) => row.id) },
             purpose: 'progress_evidence',
             status: 'attached',
@@ -119,7 +124,7 @@ export class ProgressService {
       attachments: string[];
       issueId?: string;
     },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -131,6 +136,7 @@ export class ProgressService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -252,7 +258,7 @@ export class ProgressService {
           dto.attachments,
           userId,
           'progress_evidence',
-          'progress_update',
+          PROGRESS_UPDATE_ENTITY,
           row.id,
         );
         if (kind === 'completion' || kind === 'rework_completion') {
@@ -267,7 +273,7 @@ export class ProgressService {
           const priorEvidence = prior.length
             ? await ctx.tx.upload.count({
                 where: {
-                  entityType: 'progress_update',
+                  entityType: PROGRESS_UPDATE_ENTITY,
                   entityId: { in: prior.map((item) => item.id) },
                   purpose: 'progress_evidence',
                   status: 'attached',
@@ -310,7 +316,7 @@ export class ProgressService {
     requestId: string,
     updateId: string,
     dto: { approve: boolean; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -324,6 +330,7 @@ export class ProgressService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -368,7 +375,7 @@ export class ProgressService {
         ) {
           const evidence = await ctx.tx.upload.count({
             where: {
-              entityType: 'progress_update',
+              entityType: PROGRESS_UPDATE_ENTITY,
               entityId: update.id,
               purpose: 'progress_evidence',
               status: 'attached',
@@ -505,7 +512,7 @@ export class ProgressService {
       attachments: string[];
       issueId?: string;
     },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -517,6 +524,7 @@ export class ProgressService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -577,7 +585,7 @@ export class ProgressService {
           dto.attachments,
           userId,
           'progress_evidence',
-          'progress_update',
+          PROGRESS_UPDATE_ENTITY,
           row.id,
         );
         if (

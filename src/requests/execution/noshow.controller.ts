@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  Headers,
   Param,
   Post,
   Req,
@@ -14,7 +13,7 @@ import type { Request, Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../../common/types/request-user';
-import { parseEtag } from '../../platform/concurrency/etag.util';
+import { IfMatch } from '../../platform/concurrency/if-match.decorator';
 import { AppError } from '../../platform/errors/app-error';
 import { IdempotencyKey } from '../../platform/idempotency/idempotency-key.decorator';
 import { DecideNoShowDto, RecordNoShowDto } from './noshow.dto';
@@ -38,18 +37,11 @@ export class NoShowController {
       }),
     )
     dto: RecordNoShowDto,
-    @Headers('if-match') tag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = tag ? parseEtag(tag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.noshows.record(
       user.id,
       id,
@@ -74,18 +66,11 @@ export class NoShowController {
       }),
     )
     dto: DecideNoShowDto,
-    @Headers('if-match') tag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = tag ? parseEtag(tag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     if (!dto.outcome)
       throw new AppError(422, 'VALIDATION_ERROR', 'Choose confirm or dismiss.');
     const result = await this.noshows.decide(
@@ -114,18 +99,11 @@ export class NoShowController {
       }),
     )
     dto: DecideNoShowDto,
-    @Headers('if-match') tag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = tag ? parseEtag(tag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.noshows.correct(
       user.id,
       id,

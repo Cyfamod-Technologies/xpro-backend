@@ -19,7 +19,7 @@ export class NoShowService {
     userId: string,
     requestId: string,
     dto: { scheduleId: string; note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -31,6 +31,7 @@ export class NoShowService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -89,7 +90,7 @@ export class NoShowService {
     noShowId: string,
     outcome: 'confirm' | 'dismiss',
     dto: { note: string; version: number },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -101,6 +102,7 @@ export class NoShowService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -182,7 +184,7 @@ export class NoShowService {
     requestId: string,
     noShowId: string,
     dto: { note: string; version: number },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -194,6 +196,7 @@ export class NoShowService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
