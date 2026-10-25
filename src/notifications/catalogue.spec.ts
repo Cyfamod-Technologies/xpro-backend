@@ -384,4 +384,22 @@ describe('notification catalogue', () => {
         });
     });
   });
+
+  it('renders the follow-up and issue-resolved notices for the right audiences (D-15, D-29)', () => {
+    const code = { requestCode: 'XPR-00042' };
+    expect(renderNotification('cancellation.followup', code)).toMatchObject({
+      audience: { kind: 'staff:holders', permission: 'request.cancel' },
+      title: 'Cancellation request waiting',
+    });
+    expect(renderNotification('issue.resolved', code)).toMatchObject({
+      audience: { kind: 'provider:current' },
+      title: 'Issue resolved',
+    });
+    expect(
+      renderNotification('progress.completion_approved', code),
+    ).toMatchObject({
+      audience: { kind: 'customer' },
+      title: 'Please confirm your job is complete',
+    });
+  });
 });

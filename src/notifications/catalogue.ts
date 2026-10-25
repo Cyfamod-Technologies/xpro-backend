@@ -868,6 +868,16 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: XPro approved rework. You can submit a rework update.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
+  // new message: not in spec
+  'issue.resolved': entry<RequestParams>({
+    key: 'issue.resolved',
+    audience: { kind: 'provider:current' },
+    mandatory: false,
+    title: () => 'Issue resolved',
+    message: ({ requestCode }) =>
+      `${requestCode}: XPro resolved the reported issue.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
   'progress.review_needed': entry<RequestParams>({
     key: 'progress.review_needed',
     audience: { kind: 'staff:holders', permission: 'progress.review' },
@@ -966,6 +976,16 @@ export const NOTIFICATION_CATALOGUE = {
     title: () => 'Cancellation request',
     message: ({ requestCode }) =>
       `${requestCode}: the customer requested cancellation.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (04 §8 T19 routes the follow-up per 02 but gives no copy)
+  'cancellation.followup': entry<RequestParams>({
+    key: 'cancellation.followup',
+    audience: { kind: 'staff:holders', permission: 'request.cancel' },
+    mandatory: false,
+    title: () => 'Cancellation request waiting',
+    message: ({ requestCode }) =>
+      `${requestCode}: a cancellation request is still waiting for a decision.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
   'cancellation.rejected': entry<RequestParams>({
