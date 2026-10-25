@@ -24,10 +24,15 @@ export class ApprovalsHooks {
       Record<string, number> | undefined;
     const minutes = Number(deadlines?.[kind] ?? 240);
     const dueAt = addWorkingMinutes(now, minutes, holidays ?? []);
+    const remindAt = addWorkingMinutes(
+      now,
+      Math.floor(minutes / 2),
+      holidays ?? [],
+    );
     await tx.$executeRaw(Prisma.sql`
-      INSERT INTO approval_deadlines (id, kind, item_id, request_id, opened_at, due_at, opened_by)
-      VALUES (gen_random_uuid()::text, ${kind}, ${itemId}, ${requestId}, ${now}, ${dueAt}, ${openedBy ?? null})
-      ON CONFLICT (kind, item_id) WHERE closed_at IS NULL DO UPDATE SET due_at = EXCLUDED.due_at, opened_at = EXCLUDED.opened_at, opened_by = EXCLUDED.opened_by
+      INSERT INTO approval_deadlines (id, kind, item_id, request_id, opened_at, started_at, deadline_working_minutes, remind_at, due_at, opened_by)
+      VALUES (gen_random_uuid()::text, ${kind}, ${itemId}, ${requestId}, ${now}, ${now}, ${minutes}, ${remindAt}, ${dueAt}, ${openedBy ?? null})
+      ON CONFLICT (kind, item_id) WHERE closed_at IS NULL DO UPDATE SET due_at = EXCLUDED.due_at, opened_at = EXCLUDED.opened_at, started_at = EXCLUDED.started_at, deadline_working_minutes = EXCLUDED.deadline_working_minutes, remind_at = EXCLUDED.remind_at, opened_by = EXCLUDED.opened_by
     `);
   }
 
@@ -36,10 +41,11 @@ export class ApprovalsHooks {
     kind: string,
     itemId: string,
     now: Date,
+    reason?: string,
   ): Promise<void> {
     await tx.approvalDeadline.updateMany({
       where: { kind, itemId, closedAt: null },
-      data: { closedAt: now },
+      data: { closedAt: now, closedReason: reason ?? null },
     });
   }
 
