@@ -1,26 +1,29 @@
 import { Injectable } from '@nestjs/common';
-import type { RequestTimer } from '@prisma/client';
-import { NotificationDispatcher } from '../notifications/notification-dispatcher';
-import { OutboxService } from '../platform/outbox/outbox.service';
-import { TimersService } from '../platform/timers/timers.service';
+import type { Prisma, RequestTimer } from '@prisma/client';
 import { TimerKinds } from '../platform/timers/timer-kinds';
 import { TimerRegistry } from '../platform/timers/timer-registry';
-import { PrismaService } from '../prisma/prisma.service';
+import { RequestCommandRunner } from './command-runner';
+import { clarificationAutoCancelDays } from './domain/clarification-timers';
+import type { RequestSnapshot } from './domain/snapshot';
+
+const T6_TIMERS = [
+  TimerKinds.T6Reminder48h,
+  TimerKinds.T6Staff5d,
+  TimerKinds.T6FinalWarning,
+  TimerKinds.T6AutoCancel,
+];
 
 @Injectable()
 export class T6TimerHandlers {
   constructor(
     registry: TimerRegistry,
-    private readonly prisma: PrismaService,
-    private readonly notifications: NotificationDispatcher,
-    private readonly timers: TimersService,
-    private readonly outbox: OutboxService,
+    private readonly runner: RequestCommandRunner,
   ) {
     registry.register(TimerKinds.T6Reminder48h, (timer) =>
       this.notifyIfCurrent(timer, 'request.clarification_reminder'),
     );
     registry.register(TimerKinds.T6Staff5d, (timer) =>
-      this.notifyIfCurrent(timer, 'request.clarification_overdue'),
+      this.notifyIfCurrent(timer, 'request.clarification_overdue', true),
     );
     registry.register(TimerKinds.T6FinalWarning, (timer) =>
       this.notifyIfCurrent(timer, 'request.clarification_final_warning'),
@@ -36,37 +39,22 @@ export class T6TimerHandlers {
       | 'request.clarification_reminder'
       | 'request.clarification_overdue'
       | 'request.clarification_final_warning',
+    opensStaffItem = false,
   ) {
-    const sent = await this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM service_requests WHERE id = ${timer.requestId}::uuid FOR UPDATE
-      `;
-      if (!locked.length) return false;
-      const current = await tx.serviceRequest.findUnique({
-        where: { id: timer.requestId },
-        select: {
-          id: true,
-          number: true,
-          ownerId: true,
-          status: true,
-          intakeState: true,
-          clarificationAskedAt: true,
-        },
-      });
-      if (!isAwaitingResponse(current, timer)) return false;
-      await this.notifications.dispatch(
-        tx,
-        event,
-        { requestCode: formatNumber(current.number) },
-        {
-          requestId: current.id,
-          ownerId: current.ownerId,
-          actorId: null,
-        },
-      );
-      return true;
-    });
-    if (sent) await this.outbox.kick();
+    await this.runner.runSystem(
+      `timer.${timer.kind}`,
+      timer.requestId,
+      async (ctx) => {
+        const askedAt = await clarificationAskedAt(ctx.tx, ctx.snap.id);
+        if (!isAwaitingResponse(ctx.snap, askedAt, timer))
+          return { changed: false };
+        ctx.notify(event, { requestCode: ctx.snap.number });
+        // 04 §6.4: the staff item appears at the escalation point (day 5 by default), not when the question is asked.
+        if (opensStaffItem)
+          ctx.approvals.open('clarification_overdue', ctx.snap.id);
+      },
+      { bumpVersion: false },
+    );
   }
 
   private async autoCancel(timer: RequestTimer) {
@@ -80,127 +68,81 @@ export class T6TimerHandlers {
         : null;
     if (!expectedAt) return;
 
-    const cancelled = await this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT id FROM service_requests WHERE id = ${timer.requestId}::uuid FOR UPDATE
-      `;
-      if (!locked.length) return false;
-      const row = await tx.serviceRequest.findUnique({
-        where: { id: timer.requestId },
-        select: {
-          id: true,
-          number: true,
-          ownerId: true,
-          status: true,
-          intakeState: true,
-          clarificationAskedAt: true,
-        },
-      });
-      if (
-        !isAwaitingResponse(row, timer) ||
-        row?.clarificationAskedAt?.toISOString() !== expectedAt
-      )
-        return false;
-      const now = new Date();
-      const cancellation = await tx.cancellation.create({
-        data: {
-          requestId: row.id,
-          requestedBy: 'system',
-          reasonCode: 'no_response',
-          status: 'completed',
-          note: 'No response to the clarification request within 14 days.',
-          stage: 'submitted',
-          decidedAt: now,
-          decisionNote:
-            'Automatically cancelled after 14 days without a customer response.',
-        },
-      });
-      await tx.serviceRequest.update({
-        where: { id: row.id },
-        data: {
-          status: 'cancelled',
-          cancellationId: cancellation.id,
-          version: { increment: 1 },
-          updatedAt: now,
-        },
-      });
-      await tx.requestMessage.create({
-        data: {
-          requestId: row.id,
-          channel: 'customer',
-          authorRole: 'system',
-          text: "Cancelled: we didn't hear back from you.",
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          actorType: 'system',
-          actorId: null,
-          entityType: 'service_request',
-          entityId: row.id,
-          action: 'Request cancelled (no response)',
-          metadata: {
-            requestId: row.id,
+    await this.runner.runSystem(
+      'timer.T6.autoCancel',
+      timer.requestId,
+      async (ctx) => {
+        const askedAt = await clarificationAskedAt(ctx.tx, ctx.snap.id);
+        if (
+          !isAwaitingResponse(ctx.snap, askedAt, timer) ||
+          askedAt?.toISOString() !== expectedAt
+        )
+          return { changed: false };
+        const days = clarificationAutoCancelDays(ctx.settings);
+        const cancellation = await ctx.tx.cancellation.create({
+          data: {
+            requestId: ctx.snap.id,
+            requestedBy: 'system',
             reasonCode: 'no_response',
-            timerId: timer.id,
+            status: 'completed',
+            note: `No response to the clarification request within ${days} days.`,
+            stage: 'submitted',
+            decidedAt: ctx.now,
+            decisionNote: `Automatically cancelled after ${days} days without a customer response.`,
           },
-        },
-      });
-      await this.notifications.dispatch(
-        tx,
-        'request.auto_cancelled',
-        { requestCode: formatNumber(row.number) },
-        {
-          requestId: row.id,
-          ownerId: row.ownerId,
-          actorId: null,
-        },
-      );
-      await this.timers.stop(tx, {
-        requestId: row.id,
-        kinds: [
-          TimerKinds.T6Reminder48h,
-          TimerKinds.T6Staff5d,
-          TimerKinds.T6FinalWarning,
-          TimerKinds.T6AutoCancel,
-        ],
-      });
-      return true;
-    });
-    if (cancelled) await this.outbox.kick();
+        });
+        await ctx.tx.serviceRequest.update({
+          where: { id: ctx.snap.id },
+          data: { status: 'cancelled', cancellationId: cancellation.id },
+        });
+        await ctx.tx.requestMessage.create({
+          data: {
+            requestId: ctx.snap.id,
+            channel: 'customer',
+            authorRole: 'system',
+            text: "Cancelled: we didn't hear back from you.",
+          },
+        });
+        ctx.audit('Request cancelled (no response)', {
+          changes: { reasonCode: 'no_response', timerId: timer.id },
+        });
+        ctx.notify('request.auto_cancelled', { requestCode: ctx.snap.number });
+        ctx.timers.stop(T6_TIMERS);
+        ctx.approvals.close('intake', ctx.snap.id, 'cancelled');
+        ctx.approvals.close('clarification_overdue', ctx.snap.id, 'cancelled');
+      },
+    );
   }
 }
 
-type IntakeTimerRequest = {
-  id: string;
-  number: number;
-  ownerId: string;
-  status: string;
-  intakeState: string;
-  clarificationAskedAt: Date | null;
-} | null;
+async function clarificationAskedAt(
+  tx: Prisma.TransactionClient,
+  requestId: string,
+): Promise<Date | null> {
+  const row = await tx.serviceRequest.findUnique({
+    where: { id: requestId },
+    select: { clarificationAskedAt: true },
+  });
+  return row?.clarificationAskedAt ?? null;
+}
 
 function isAwaitingResponse(
-  request: IntakeTimerRequest,
+  snap: Pick<RequestSnapshot, 'status' | 'intake'>,
+  askedAt: Date | null,
   timer: RequestTimer,
-): request is NonNullable<IntakeTimerRequest> {
+): askedAt is Date {
   if (
-    !request ||
-    request.status !== 'submitted' ||
-    request.intakeState !== 'clarification' ||
-    !request.clarificationAskedAt
+    snap.status !== 'submitted' ||
+    snap.intake.state !== 'clarification' ||
+    !askedAt
   )
     return false;
   const payload = timer.payload;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload))
     return false;
-  const askedAt = payload['clarificationAskedAt'];
+  const payloadAskedAt = payload['clarificationAskedAt'];
   return (
-    typeof askedAt === 'string' &&
-    request.clarificationAskedAt.toISOString() === askedAt
+    typeof payloadAskedAt === 'string' &&
+    askedAt.toISOString() === payloadAskedAt
   );
-}
-
-function formatNumber(number: number): string {
-  return `XPR-${String(number).padStart(5, '0')}`;
 }
