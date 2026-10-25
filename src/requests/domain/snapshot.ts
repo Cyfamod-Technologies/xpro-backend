@@ -1,3 +1,4 @@
+import type { ProviderBlockReason } from './provider-standing';
 import type { RequestStatus } from './statuses';
 
 export type ActorView = {
@@ -37,6 +38,8 @@ export type QuoteSnapshot = {
   validUntil: Date | null;
   payoutAmount: number | bigint | null;
   basedOnAssignmentId?: string;
+  /** Set by `assignment.replace`; the accepted quote then awaits the new provider (04 §4.6). */
+  providerChangedAt?: Date | null;
 };
 
 export type ScheduleSnapshot = {
@@ -65,6 +68,14 @@ export type UpdateSnapshot = {
 
 export type IssueSnapshot = {
   status: 'open' | 'rework' | 'disputed' | 'resolved';
+};
+
+export type PendingCancellationSnapshot = {
+  id: string;
+  status: 'pending';
+  requestedBy: 'customer' | 'staff' | 'system';
+  paid: boolean;
+  workStarted: boolean;
 };
 
 export type RequestSnapshot = {
@@ -97,23 +108,35 @@ export type RequestSnapshot = {
   currentAssignment: AssignmentSnapshot | null;
   assignments: ReadonlyArray<AssignmentSnapshot>;
   latestQuote: QuoteSnapshot | null;
+  /** Highest-version quote with status `sent`; drafts never count (04 §6.11). */
+  latestSentQuote: QuoteSnapshot | null;
   quotes: ReadonlyArray<QuoteSnapshot>;
   currentSchedule: ScheduleSnapshot | null;
   replacedSchedule: ScheduleSnapshot | null;
   pendingUpdates: ReadonlyArray<UpdateSnapshot>;
   openIssues: ReadonlyArray<IssueSnapshot>;
   pendingCancellation: boolean;
+  pendingCancellationInfo: PendingCancellationSnapshot | null;
+  /** Refunds for this request that are neither completed, waived nor rejected. */
+  refundsOutstanding: number;
   latestNoShow: {
     status: 'open' | 'confirmed' | 'dismissed' | 'voided';
   } | null;
-  payment: { paid: boolean; pendingPaymentAt: Date | null };
+  payment: {
+    paid: boolean;
+    pendingPaymentAt: Date | null;
+    /** A staff-recorded offline payment waits for a second person to reconcile it (05 §6.2). */
+    offlineRecorded: boolean;
+  };
   payout: {
     amount: number | bigint | null;
     assignmentId?: string | null;
   } | null;
   customerStanding: 'active' | 'suspended';
-  providerStanding: 'active' | 'suspended' | null;
+  providerStanding: 'active' | ProviderBlockReason | null;
   cascadePending: boolean;
+  /** Automatic offers made so far; `resetAttempts` sets it back to 0 (04 §6.6). */
+  autoAttempts: number;
   flag?: string | null;
   hold?: {
     kind: 'staff' | 'no_show' | 'provider_suspended' | 'customer_suspended';

@@ -1,6 +1,9 @@
+import { assertOpen } from './guards/common';
 import type { DomainGuard } from './guards/types';
 
 const canUpdateRequest: DomainGuard<unknown> = (snap, actor) => {
+  const open = assertOpen(snap);
+  if (!open.ok) return open;
   const isCustomer =
     actor.kind === 'customer' ||
     actor.platformRoles?.includes('customer') === true;
