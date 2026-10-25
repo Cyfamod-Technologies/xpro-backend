@@ -155,7 +155,7 @@ export class SchedulesService {
               changeRequests: markChangeRequestsHandled(
                 current.changeRequests,
                 ctx.now,
-              ) as unknown as Prisma.InputJsonValue,
+              ),
             },
           });
         const schedule = await ctx.tx.schedule.create({
@@ -451,7 +451,7 @@ export class SchedulesService {
               by: party,
               note: dto.note.trim(),
               at: ctx.now,
-            }) as unknown as Prisma.InputJsonValue,
+            }),
           },
         });
         ctx.audit('Reschedule requested', {
