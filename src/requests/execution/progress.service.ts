@@ -11,7 +11,13 @@ import { UploadsService } from '../../uploads/uploads.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { RequestCommandRunner } from '../command-runner';
+import {
+  blockedReviewDueAt,
+  staleEscalationDueAt,
+  staleUpdateDueAt,
+} from '../domain/execution-timers';
 import { resolveRequestId } from '../request-ref';
+import { cancelOpenScheduleProposals } from '../scheduling/schedule-proposals';
 import {
   deriveProgressKind,
   progressEvidenceSatisfied,
@@ -407,14 +413,15 @@ export class ProgressService {
               where: { id: ctx.snap.id },
               data: { status: 'in_progress' },
             });
+            await cancelOpenScheduleProposals(ctx, ctx.snap.id);
             ctx.timers.stop('T13.noShowCheck');
             ctx.timers.start(
               'T15.stale',
-              new Date(ctx.now.getTime() + 3 * 86_400_000),
+              staleUpdateDueAt(ctx.now, ctx.settings),
             );
             ctx.timers.start(
               'T15.escalate',
-              new Date(ctx.now.getTime() + 5 * 86_400_000),
+              staleEscalationDueAt(ctx.now, ctx.settings),
             );
             ctx.notify('progress.started', { requestCode: ctx.snap.number });
           } else if (update.kind === 'blocker') {
@@ -424,7 +431,7 @@ export class ProgressService {
             });
             ctx.timers.start(
               'T16.review',
-              new Date(ctx.now.getTime() + 8 * 60 * 60_000),
+              blockedReviewDueAt(ctx.now, ctx.settings),
             );
             ctx.notify('progress.blocker_approved', {
               requestCode: ctx.snap.number,
@@ -437,7 +444,7 @@ export class ProgressService {
             ctx.timers.stop('T16.review');
             ctx.timers.start(
               'T15.stale',
-              new Date(ctx.now.getTime() + 3 * 86_400_000),
+              staleUpdateDueAt(ctx.now, ctx.settings),
             );
             ctx.notify('progress.resumed', { requestCode: ctx.snap.number });
           } else if (
@@ -481,11 +488,11 @@ export class ProgressService {
           } else {
             ctx.timers.start(
               'T15.stale',
-              new Date(ctx.now.getTime() + 3 * 86_400_000),
+              staleUpdateDueAt(ctx.now, ctx.settings),
             );
             ctx.timers.start(
               'T15.escalate',
-              new Date(ctx.now.getTime() + 5 * 86_400_000),
+              staleEscalationDueAt(ctx.now, ctx.settings),
             );
           }
         }
@@ -607,14 +614,15 @@ export class ProgressService {
             where: { id: ctx.snap.id },
             data: { status: 'in_progress' },
           });
+          await cancelOpenScheduleProposals(ctx, ctx.snap.id);
           ctx.timers.stop('T13.noShowCheck');
           ctx.timers.start(
             'T15.stale',
-            new Date(ctx.now.getTime() + 3 * 86_400_000),
+            staleUpdateDueAt(ctx.now, ctx.settings),
           );
           ctx.timers.start(
             'T15.escalate',
-            new Date(ctx.now.getTime() + 5 * 86_400_000),
+            staleEscalationDueAt(ctx.now, ctx.settings),
           );
         } else if (kind === 'blocker') {
           await ctx.tx.serviceRequest.update({
@@ -623,7 +631,7 @@ export class ProgressService {
           });
           ctx.timers.start(
             'T16.review',
-            new Date(ctx.now.getTime() + 8 * 60 * 60_000),
+            blockedReviewDueAt(ctx.now, ctx.settings),
           );
         } else if (kind === 'resume') {
           await ctx.tx.serviceRequest.update({
@@ -633,11 +641,11 @@ export class ProgressService {
           ctx.timers.stop('T16.review');
           ctx.timers.start(
             'T15.stale',
-            new Date(ctx.now.getTime() + 3 * 86_400_000),
+            staleUpdateDueAt(ctx.now, ctx.settings),
           );
           ctx.timers.start(
             'T15.escalate',
-            new Date(ctx.now.getTime() + 5 * 86_400_000),
+            staleEscalationDueAt(ctx.now, ctx.settings),
           );
         } else if (kind === 'completion' || kind === 'rework_completion') {
           const dueAt = new Date(

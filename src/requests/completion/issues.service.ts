@@ -97,6 +97,7 @@ export class IssuesService {
             status: 'on_hold',
             holdReason: 'Open customer issue',
             holdSource: 'issue',
+            version: { increment: 1 },
           },
         });
         const max = Number(ctx.settings['completion.maxIssueCycles'] ?? 2);

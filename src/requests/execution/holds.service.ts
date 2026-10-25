@@ -5,6 +5,11 @@ import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { RequestCommandRunner } from '../command-runner';
+import {
+  blockedReviewDueAt,
+  noShowCheckDueAt,
+  staleUpdateDueAt,
+} from '../domain/execution-timers';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
@@ -59,7 +64,7 @@ export class HoldsService {
         ctx.timers.stop(['T13.noShowCheck', 'T15.stale', 'T15.escalate']);
         ctx.timers.start(
           'T16.review',
-          new Date(ctx.now.getTime() + 8 * 60 * 60_000),
+          blockedReviewDueAt(ctx.now, ctx.settings),
         );
         ctx.audit('Job put on hold', {
           note: dto.reason,
@@ -140,13 +145,13 @@ export class HoldsService {
           if (schedule)
             ctx.timers.start(
               'T13.noShowCheck',
-              new Date(schedule.startAt.getTime() + 2 * 60 * 60_000),
+              noShowCheckDueAt(schedule.startAt, ctx.settings),
               schedule.id,
             );
         } else
           ctx.timers.start(
             'T15.stale',
-            new Date(ctx.now.getTime() + 3 * 86_400_000),
+            staleUpdateDueAt(ctx.now, ctx.settings),
           );
         ctx.audit('Hold released', { note: dto.note });
         ctx.notify('request.hold_released', { requestCode: ctx.snap.number });
