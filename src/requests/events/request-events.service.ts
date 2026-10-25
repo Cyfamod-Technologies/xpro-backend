@@ -241,7 +241,7 @@ export class RequestEventsService {
               data: {
                 status: 'on_hold',
                 holdReason: reason,
-                holdSource: 'provider_standing',
+                holdSource: 'suspension',
               },
             });
             ctx.audit('Provider standing changed on an accepted job', {

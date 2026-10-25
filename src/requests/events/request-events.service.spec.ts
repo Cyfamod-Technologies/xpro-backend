@@ -389,7 +389,7 @@ describe('RequestEventsService provider events', () => {
         data: {
           status: 'on_hold',
           holdReason: 'Suspended.',
-          holdSource: 'provider_standing',
+          holdSource: 'suspension',
         },
       }),
     );
