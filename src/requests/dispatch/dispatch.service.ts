@@ -526,6 +526,7 @@ export class DispatchService {
               status: 'cancelled',
               holdReason: 'Provider replaced on this request.',
               holdSource: 'replacement',
+              version: { increment: 1 },
             },
           });
         await ctx.tx.serviceRequest.update({

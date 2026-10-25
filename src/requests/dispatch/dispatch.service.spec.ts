@@ -1171,6 +1171,7 @@ describe('DispatchService.replace (04 §5.2 #21, §6.19)', () => {
         status: 'cancelled',
         holdReason: 'Provider replaced on this request.',
         holdSource: 'replacement',
+        version: { increment: 1 },
       },
     });
   });
