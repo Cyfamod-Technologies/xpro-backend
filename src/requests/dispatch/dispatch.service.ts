@@ -339,51 +339,7 @@ export class DispatchService {
             assignment.id,
           );
         }
-        const quoteForPayout =
-          acceptedQuote ??
-          (await ctx.tx.quote.findFirst({
-            where: { requestId: ctx.snap.id },
-            orderBy: { version: 'desc' },
-          }));
-        if (
-          quoteForPayout?.payoutAmount &&
-          !(await ctx.tx.payout.findFirst({
-            where: {
-              requestId: ctx.snap.id,
-              assignmentId: assignment.id,
-              kind: 'primary',
-            },
-          }))
-        ) {
-          const currentBank = await ctx.tx.providerBankAccount.findFirst({
-            where: { providerId: assignment.providerId, state: 'verified' },
-            orderBy: { reviewedAt: 'desc' },
-          });
-          const payoutHold =
-            ctx.snap.hold ||
-            ctx.snap.openIssues.length > 0 ||
-            providerBlocked({
-              userStatus: provider.userStatus,
-              verification: provider.verification,
-              reliabilityStatus: provider.reliabilityStatus,
-            }).blocked;
-          await ctx.tx.payout.create({
-            data: {
-              requestId: ctx.snap.id,
-              assignmentId: assignment.id,
-              providerId: assignment.providerId,
-              kind: 'primary',
-              amount: quoteForPayout.payoutAmount,
-              status: payoutHold ? 'on_hold' : 'pending_approval',
-              holdReason: payoutHold
-                ? 'Open request issue, hold, or provider suspension.'
-                : null,
-              holdSource: payoutHold ? 'dispatch_review' : null,
-              approvalDueAt: addWorkingMinutes(ctx.now, 20 * 60),
-              bankAccountId: currentBank?.id ?? null,
-            },
-          });
-        }
+        // FD-7: no payout is created here. The primary payout is created once, at completion confirmation.
         ctx.audit('Assignment approved', {
           resourceType: 'assignment',
           resourceId: updated.id,
@@ -569,6 +525,7 @@ export class DispatchService {
             data: {
               status: 'cancelled',
               holdReason: 'Provider replaced on this request.',
+              holdSource: 'replacement',
             },
           });
         await ctx.tx.serviceRequest.update({

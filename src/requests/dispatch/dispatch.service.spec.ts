@@ -543,7 +543,7 @@ describe('DispatchService.review (04 §6.9)', () => {
     requestAttachment: { count: jest.fn().mockResolvedValue(0) },
     quote: { findFirst: jest.fn().mockResolvedValue(null) },
     payment: { findFirst: jest.fn() },
-    payout: { findFirst: jest.fn() },
+    payout: { findFirst: jest.fn(), create: jest.fn() },
   });
   const review = (
     service: DispatchService,
@@ -689,6 +689,24 @@ describe('DispatchService.review (04 §6.9)', () => {
   });
 
   describe('approve effects', () => {
+    it('never creates a payout, even when the quote already has a payout amount (DUP-07, FD-7)', async () => {
+      const tx = reviewTx();
+      tx.quote.findFirst.mockResolvedValue({
+        id: 'quote-1',
+        payoutAmount: 90_000n,
+        payoutAssignmentId: 'old-assignment',
+      });
+      const { service } = build({
+        tx,
+        providers: [dispatchProvider('p1')],
+      });
+
+      await review(service, { approve: true });
+
+      expect(tx.payout.create).not.toHaveBeenCalled();
+      expect(tx.payout.findFirst).not.toHaveBeenCalled();
+    });
+
     it('defaults sharedDetails from the request’s shareOnConfirm', async () => {
       const tx = reviewTx({
         shareOnConfirm: { description: true, attachmentIds: ['file-1'] },
@@ -1152,6 +1170,7 @@ describe('DispatchService.replace (04 §5.2 #21, §6.19)', () => {
       data: {
         status: 'cancelled',
         holdReason: 'Provider replaced on this request.',
+        holdSource: 'replacement',
       },
     });
   });
