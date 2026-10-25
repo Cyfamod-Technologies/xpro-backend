@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -33,8 +34,16 @@ export class PublishQuoteDto {
   @IsOptional() @IsString() @MaxLength(1000) pricingOverrideNote?: string;
   @IsOptional() @IsString() @MaxLength(1000) customerNote?: string;
 }
+export const QUOTE_DECISIONS = [
+  'accepted',
+  'revision_requested',
+  'declined',
+] as const;
 export class QuoteDecisionDto {
-  @IsString() decision!: 'accepted' | 'revision_requested' | 'declined';
+  @IsIn(QUOTE_DECISIONS, {
+    message: 'Choose accept, decline or request a revision.',
+  })
+  decision!: (typeof QUOTE_DECISIONS)[number];
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
 export class QuoteApprovalDto {
