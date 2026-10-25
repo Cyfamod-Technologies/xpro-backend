@@ -5,8 +5,13 @@ import type { LoadedRequest } from '../snapshot.loader';
 import { commonProjection } from './projection.helpers';
 import type { SettingsSnapshot } from '../domain/guards/types';
 
+export type ListProjectionRow = Pick<
+  LoadedRequest,
+  'version' | 'status' | 'createdAt' | 'updatedAt' | 'title' | 'service'
+>;
+
 export function listProjection(
-  row: LoadedRequest,
+  row: ListProjectionRow,
   snapshot: RequestSnapshot,
   actor: ActorContext,
   now: Date,
