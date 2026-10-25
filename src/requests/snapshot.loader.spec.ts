@@ -48,6 +48,7 @@ function build(options: Options = {}) {
     cityId: 'city-1',
     districtId: 'district-1',
     holdKind: null,
+    holdPreviousStatus: null,
     defectsWindowEndsAt: null,
     reportApprovedAt: null,
     attachments: [],

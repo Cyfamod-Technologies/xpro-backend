@@ -197,6 +197,7 @@ export type SnapshotSource = Pick<
   | 'intakeState'
   | 'contactInBrief'
   | 'holdKind'
+  | 'holdPreviousStatus'
   | 'autoAttempts'
   | 'defectsWindowEndsAt'
   | 'reportApprovedAt'
@@ -414,7 +415,9 @@ export function buildSnapshot(
     providerStanding: assignment ? (standing.reason ?? 'active') : null,
     cascadePending: lookups.cascadePending,
     autoAttempts: row.autoAttempts,
-    hold: row.holdKind ? { kind: row.holdKind } : null,
+    hold: row.holdKind
+      ? { kind: row.holdKind, previousStatus: row.holdPreviousStatus }
+      : null,
     defectsWindowEndsAt: row.defectsWindowEndsAt,
     completionReportApprovedAt: row.reportApprovedAt,
     providerCostingSubmitted:

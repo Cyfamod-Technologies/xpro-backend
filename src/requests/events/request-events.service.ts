@@ -8,6 +8,7 @@ import {
   endAcceptedAssignments,
 } from '../cancellation/cancellation-cleanup';
 import { RequestCommandRunner } from '../command-runner';
+import { assertOpen } from '../domain/guards/common';
 import { cancellationRefundsResolved } from '../../payments/domain/refund-rules';
 
 export type AfterCommit = () => Promise<void>;
@@ -72,8 +73,9 @@ export class RequestEventsService {
           ctx.snap.status !== 'awaiting_payment' ||
           quote.status !== 'accepted'
         ) {
+          let refundId: string | null = null;
           if (!payment.lateRefundOpened) {
-            await ctx.tx.refund.create({
+            const refund = await ctx.tx.refund.create({
               data: {
                 paymentId,
                 requestId,
@@ -84,17 +86,33 @@ export class RequestEventsService {
                 requestedBy: 'system',
               },
             });
+            refundId = refund.id;
             await ctx.tx.payment.update({
               where: { id: paymentId },
               data: { lateRefundOpened: true },
             });
+            ctx.approvals.open('refund', refund.id);
+            ctx.notify('refund.requested', {
+              requestCode: ctx.snap.number,
+              amount: Number(payment.amount),
+            });
           }
           ctx.audit('Late payment received', {
-            changes: { paymentId, reference: payment.reference },
+            resourceType: 'payment',
+            resourceId: paymentId,
+            changes: {
+              reference: payment.reference,
+              refundId,
+              before: { lateRefundOpened: payment.lateRefundOpened },
+              after: { lateRefundOpened: true },
+            },
           });
           ctx.notify('payment.late', {
             requestCode: ctx.snap.number,
             reference: payment.reference,
+          });
+          ctx.notify('payment.late_customer', {
+            requestCode: ctx.snap.number,
           });
           return { bumpVersion: false };
         }
@@ -242,6 +260,7 @@ export class RequestEventsService {
                 status: 'on_hold',
                 holdReason: reason,
                 holdSource: 'suspension',
+                version: { increment: 1 },
               },
             });
             ctx.audit('Provider standing changed on an accepted job', {
@@ -311,43 +330,61 @@ export class RequestEventsService {
   }
 
   /**
-   * New working hours or time off clash with proposed schedules. Each one
-   * goes to `changes_requested` so staff can re-propose. Runs after the
-   * provider's calendar transaction has committed.
+   * New working hours or time off clash with proposed schedules (04 §6.13,
+   * 03 §6.3). One command per request: the schedule goes to `changes_requested`
+   * with the provider's side set, the request version bumps, and staff get a
+   * `schedule_change` work item and a notification. Runs after the provider's
+   * calendar transaction has committed; a failure on one request does not stop
+   * the others and is rethrown at the end.
    */
   async onProviderHoursChanged(
     providerId: string,
     conflicts: ReadonlyArray<HoursConflict>,
   ): Promise<void> {
+    const failures: unknown[] = [];
     for (const conflict of conflicts)
-      await this.runner.runSystem(
-        'provider.hoursChanged',
-        conflict.requestId,
-        async (ctx) => {
-          const schedule = await ctx.tx.schedule.findFirst({
-            where: {
-              id: conflict.scheduleId,
-              requestId: ctx.snap.id,
-              providerId,
-              status: 'proposed',
-            },
-            select: { id: true },
-          });
-          if (!schedule) return { changed: false };
-          await ctx.tx.schedule.update({
-            where: { id: schedule.id },
-            data: {
-              status: 'changes_requested',
-              responses: { push: 'Provider: working hours changed' },
-            },
-          });
-          ctx.audit('Schedule changes requested (provider hours changed)', {
-            resourceType: 'schedule',
-            resourceId: schedule.id,
-            changes: { providerId },
-          });
-        },
-      );
+      try {
+        await this.runner.runSystem(
+          'provider.hoursChanged',
+          conflict.requestId,
+          async (ctx) => {
+            if (!assertOpen(ctx.snap).ok) return { changed: false };
+            const schedule = await ctx.tx.schedule.findFirst({
+              where: {
+                id: conflict.scheduleId,
+                requestId: ctx.snap.id,
+                providerId,
+                status: 'proposed',
+              },
+              select: { id: true },
+            });
+            if (!schedule) return { changed: false };
+            await ctx.tx.schedule.update({
+              where: { id: schedule.id },
+              data: {
+                status: 'changes_requested',
+                provider: 'changes_requested',
+                responses: { push: 'Provider: working hours changed' },
+              },
+            });
+            ctx.audit('Schedule changes requested (provider hours changed)', {
+              resourceType: 'schedule',
+              resourceId: schedule.id,
+              changes: { providerId },
+            });
+            ctx.approvals.open('schedule_change', schedule.id);
+            ctx.notify('schedule.change_requested', {
+              requestCode: ctx.snap.number,
+            });
+          },
+        );
+      } catch (error) {
+        this.logger.error(
+          `Provider hours change failed for request ${conflict.requestId}: ${String(error)}`,
+        );
+        failures.push(error);
+      }
+    if (failures.length) throw failures[0];
   }
 
   private async attempt(

@@ -20,6 +20,7 @@ export const LIST_ROW_SELECT = {
   intakeState: true,
   contactInBrief: true,
   holdKind: true,
+  holdPreviousStatus: true,
   autoAttempts: true,
   defectsWindowEndsAt: true,
   reportApprovedAt: true,

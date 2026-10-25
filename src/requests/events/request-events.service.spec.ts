@@ -37,7 +37,7 @@ describe('RequestEventsService.onPaymentSettled', () => {
         status: request.quoteStatus ?? 'accepted',
       }),
     },
-    refund: { create: jest.fn() },
+    refund: { create: jest.fn().mockResolvedValue({ id: 'refund-9' }) },
     serviceRequest: { update: jest.fn() },
   });
   const outer = { outer: true } as never;
@@ -118,11 +118,31 @@ describe('RequestEventsService.onPaymentSettled', () => {
     });
     expect(effects.notify).toEqual([
       {
+        event: 'refund.requested',
+        params: { requestCode: 'XPR-00042', amount: 500_000 },
+      },
+      {
         event: 'payment.late',
         params: { requestCode: 'XPR-00042', reference: 'xpro_ref_1' },
       },
+      { event: 'payment.late_customer', params: { requestCode: 'XPR-00042' } },
     ]);
-    expect(effects.approvalOpens).toEqual([]);
+    expect(effects.approvalOpens).toEqual([
+      { kind: 'refund', itemId: 'refund-9' },
+    ]);
+    expect(effects.audit[0]).toMatchObject({
+      action: 'Late payment received',
+      data: {
+        resourceType: 'payment',
+        resourceId: 'payment-1',
+        changes: {
+          reference: 'xpro_ref_1',
+          refundId: 'refund-9',
+          before: { lateRefundOpened: false },
+          after: { lateRefundOpened: true },
+        },
+      },
+    });
   });
 
   it('does not open a second refund when the late refund already exists', async () => {
@@ -390,6 +410,7 @@ describe('RequestEventsService provider events', () => {
           status: 'on_hold',
           holdReason: 'Suspended.',
           holdSource: 'suspension',
+          version: { increment: 1 },
         },
       }),
     );
