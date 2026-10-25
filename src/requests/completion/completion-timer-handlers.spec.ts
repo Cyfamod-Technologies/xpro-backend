@@ -111,13 +111,16 @@ describe('T17 completion timers', () => {
           ]
         )[0].data,
       ).not.toHaveProperty('version');
-      expect(finance.createPrimary).toHaveBeenCalledWith(tx, {
-        requestId: 'request-1',
-        assignmentId: 'a-1',
-        providerId: 'provider-1',
-        amount: 90_000n,
-        now,
-      });
+      expect(finance.createPrimary).toHaveBeenCalledWith(
+        expect.objectContaining({ tx }),
+        {
+          requestId: 'request-1',
+          assignmentId: 'a-1',
+          providerId: 'provider-1',
+          amount: 90_000n,
+          payoutAssignmentId: 'a-1',
+        },
+      );
       expect(effects.timerStops[0].kind).toEqual([
         'T17.reminder24h',
         'T17.reminder48h',

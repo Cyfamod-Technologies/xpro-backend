@@ -93,7 +93,11 @@ export class IssuesService {
               in: ['pending_approval', 'awaiting_second_approval', 'approved'],
             },
           },
-          data: { status: 'on_hold', holdReason: 'Open customer issue' },
+          data: {
+            status: 'on_hold',
+            holdReason: 'Open customer issue',
+            holdSource: 'issue',
+          },
         });
         const max = Number(ctx.settings['completion.maxIssueCycles'] ?? 2);
         if (cycle > max)

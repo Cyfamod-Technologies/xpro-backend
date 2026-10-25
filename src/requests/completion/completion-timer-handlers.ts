@@ -82,12 +82,12 @@ export class CompletionTimerHandlers {
             defectsWindowEndsAt: endsAt,
           },
         });
-        await this.finance.createPrimary(ctx.tx, {
+        await this.finance.createPrimary(ctx, {
           requestId: ctx.snap.id,
           assignmentId: assignment.id,
           providerId: assignment.providerId,
           amount: quote.payoutAmount,
-          now: ctx.now,
+          payoutAssignmentId: quote.payoutAssignmentId,
         });
         ctx.timers.stop([
           'T17.reminder24h',

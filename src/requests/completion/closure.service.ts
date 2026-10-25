@@ -5,6 +5,7 @@ import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import { TimerKinds } from '../../platform/timers/timer-kinds';
 import type { RequestUser } from '../../common/types/request-user';
+import { FinanceService } from '../../payments/finance.service';
 import { RequestCommandRunner } from '../command-runner';
 
 const conflict = (message: string) =>
@@ -15,6 +16,7 @@ export class ClosureService {
   constructor(
     private readonly actors: ActorService,
     private readonly runner: RequestCommandRunner,
+    private readonly finance: FinanceService,
   ) {}
 
   async close(
@@ -42,21 +44,9 @@ export class ClosureService {
           : {}),
       },
       async (ctx) => {
-        // 04 §5.2 #36 payout rule: payout rows are not in the snapshot.
-        const payouts = await ctx.tx.payout.findMany({
-          where: { requestId: ctx.snap.id },
-          orderBy: { createdAt: 'desc' },
-        });
-        const payoutReady =
-          payouts.length > 0 &&
-          payouts.every(
-            (payout) =>
-              payout.status === 'paid' ||
-              payout.status === 'cancelled' ||
-              (payout.status === 'on_hold' &&
-                Boolean(payout.holdReason?.trim())),
-          );
-        if (!payoutReady)
+        // 04 §5.2 #36 payout rule: payout rows are not in the snapshot. Only the primary payout counts (C-18).
+        const payout = await this.finance.closureState(ctx.tx, ctx.snap.id);
+        if (payout.state === 'blocked')
           throw conflict(
             'A provider payout must be paid or held with a reason before closure.',
           );
