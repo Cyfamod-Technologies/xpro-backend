@@ -518,7 +518,7 @@ export const NOTIFICATION_CATALOGUE = {
   'payment.late': entry<RequestParams & { reference: string }>({
     key: 'payment.late',
     audience: { kind: 'staff:holders', permission: 'payment.record' },
-    mandatory: false,
+    mandatory: true,
     title: () => 'Late payment needs a refund',
     message: ({ requestCode }) =>
       `${requestCode} received payment after payment was no longer due. Review the refund.`,
@@ -544,6 +544,26 @@ export const NOTIFICATION_CATALOGUE = {
     title: () => 'Payment window closed',
     message: ({ requestCode }) =>
       `Your quote for ${requestCode} expired because payment wasn't received. XPro will contact you.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names "Payment failed" for the customer, not its body)
+  'payment.failed_customer': entry<RequestParams>({
+    key: 'payment.failed_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Payment not completed',
+    message: ({ requestCode }) =>
+      `${requestCode}: your payment was not completed. You can try again from your request.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names "late payment refunded" for the customer, not its body)
+  'payment.late_customer': entry<RequestParams>({
+    key: 'payment.late_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Payment received late',
+    message: ({ requestCode }) =>
+      `${requestCode}: we received your payment after the request was no longer awaiting payment. XPro is arranging a refund.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
   // new message: not in spec
@@ -986,6 +1006,78 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: the refund was rejected. Request a new refund to finish the cancellation.`,
     link: () => '/admin/approvals',
   }),
+  // new message: not in spec (05 §9 names "Refund decided" for Finance and Super admin, not its body)
+  'refund.decided': entry<
+    RequestParams & {
+      outcome: 'approved' | 'rejected' | 'waived' | 'awaiting_second_approval';
+      amount: number;
+    }
+  >({
+    key: 'refund.decided',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: ({ outcome }) =>
+      outcome === 'approved'
+        ? 'Refund approved'
+        : outcome === 'rejected'
+          ? 'Refund rejected'
+          : outcome === 'waived'
+            ? 'Refund waived'
+            : 'Refund needs a second approval',
+    message: ({ requestCode, outcome, amount }) =>
+      `${requestCode}: ${
+        outcome === 'approved'
+          ? `the refund of ₦${naira(amount)} was approved.`
+          : outcome === 'rejected'
+            ? 'the refund was rejected.'
+            : outcome === 'waived'
+              ? 'the refund was waived.'
+              : `the refund of ₦${naira(amount)} was approved after work started. A Super admin must give the second approval.`
+      }`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Refund completed" for Finance and Super admin, not its body)
+  'refund.completed': entry<RequestParams & { amount: number }>({
+    key: 'refund.completed',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund completed',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: the refund of ₦${naira(amount)} was completed.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names the customer's refund status, not its body)
+  'refund.approved_customer': entry<RequestParams & { amount: number }>({
+    key: 'refund.approved_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Refund approved',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your refund of ₦${naira(amount)} was approved and is being processed.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names the customer's refund receipt, not its body)
+  'refund.completed_customer': entry<RequestParams & { amount: number }>({
+    key: 'refund.completed_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Refund completed',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your refund of ₦${naira(amount)} has been completed.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 asks for a reconciliation mismatch alert to Finance and Super admin)
+  'refund.mismatch': entry<
+    RequestParams & { approvedAmount: number; reportedAmount: number }
+  >({
+    key: 'refund.mismatch',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund needs manual reconciliation',
+    message: ({ requestCode, approvedAmount, reportedAmount }) =>
+      `${requestCode}: Paystack reports a refund of ₦${naira(reportedAmount)} but XPro approved ₦${naira(approvedAmount)}. It was not applied. Reconcile it before any retry.`,
+    link: () => '/admin/approvals',
+  }),
   // new message: not in spec (05 §6.4: a gateway failure leaves a Finance item)
   'refund.failed': entry<RequestParams & { amount: number; detail: string }>({
     key: 'refund.failed',
@@ -995,6 +1087,49 @@ export const NOTIFICATION_CATALOGUE = {
     message: ({ requestCode, amount, detail }) =>
       `${requestCode}: the refund of ₦${naira(amount)} did not complete. ${detail} Check it and retry.`,
     link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Payout created/due" for Finance, not its body)
+  'payout.created': entry<
+    RequestParams & { amount: number; dueDate: string; onHold: boolean }
+  >({
+    key: 'payout.created',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: () => 'Payout to approve',
+    message: ({ requestCode, amount, dueDate, onHold }) =>
+      onHold
+        ? `${requestCode}: a payout of ₦${naira(amount)} was created on hold. Release it when the hold clears.`
+        : `${requestCode}: a payout of ₦${naira(amount)} is ready for first approval by ${dueDate}.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "second approval" for the eligible second approver, not its body)
+  'payout.second_approval_needed': entry<RequestParams & { amount: number }>({
+    key: 'payout.second_approval_needed',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: () => 'Payout needs a second approval',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: the payout of ₦${naira(amount)} was approved once and needs a second approval.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Payout held" for the provider with a safe reason, not its body)
+  'payout.held': entry<PayoutProviderParams & { reason: string }>({
+    key: 'payout.held',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout on hold',
+    message: ({ requestCode, reason }) => `${requestCode}: ${reason}`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 names "Payout released" for the provider, not its body)
+  'payout.released': entry<PayoutProviderParams>({
+    key: 'payout.released',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout back in review',
+    message: ({ requestCode }) =>
+      `${requestCode}: your payout is no longer on hold. XPro Finance will approve it next.`,
+    link: () => '/earnings',
   }),
   // new message: not in spec (05 §9 names "Payout paid" for the provider, not its body)
   'payout.paid': entry<PayoutProviderParams & { amount: number }>({
@@ -1026,29 +1161,33 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: your payout of ₦${naira(amount)} was returned by the bank. XPro Finance will contact you.`,
     link: () => '/earnings',
   }),
-  // new message: not in spec (05 §9 lists Finance and the owner for paid/failed/reversed)
+  // new message: not in spec (05 §9 lists Finance and the owner for paid/failed/reversed/held/released)
   'payout.finance_update': entry<
     RequestParams & {
       amount: number;
-      outcome: 'paid' | 'failed' | 'reversed';
+      outcome: 'paid' | 'failed' | 'reversed' | 'held' | 'released';
     }
   >({
     key: 'payout.finance_update',
     audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
     mandatory: true,
     title: ({ outcome }) =>
-      outcome === 'paid'
-        ? 'Payout paid'
-        : outcome === 'failed'
-          ? 'Payout failed'
-          : 'Payout reversed',
+      ({
+        paid: 'Payout paid',
+        failed: 'Payout failed',
+        reversed: 'Payout reversed',
+        held: 'Payout held',
+        released: 'Payout released',
+      })[outcome],
     message: ({ requestCode, amount, outcome }) =>
       `${requestCode}: the payout of ₦${naira(amount)} ${
-        outcome === 'paid'
-          ? 'was paid.'
-          : outcome === 'failed'
-            ? 'failed. Check it and retry.'
-            : 'was reversed. Check it and retry.'
+        {
+          paid: 'was paid.',
+          failed: 'failed. Check it and retry.',
+          reversed: 'was reversed. Check it and retry.',
+          held: 'was put on hold.',
+          released: 'was released from hold.',
+        }[outcome]
       }`,
     link: () => '/admin/payouts',
   }),
