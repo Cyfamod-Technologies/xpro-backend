@@ -1,4 +1,4 @@
-import type { RequestStage, NextActor } from '../domain/stage';
+import type { RequestStage, NextActor, ViewerNextActor } from '../domain/stage';
 import type { RequestStatus } from '../domain/statuses';
 
 export type RequestRole = 'customer' | 'provider' | 'staff';
@@ -40,7 +40,8 @@ export interface RequestDetailDto {
   status: RequestStatus;
   stage: RequestStage;
   statusLabel: string | null;
-  nextActor: NextActor;
+  /** Raw for staff; `customer`, `provider`, `xpro` or `none` for the other roles (A-22). */
+  nextActor: NextActor | ViewerNextActor;
   allowedActions: string[];
   overlays: {
     cancellation: string | null;
@@ -69,6 +70,7 @@ export interface RequestDetailDto {
   unclaimedSince?: Date | null;
   ownershipVersion?: number;
   intake?: { state: string; clarificationCount: number };
+  /** Staff only (04 §10: flags are never shown to customers or providers). */
   contactInBrief?: boolean;
   attachments?: Array<{
     id: string;
