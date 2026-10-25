@@ -42,7 +42,7 @@ export function rankProviders(
       const factors = {
         area: provider.serviceAreaIds.includes(request.districtId)
           ? 1
-          : provider.cityId === request.cityId
+          : provider.serviceAreaIds.includes(request.cityId)
             ? 0.6
             : 0,
         capacity:
