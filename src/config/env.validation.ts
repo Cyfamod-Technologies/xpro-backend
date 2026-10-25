@@ -31,6 +31,8 @@ const PRODUCTION_SMTP_VARS = [
 const STORAGE_DRIVERS = ['none', 'r2'] as const;
 type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 
+const PAYMENT_GATEWAYS = ['paystack', 'test'] as const;
+
 export function validateEnv(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -52,6 +54,7 @@ export function validateEnv(
   }
 
   validateStorage(config);
+  validatePaymentGateway(config);
 
   if (config['NODE_ENV'] === 'production') {
     if (String(config['ENABLE_DEV_TOOLS']).toLowerCase() === 'true') {
@@ -93,6 +96,33 @@ export function validateEnv(
   }
 
   return config;
+}
+
+/**
+ * `PAYMENT_GATEWAY` defaults to `paystack`. The `test` gateway fakes every
+ * charge, so it must never boot in production, and production webhooks and
+ * checkouts need the Paystack secret (without it every webhook answers 401).
+ */
+function validatePaymentGateway(config: Record<string, unknown>): void {
+  const raw = config['PAYMENT_GATEWAY'];
+  const gateway =
+    typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : 'paystack';
+
+  if (
+    !PAYMENT_GATEWAYS.includes(gateway as (typeof PAYMENT_GATEWAYS)[number])
+  ) {
+    throw new Error(
+      `PAYMENT_GATEWAY must be one of: ${PAYMENT_GATEWAYS.join(', ')}`,
+    );
+  }
+  if (config['NODE_ENV'] !== 'production') return;
+  if (gateway === 'test') {
+    throw new Error('PAYMENT_GATEWAY must not be "test" in production');
+  }
+  const secret = config['PAYSTACK_SECRET_KEY'];
+  if (typeof secret !== 'string' || !secret.trim()) {
+    throw new Error('PAYSTACK_SECRET_KEY is required in production');
+  }
 }
 
 /**
