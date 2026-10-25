@@ -1,9 +1,9 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
   Prisma,
+  RefundStatus,
   type Payment,
   type Refund,
-  type RefundStatus,
 } from '@prisma/client';
 import type { ActorContext } from '../platform/actor/actor.types';
 import { requirePermission } from '../platform/actor/actor.guards';
@@ -30,12 +30,14 @@ import {
   withinResubmitCooldown,
   type RefundFailure,
 } from './domain/refund-rules';
+import { parseStatusFilter } from './domain/payout-rules';
 import {
   GatewayRejectedError,
   type GatewayRefund,
   type PaymentGateway,
 } from './payment-gateway';
 import { PAYMENT_GATEWAY } from './payments.service';
+import { toRefundQueueItem } from './payout.projection';
 import { refreshPaymentRefundStatus } from './refund-status';
 
 const conflict = (message: string) =>
@@ -101,17 +103,26 @@ export class RefundsService {
     private readonly requestEvents: RequestEventsService,
   ) {}
 
-  async list(userId: string, page = 1) {
+  /** The refund queue: an allow-list DTO, a `?status` filter, and amounts only for staff with `view.pricing` (C-42, E-27). */
+  async list(userId: string, query: { page?: number; status?: string } = {}) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'refund.manage');
+    const filter = parseStatusFilter(query.status, Object.values(RefundStatus));
+    if (!filter.ok) raise(filter);
+    const canSeePricing = actor.staff?.permissions.has('view.pricing') ?? false;
+    const page = Math.max(1, query.page ?? 1);
     const limit = 25;
+    const where: Prisma.RefundWhereInput = filter.status
+      ? { status: filter.status }
+      : {};
     const [items, total] = await this.prisma.$transaction([
       this.prisma.refund.findMany({
+        where,
         orderBy: { createdAt: 'asc' },
         skip: (page - 1) * limit,
         take: limit,
       }),
-      this.prisma.refund.count(),
+      this.prisma.refund.count({ where }),
     ]);
     const payments = await this.prisma.payment.findMany({
       where: { id: { in: items.map((item) => item.paymentId) } },
@@ -121,11 +132,13 @@ export class RefundsService {
       payments.map((payment) => [payment.id, payment.method]),
     );
     return {
-      items: items.map((row) => ({
-        ...row,
-        amount: Number(row.amount),
-        method: methodByPaymentId.get(row.paymentId) ?? null,
-      })),
+      items: items.map((row) =>
+        toRefundQueueItem(
+          row,
+          methodByPaymentId.get(row.paymentId) ?? null,
+          canSeePricing,
+        ),
+      ),
       total,
       page,
       limit,

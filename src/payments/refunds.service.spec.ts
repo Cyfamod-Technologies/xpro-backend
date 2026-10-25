@@ -957,3 +957,69 @@ describe('RefundsService.recordTransfer', () => {
     expect(h.uploads.attach).not.toHaveBeenCalled();
   });
 });
+
+describe('RefundsService.list (C-42, E-27)', () => {
+  const lister = (permissions: string[]) => {
+    const h = build();
+    h.actors.resolve.mockResolvedValue({
+      ...staff('finance-1'),
+      staff: {
+        ...(staff('finance-1').staff as object),
+        permissions: new Set(permissions),
+      },
+    });
+    const prisma = h.prisma as unknown as {
+      refund: { findMany: jest.Mock; count: jest.Mock };
+      payment: { findMany: jest.Mock };
+      $transaction: jest.Mock;
+    };
+    prisma.refund.findMany.mockResolvedValue([
+      refundRow({
+        transferProofId: 'proof-secret',
+        decidedBy: 'decider-secret',
+      }),
+    ]);
+    prisma.refund.count = jest.fn().mockResolvedValue(1);
+    prisma.payment.findMany = jest
+      .fn()
+      .mockResolvedValue([{ id: 'payment-1', method: 'paystack' }]);
+    prisma.$transaction = jest.fn((queries: Array<Promise<unknown>>) =>
+      Promise.all(queries),
+    );
+    return { h, prisma };
+  };
+
+  it('returns allow-list rows with the amount for view.pricing holders', async () => {
+    const { h } = lister(['refund.manage', 'view.pricing']);
+
+    const page = await h.service.list('finance-1', { page: 1 });
+
+    expect(page.items[0]).toMatchObject({
+      id: 'refund-1',
+      amount: 500_000,
+      method: 'paystack',
+    });
+    expect(JSON.stringify(page)).not.toContain('proof-secret');
+    expect(JSON.stringify(page)).not.toContain('decider-secret');
+  });
+
+  it('masks the amount without view.pricing', async () => {
+    const { h } = lister(['refund.manage']);
+
+    const page = await h.service.list('finance-1');
+
+    expect(page.items[0].amount).toBeNull();
+  });
+
+  it('filters by status and refuses an unknown one', async () => {
+    const { h, prisma } = lister(['refund.manage']);
+
+    await h.service.list('finance-1', { status: 'failed' });
+    expect(prisma.refund.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { status: 'failed' } }),
+    );
+    await expect(
+      h.service.list('finance-1', { status: 'bogus' }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+});
