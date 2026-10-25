@@ -1148,6 +1148,7 @@ model Quote {
   note                String?
   basedOnAssignmentId String?        @map("based_on_assignment_id")
   pricingOverrideNote String?        @map("pricing_override_note")
+  customerNote        String?        @map("customer_note")
   lastEditedBy        String         @map("last_edited_by")
   approvalRequestedBy String?        @map("approval_requested_by")
   approvalRequestedAt DateTime?      @map("approval_requested_at")
@@ -1218,6 +1219,7 @@ model Refund {
   gatewayRefundId    String?      @unique @map("gateway_refund_id")
   reconciledBy       String?      @map("reconciled_by")
   completedAt        DateTime?    @map("completed_at")
+  version            Int          @default(1)
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
   payment            Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
@@ -1245,6 +1247,7 @@ model Payout {
   transferRecordedBy  String?      @map("transfer_recorded_by")
   reconciledBy        String?      @map("reconciled_by")
   paidAt              DateTime?    @map("paid_at")
+  version             Int          @default(1)
   createdAt           DateTime     @default(now()) @map("created_at")
   updatedAt           DateTime     @updatedAt @map("updated_at")
   request             ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
