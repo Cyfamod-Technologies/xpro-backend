@@ -27,7 +27,7 @@ export class IssuesService {
     user: RequestUser,
     requestId: string,
     dto: { note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -39,6 +39,7 @@ export class IssuesService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -119,7 +120,7 @@ export class IssuesService {
     requestId: string,
     issueId: string,
     dto: { note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -131,6 +132,7 @@ export class IssuesService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -170,7 +172,7 @@ export class IssuesService {
       note: string;
       requireRework?: boolean;
     },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -182,6 +184,7 @@ export class IssuesService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -289,7 +292,7 @@ export class IssuesService {
     requestId: string,
     issueId: string,
     dto: { note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -301,6 +304,7 @@ export class IssuesService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,

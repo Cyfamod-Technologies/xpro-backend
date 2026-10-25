@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  Headers,
   Param,
   Post,
   Req,
@@ -14,7 +13,7 @@ import type { Request, Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../../common/types/request-user';
-import { parseEtag } from '../../platform/concurrency/etag.util';
+import { IfMatch } from '../../platform/concurrency/if-match.decorator';
 import { AppError } from '../../platform/errors/app-error';
 import { IdempotencyKey } from '../../platform/idempotency/idempotency-key.decorator';
 import { IssueNoteDto, RaiseIssueDto, ResolveIssueDto } from './issues.dto';
@@ -38,18 +37,11 @@ export class IssuesController {
       }),
     )
     dto: RaiseIssueDto,
-    @Headers('if-match') tag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey({ required: true }) key: string,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = tag ? parseEtag(tag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.issues.raise(
       user,
       id,
@@ -74,18 +66,11 @@ export class IssuesController {
       }),
     )
     dto: IssueNoteDto,
-    @Headers('if-match') tag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = tag ? parseEtag(tag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.issues.accept(
       user.id,
       id,
@@ -111,18 +96,11 @@ export class IssuesController {
       }),
     )
     dto: ResolveIssueDto,
-    @Headers('if-match') tag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = tag ? parseEtag(tag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.issues.resolve(
       user.id,
       id,
@@ -148,18 +126,11 @@ export class IssuesController {
       }),
     )
     dto: IssueNoteDto,
-    @Headers('if-match') tag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = tag ? parseEtag(tag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     if (!dto.note?.trim())
       throw new AppError(
         422,

@@ -29,7 +29,7 @@ export class CompletionService {
     user: RequestUser,
     requestId: string,
     dto: { acknowledge: boolean; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -41,6 +41,7 @@ export class CompletionService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -166,7 +167,7 @@ export class CompletionService {
     userId: string,
     requestId: string,
     dto: { note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -178,6 +179,7 @@ export class CompletionService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,

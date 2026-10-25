@@ -21,7 +21,7 @@ export class ClosureService {
     user: RequestUser,
     requestId: string,
     dto: { note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -33,6 +33,7 @@ export class ClosureService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -41,22 +42,7 @@ export class ClosureService {
           : {}),
       },
       async (ctx) => {
-        if (ctx.snap.status !== 'acknowledged' || ctx.snap.openIssues.length)
-          throw conflict(
-            'Customer acknowledgement is required before final closure.',
-          );
-        const request = await ctx.tx.serviceRequest.findUnique({
-          where: { id: ctx.snap.id },
-          select: { defectsWindowEndsAt: true },
-        });
-        if (
-          request?.defectsWindowEndsAt &&
-          request.defectsWindowEndsAt > ctx.now &&
-          !dto.note?.trim()
-        )
-          throw conflict(
-            'Add a reason to close this request before the defects window ends.',
-          );
+        // 04 §5.2 #36 payout rule: payout rows are not in the snapshot.
         const payouts = await ctx.tx.payout.findMany({
           where: { requestId: ctx.snap.id },
           orderBy: { createdAt: 'desc' },
