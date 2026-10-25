@@ -1292,11 +1292,16 @@ model GatewayEvent {
   rawBodyDigest  String    @map("raw_body_digest")
   signatureValid Boolean   @map("signature_valid")
   status         String
+  /// Gateway object id the event is about (for example a refund id), so a retry can run without the raw body.
+  subjectId      String?   @map("subject_id")
   attempts       Int       @default(0)
   lastError      String?   @map("last_error")
+  /// Retry time after a failure, or the lease expiry while the row is processing.
+  nextAttemptAt  DateTime? @map("next_attempt_at")
   receivedAt     DateTime  @default(now()) @map("received_at")
   processedAt    DateTime? @map("processed_at")
   @@index([status, receivedAt])
+  @@index([status, nextAttemptAt])
   @@map("gateway_events")
 }
 
