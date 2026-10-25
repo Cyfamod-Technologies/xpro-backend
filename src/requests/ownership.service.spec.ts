@@ -99,4 +99,47 @@ describe('OwnershipService', () => {
       }),
     );
   });
+  it('leaves note validation to the runner guard so a 403 or 409 is never pre-empted (A-31)', async () => {
+    const actor: ActorContext = {
+      userId: 'staff-1',
+      kind: 'staff',
+      displayName: 'Staff',
+      platformRoles: ['staff'],
+      accountActive: true,
+      staff: {
+        status: 'active',
+        roles: ['operations'],
+        permissions: new Set(),
+        canOwn: true,
+        isSuperAdmin: false,
+        permVersion: 1,
+      },
+    };
+    const runner = {
+      run: jest
+        .fn()
+        .mockResolvedValue({ status: 200, body: {}, etag: 'W/"2"' }),
+    };
+    const service = new OwnershipService(
+      { resolve: jest.fn().mockResolvedValue(actor) } as never,
+      runner as never,
+      { hashRequest: jest.fn().mockReturnValue('hash') } as never,
+    );
+
+    await service.release(
+      { id: 'staff-1' } as never,
+      'XPR-00001',
+      { note: 'no', expectedOwnerId: 'owner-1' },
+      1,
+      '/requests/XPR-00001/release',
+    );
+
+    expect(runner.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'request.release',
+        input: { note: 'no', expectedOwnerId: 'owner-1' },
+      }),
+      expect.any(Function),
+    );
+  });
 });

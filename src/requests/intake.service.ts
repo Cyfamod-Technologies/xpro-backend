@@ -18,7 +18,9 @@ import { IdempotencyService } from '../platform/idempotency/idempotency.service'
 import { UploadsService } from '../uploads/uploads.service';
 import { TimerKinds } from '../platform/timers/timer-kinds';
 import { RequestCommandRunner } from './command-runner';
+import { clarificationDueTimes } from './domain/clarification-timers';
 import {
+  normalizeNigerianPhone,
   validateIntake,
   type IntakeValidationInput,
   type ValidatedIntake,
@@ -30,12 +32,7 @@ import type {
 import { effectiveDates, jsonObject } from './projections/projection.helpers';
 import { REQUEST_INCLUDE, type LoadedRequest } from './snapshot.loader';
 import { ApprovalsHooks } from './approvals.hooks';
-import {
-  canClarify,
-  canFreeCancel,
-  canReject,
-  canReview,
-} from './domain/intake-guards';
+import { REQUEST_ENTITY } from '../uploads/entity-types';
 import type {
   RequestClarifyDto,
   RequestFreeCancelDto,
@@ -43,10 +40,6 @@ import type {
   RequestReviewDto,
 } from './dto/request-intake.dto';
 
-const UPDATE_CUSTOMER_WINDOW_MESSAGE =
-  'XPro has already approved this request. Send changes to XPro in Messages.';
-const UPDATE_STAFF_WINDOW_MESSAGE =
-  'A provider has already accepted this request. Agree changes with the customer and reflect them in the quote.';
 const OPEN_STATUSES: RequestStatus[] = [
   'submitted',
   'under_review',
@@ -61,6 +54,12 @@ const OPEN_STATUSES: RequestStatus[] = [
   'acknowledged',
   'cancelling',
 ];
+/** 02 §6.11 items a request can hold before intake approval; rejecting or cancelling closes whichever are open. */
+const INTAKE_APPROVAL_KINDS = [
+  'intake',
+  'clarification_overdue',
+  'unclaimed',
+] as const;
 const T6_TIMERS = [
   TimerKinds.T6Reminder48h,
   TimerKinds.T6Staff5d,
@@ -182,6 +181,7 @@ export class IntakeService {
         actor,
         requestRef: ref,
         expectedVersion: version,
+        input: dto,
         autoClaim: true,
         ...(idempotencyKey ? { idempotencyKey, idempotencyHash: hash } : {}),
       },
@@ -195,51 +195,17 @@ export class IntakeService {
           actor.userId === row.ownerId &&
           actor.platformRoles.includes('customer');
         const isStaff = actor.kind === 'staff';
-        if (isOwner) {
-          if (
-            row.status !== 'submitted' ||
-            (row.intakeState !== 'pending' &&
-              row.intakeState !== 'clarification')
-          )
-            throw new AppError(
-              409,
-              'STATE_CONFLICT',
-              UPDATE_CUSTOMER_WINDOW_MESSAGE,
-            );
-        } else if (isStaff) {
-          requirePermission(actor, 'request.review');
-          if (
-            (row.status !== 'submitted' && row.status !== 'under_review') ||
-            row.assignments.some(
-              ({ status }) =>
-                status === 'pending_approval' || status === 'accepted',
-            ) ||
-            row.quotes.some(({ status }) => status === 'accepted')
-          )
-            throw new AppError(
-              409,
-              'STATE_CONFLICT',
-              UPDATE_STAFF_WINDOW_MESSAGE,
-            );
-          if (typeof dto.note !== 'string' || !dto.note.trim())
-            throw new AppError(
-              422,
-              'VALIDATION_ERROR',
-              'Add a note explaining the change.',
-            );
-        } else {
+        // The runner guard (canUpdateRequest, 04 §6.3) checked the owner and staff windows and request.review.
+        if (isStaff && (typeof dto.note !== 'string' || !dto.note.trim()))
           throw new AppError(
-            403,
-            'FORBIDDEN',
-            'This action is not available for your account type.',
+            422,
+            'VALIDATION_ERROR',
+            'Add a note explaining the change.',
           );
-        }
 
         if (
           isStaff &&
-          (dto.phone !== undefined ||
-            dto.address !== undefined ||
-            dto.contactMethod !== undefined) &&
+          contactFieldsChanged(row, dto) &&
           !actor.staff?.permissions.has('view.customer_contact')
         )
           throw new AppError(
@@ -448,6 +414,11 @@ export class IntakeService {
             TimerKinds.T6FinalWarning,
             TimerKinds.T6AutoCancel,
           ]);
+          context.approvals.close(
+            'clarification_overdue',
+            row.id,
+            'clarification_answered',
+          );
           context.audit('Clarification answered');
           context.notify('request.clarification_answered', {
             requestCode: context.snap.number,
@@ -473,7 +444,7 @@ export class IntakeService {
     user: RequestUser,
     ref: string,
     dto: RequestClarifyDto,
-    version: number,
+    version: number | undefined,
     originalUrl: string,
     idempotencyKey?: string,
   ) {
@@ -491,19 +462,11 @@ export class IntakeService {
         actor,
         requestRef: ref,
         expectedVersion: version,
+        input: dto,
         autoClaim: true,
         ...(idempotencyKey ? { idempotencyKey, idempotencyHash: hash } : {}),
       },
       async (context) => {
-        assertGuard(
-          canClarify(
-            context.snap,
-            actorView(actor),
-            undefined,
-            context.now,
-            context.settings,
-          ),
-        );
         const question =
           typeof dto.question === 'string' ? dto.question.trim() : '';
         if (question.length < 5 || question.length > 1000)
@@ -530,44 +493,49 @@ export class IntakeService {
             clarificationCount: { increment: 1 },
           },
         });
-        await this.approvals.close(
-          context.tx,
+        context.approvals.close(
           'intake',
           context.snap.id,
-          context.now,
+          'clarification_requested',
         );
-        await this.approvals.open(
-          context.tx,
+        // A re-asked question restarts T6; an item opened for the earlier question is stale.
+        context.approvals.close(
           'clarification_overdue',
           context.snap.id,
-          context.snap.id,
-          context.now,
-          actor.userId,
+          'clarification_requested',
         );
+        const due = clarificationDueTimes(
+          clarificationAskedAt,
+          context.settings,
+        );
+        const marker = {
+          clarificationAskedAt: clarificationAskedAt.toISOString(),
+        };
         context.timers.stop(T6_TIMERS);
         context.timers.start(
           TimerKinds.T6Reminder48h,
-          addDays(clarificationAskedAt, 2),
+          due.reminderAt,
           undefined,
-          { clarificationAskedAt: clarificationAskedAt.toISOString() },
+          marker,
         );
         context.timers.start(
           TimerKinds.T6Staff5d,
-          addDays(clarificationAskedAt, 5),
+          due.staffItemAt,
           undefined,
-          { clarificationAskedAt: clarificationAskedAt.toISOString() },
+          marker,
         );
-        context.timers.start(
-          TimerKinds.T6FinalWarning,
-          addDays(clarificationAskedAt, 13),
-          undefined,
-          { clarificationAskedAt: clarificationAskedAt.toISOString() },
-        );
+        if (due.finalWarningAt)
+          context.timers.start(
+            TimerKinds.T6FinalWarning,
+            due.finalWarningAt,
+            undefined,
+            marker,
+          );
         context.timers.start(
           TimerKinds.T6AutoCancel,
-          addDays(clarificationAskedAt, 14),
+          due.autoCancelAt,
           undefined,
-          { clarificationAskedAt: clarificationAskedAt.toISOString() },
+          marker,
         );
         context.audit('Clarification requested', { note: question });
         context.notify('request.clarification_requested', {
@@ -582,7 +550,7 @@ export class IntakeService {
     user: RequestUser,
     ref: string,
     dto: RequestReviewDto,
-    version: number,
+    version: number | undefined,
     originalUrl: string,
     idempotencyKey?: string,
   ) {
@@ -595,19 +563,11 @@ export class IntakeService {
         actor,
         requestRef: ref,
         expectedVersion: version,
+        input: dto,
         autoClaim: true,
         ...(idempotencyKey ? { idempotencyKey, idempotencyHash: hash } : {}),
       },
       async (context) => {
-        assertGuard(
-          canReview(
-            context.snap,
-            actorView(actor),
-            undefined,
-            context.now,
-            context.settings,
-          ),
-        );
         const row = await context.tx.serviceRequest.findUnique({
           where: { id: context.snap.id },
           include: REQUEST_INCLUDE,
@@ -665,13 +625,8 @@ export class IntakeService {
               : { needsAssignmentReason: null }),
           },
         });
-        await this.approvals.close(context.tx, 'intake', row.id, context.now);
-        await this.approvals.close(
-          context.tx,
-          'clarification_overdue',
-          row.id,
-          context.now,
-        );
+        context.approvals.close('intake', row.id, 'approved');
+        context.approvals.close('clarification_overdue', row.id, 'approved');
         context.timers.stop(T6_TIMERS);
         if (mode === 'auto') context.enqueueCascade('intake_approved');
         else
@@ -691,7 +646,7 @@ export class IntakeService {
     user: RequestUser,
     ref: string,
     dto: RequestRejectDto,
-    version: number,
+    version: number | undefined,
     originalUrl: string,
     idempotencyKey?: string,
   ) {
@@ -704,18 +659,10 @@ export class IntakeService {
         actor,
         requestRef: ref,
         expectedVersion: version,
+        input: dto,
         ...(idempotencyKey ? { idempotencyKey, idempotencyHash: hash } : {}),
       },
       async (context) => {
-        assertGuard(
-          canReject(
-            context.snap,
-            actorView(actor),
-            undefined,
-            context.now,
-            context.settings,
-          ),
-        );
         const reason = typeof dto.reason === 'string' ? dto.reason.trim() : '';
         if (reason.length < 5 || reason.length > 1000)
           throw new AppError(
@@ -737,6 +684,8 @@ export class IntakeService {
           },
         });
         context.timers.stop(T6_TIMERS);
+        for (const kind of INTAKE_APPROVAL_KINDS)
+          context.approvals.close(kind, context.snap.id, 'rejected');
         context.audit('Request rejected', { note: reason });
         context.notify('request.rejected', {
           requestCode: context.snap.number,
@@ -751,7 +700,7 @@ export class IntakeService {
     user: RequestUser,
     ref: string,
     dto: RequestFreeCancelDto,
-    version: number,
+    version: number | undefined,
     originalUrl: string,
     idempotencyKey?: string,
   ) {
@@ -771,18 +720,10 @@ export class IntakeService {
         actor,
         requestRef: ref,
         expectedVersion: version,
+        input: dto,
         ...(idempotencyKey ? { idempotencyKey, idempotencyHash: hash } : {}),
       },
       async (context) => {
-        assertGuard(
-          canFreeCancel(
-            context.snap,
-            actorView(actor),
-            undefined,
-            context.now,
-            context.settings,
-          ),
-        );
         await context.tx.serviceRequest.update({
           where: { id: context.snap.id },
           data: { status: 'cancelled' },
@@ -803,6 +744,8 @@ export class IntakeService {
           data: { cancellationId: cancellation.id },
         });
         context.timers.stop(T6_TIMERS);
+        for (const kind of INTAKE_APPROVAL_KINDS)
+          context.approvals.close(kind, context.snap.id, 'cancelled');
         context.audit('Request cancelled', {
           note,
           changes: { reasonCode: 'customer_changed_mind' },
@@ -861,7 +804,7 @@ export class IntakeService {
             ids.slice(start, start + 6),
             ownerId,
             UploadPurpose.request_attachment,
-            'service_request',
+            REQUEST_ENTITY,
             requestId,
           )),
         );
@@ -885,25 +828,6 @@ export class IntakeService {
       'This request is no longer available to your account.',
     );
   }
-}
-
-function actorView(actor: ActorContext) {
-  return {
-    kind: actor.kind,
-    userId: actor.userId,
-    permissions: actor.staff?.permissions,
-  } as const;
-}
-
-function assertGuard(
-  result: ReturnType<typeof canReview>,
-): asserts result is { ok: true } {
-  if (!result.ok)
-    throw new AppError(result.status, result.code, result.message);
-}
-
-function addDays(date: Date, days: number): Date {
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
 function modeForService(
@@ -965,6 +889,28 @@ function titleTrigrams(value: string): Set<string> {
 
 function formatRequestNumber(number: number): string {
   return `XPR-${String(number).padStart(5, '0')}`;
+}
+
+/** Staff without `view.customer_contact` may send the whole form back; only a changed value needs the permission (04 §6.3). */
+export function contactFieldsChanged(
+  row: Pick<LoadedRequest, 'phone' | 'address' | 'contactMethod'>,
+  dto: Pick<RequestUpdateDto, 'phone' | 'address' | 'contactMethod'>,
+): boolean {
+  if (dto.phone !== undefined) {
+    const phone = typeof dto.phone === 'string' ? dto.phone.trim() : null;
+    if (
+      phone === null ||
+      (normalizeNigerianPhone(phone) ?? phone) !== row.phone
+    )
+      return true;
+  }
+  if (dto.address !== undefined) {
+    if (typeof dto.address !== 'string' || dto.address.trim() !== row.address)
+      return true;
+  }
+  return (
+    dto.contactMethod !== undefined && dto.contactMethod !== row.contactMethod
+  );
 }
 
 function fieldLabel(field: string): string {

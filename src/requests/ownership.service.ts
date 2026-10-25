@@ -13,13 +13,6 @@ import type {
   RequestReassignDto,
   RequestReleaseDto,
 } from './dto/request-ownership.dto';
-import {
-  canClaim,
-  canHandoff,
-  canReassign,
-  canRelease,
-} from './domain/ownership-guards';
-import type { ActorView } from './domain/snapshot';
 
 const OPEN_STATUSES = [
   'submitted',
@@ -65,27 +58,9 @@ export class OwnershipService {
       originalUrl,
       undefined,
       key,
+      undefined,
       async (ctx) => {
-        assertGuard(
-          canClaim(
-            ctx.snap,
-            actorView(actor),
-            undefined,
-            ctx.now,
-            ctx.settings,
-          ),
-        );
         const row = await requestRow(ctx.tx, ctx.snap.id);
-        if (
-          row.status === 'cancelled' ||
-          row.status === 'rejected' ||
-          row.status === 'closed'
-        )
-          throw conflict(
-            'Closed, cancelled or rejected requests cannot be claimed.',
-          );
-        if (row.staffOwnerId !== null)
-          throw conflict('This request already has an owner.');
         const result = await ctx.tx.serviceRequest.updateMany({
           where: {
             id: row.id,
@@ -121,8 +96,6 @@ export class OwnershipService {
   ) {
     const actor = await this.actors.resolve(user.id);
     requireStaffActor(actor);
-    const note = trimmedNote(dto.note, 'Add a note for whoever picks this up.');
-    const canReassign = actor.staff.permissions.has('request.reassign');
     return this.run(
       actor,
       'request.release',
@@ -132,23 +105,11 @@ export class OwnershipService {
       originalUrl,
       dto,
       key,
+      { note: dto.note, expectedOwnerId: dto.expectedOwnerId },
       async (ctx) => {
-        assertGuard(
-          canRelease(
-            ctx.snap,
-            actorView(actor),
-            { note, expectedOwnerId: dto.expectedOwnerId },
-            ctx.now,
-            ctx.settings,
-          ),
-        );
+        // The runner guard validated the note after the permission check and before the owner check (02 §6.6).
+        const note = dto.note.trim();
         const row = await requestRow(ctx.tx, ctx.snap.id);
-        if (!isOpen(row.status)) throw conflict('This request is closed.');
-        if (row.staffOwnerId !== dto.expectedOwnerId) throw ownerChanged();
-        if (row.staffOwnerId !== user.id && !canReassign)
-          throw forbidden(
-            'Only the owner or Operations can release this request.',
-          );
         const beforeOwnerId = row.staffOwnerId;
         await this.changeOwner(ctx.tx, row, null, ctx.now);
         await internalNote(ctx.tx, row.id, user.id, `Released: ${note}`);
@@ -180,7 +141,6 @@ export class OwnershipService {
   ) {
     const actor = await this.actors.resolve(user.id);
     requireStaffActor(actor);
-    const note = trimmedNote(dto.note, 'Add a hand-off note.');
     return this.run(
       actor,
       'request.handoff',
@@ -190,22 +150,10 @@ export class OwnershipService {
       originalUrl,
       dto,
       key,
+      { note: dto.note, toStaffId: dto.toStaffId },
       async (ctx) => {
-        assertGuard(
-          canHandoff(
-            ctx.snap,
-            actorView(actor),
-            { note, toStaffId: dto.toStaffId },
-            ctx.now,
-            ctx.settings,
-          ),
-        );
+        const note = dto.note.trim();
         const row = await requestRow(ctx.tx, ctx.snap.id);
-        if (!isOpen(row.status)) throw conflict('This request is closed.');
-        if (row.staffOwnerId !== user.id)
-          throw forbidden('Only the owner can hand off this request.');
-        if (dto.toStaffId === user.id)
-          throw conflict('You already own this request.');
         const target = await eligibleTarget(ctx.tx, dto.toStaffId);
         await this.changeOwner(ctx.tx, row, target.userId, ctx.now);
         await internalNote(
@@ -240,10 +188,6 @@ export class OwnershipService {
   ) {
     const actor = await this.actors.resolve(user.id);
     requirePermission(actor, 'request.reassign');
-    const note = trimmedNote(
-      dto.note,
-      'Add a reason for reassigning this request.',
-    );
     return this.run(
       actor,
       'request.reassign',
@@ -253,25 +197,14 @@ export class OwnershipService {
       originalUrl,
       dto,
       key,
+      {
+        note: dto.note,
+        staffId: dto.staffId,
+        expectedOwnerId: dto.expectedOwnerId,
+      },
       async (ctx) => {
-        assertGuard(
-          canReassign(
-            ctx.snap,
-            actorView(actor),
-            {
-              note,
-              staffId: dto.staffId,
-              expectedOwnerId: dto.expectedOwnerId,
-            },
-            ctx.now,
-            ctx.settings,
-          ),
-        );
+        const note = dto.note.trim();
         const row = await requestRow(ctx.tx, ctx.snap.id);
-        if (!isOpen(row.status)) throw conflict('This request is closed.');
-        if (row.staffOwnerId !== dto.expectedOwnerId) throw ownerChanged();
-        if (row.staffOwnerId === dto.staffId)
-          throw conflict('This staff member already owns the request.');
         const target = await eligibleTarget(ctx.tx, dto.staffId);
         const previousOwnerId = row.staffOwnerId;
         await this.changeOwner(ctx.tx, row, target.userId, ctx.now);
@@ -313,6 +246,7 @@ export class OwnershipService {
     originalUrl: string,
     body: unknown,
     key: string | undefined,
+    input: unknown,
     fn: (context: CommandContext) => Promise<void>,
   ) {
     const hash =
@@ -324,6 +258,7 @@ export class OwnershipService {
         command,
         actor,
         requestRef: ref,
+        input,
         ...(version !== undefined ? { expectedVersion: version } : {}),
         ...(key ? { idempotencyKey: key, idempotencyHash: hash } : {}),
       },
@@ -442,16 +377,6 @@ function requireStaffActor(
     throw forbidden('This action is not available for your account type.');
 }
 
-function trimmedNote(value: string, message: string) {
-  const note = typeof value === 'string' ? value.trim() : '';
-  if (note.length < 5 || note.length > 500)
-    throw new AppError(422, 'VALIDATION_ERROR', message);
-  return note;
-}
-
-function isOpen(status: string) {
-  return (OPEN_STATUSES as readonly string[]).includes(status);
-}
 function conflict(message: string) {
   return new AppError(409, 'STATE_CONFLICT', message);
 }
@@ -460,21 +385,4 @@ function ownerChanged() {
 }
 function forbidden(message: string) {
   return new AppError(403, 'FORBIDDEN', message);
-}
-
-function actorView(actor: ActorContext): ActorView {
-  return {
-    kind: actor.kind,
-    userId: actor.userId,
-    platformRoles: actor.platformRoles,
-    permissions: actor.staff?.permissions,
-    canOwn: actor.staff?.canOwn,
-  };
-}
-
-function assertGuard(
-  result: ReturnType<typeof canClaim>,
-): asserts result is { ok: true } {
-  if (result.ok) return;
-  throw new AppError(result.status, result.code, result.message);
 }
