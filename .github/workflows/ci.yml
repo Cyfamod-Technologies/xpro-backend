@@ -39,3 +39,29 @@ jobs:
 
       - name: Run Build
         run: npm run build
+
+  migration-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Lints only migrations this PR adds or changes. Existing migrations are
+      # immutable, so re-flagging them would only add noise. Rules live in
+      # .squawk.toml.
+      - name: Lint new migrations with Squawk
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          mapfile -t CHANGED < <(git diff --name-only --diff-filter=AM \
+            "origin/${BASE_REF}...HEAD" -- 'prisma/migrations/*/migration.sql')
+          if [ "${#CHANGED[@]}" -eq 0 ]; then
+            echo "No migration changes in this PR."
+            exit 0
+          fi
+          printf 'Linting %s\n' "${CHANGED[@]}"
+          npx --yes squawk-cli@2.68.0 "${CHANGED[@]}"
