@@ -279,6 +279,7 @@ export class PricingService {
               lastEditedBy: userId,
               approvalRequestedAt: null,
               approvalRequestedBy: null,
+              customerNote: null,
             },
           });
         } else {
@@ -390,7 +391,7 @@ export class PricingService {
           {
             revision: dto.revision,
             pricingOverrideNote: quote.pricingOverrideNote ?? undefined,
-            customerNote: await this.heldCustomerNote(ctx.tx, quote.id),
+            customerNote: quote.customerNote ?? undefined,
           },
           userId,
           true,
@@ -444,6 +445,7 @@ export class PricingService {
           data: {
             approvalRequestedBy: null,
             approvalRequestedAt: null,
+            customerNote: null,
             returnedNote: dto.note.trim(),
           },
         });
@@ -766,17 +768,13 @@ export class PricingService {
           approvalRequestedBy: userId,
           approvalRequestedAt: ctx.now,
           pricingOverrideNote: overrideNote,
+          customerNote: dto.customerNote?.trim() || null,
         },
       });
       ctx.audit('Quote approval requested', {
         resourceType: 'quote',
         resourceId: quote.id,
-        changes: {
-          version: quote.version,
-          ...(dto.customerNote?.trim()
-            ? { customerNote: dto.customerNote.trim() }
-            : {}),
-        },
+        changes: { version: quote.version },
       });
       ctx.notify('quote.approval_needed', { requestCode: ctx.snap.number });
       return { status: 202 };
@@ -793,6 +791,7 @@ export class PricingService {
         pricingOverrideNote: overrideNote,
         approvalRequestedBy: null,
         approvalRequestedAt: null,
+        customerNote: null,
       },
     });
     await ctx.tx.quote.updateMany({
@@ -864,28 +863,6 @@ export class PricingService {
       select: { userId: true },
     });
     return rows.map((row) => row.userId);
-  }
-
-  /** The `quote` table has no column for the customer note given at hold time, so it travels in the hold's audit row (B-15). */
-  private async heldCustomerNote(
-    tx: Prisma.TransactionClient,
-    quoteId: string,
-  ): Promise<string | undefined> {
-    const held = await tx.auditLog.findFirst({
-      where: {
-        entityType: 'quote',
-        entityId: quoteId,
-        action: 'Quote approval requested',
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { metadata: true },
-    });
-    const changes = (
-      held?.metadata as { changes?: { customerNote?: unknown } } | null
-    )?.changes;
-    return typeof changes?.customerNote === 'string'
-      ? changes.customerNote
-      : undefined;
   }
 
   private async payoutSuggestionFor(requestId: string): Promise<number | null> {

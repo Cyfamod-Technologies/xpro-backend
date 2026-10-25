@@ -26,6 +26,7 @@ const quoteRow = (overrides: Partial<Quote> = {}): Quote => ({
   note: 'Excludes tiling',
   basedOnAssignmentId: 'assignment-1',
   pricingOverrideNote: 'No costing: urgent job',
+  customerNote: 'Held customer note',
   lastEditedBy: 'staff-1',
   approvalRequestedBy: null,
   approvalRequestedAt: null,
@@ -183,6 +184,15 @@ describe('staffQuoteView', () => {
       { description: 'Labour', quantity: 2, unitPrice: 250_000 },
       { description: 'Pipe', quantity: 4, unitPrice: 50_000 },
     ]);
+  });
+
+  it('never exposes the customer note held for sign-off (B-15)', () => {
+    for (const view of [
+      customerQuoteView(quoteRow()),
+      providerQuoteView(quoteRow(), ['assignment-1']),
+      staffQuoteView(quoteRow(), { ...viewer, payoutSuggestion: null }),
+    ])
+      expect(JSON.stringify(view)).not.toContain('Held customer note');
   });
 
   it('masks amounts, notes and payout without view.pricing, leaving the keys absent', () => {

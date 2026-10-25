@@ -75,7 +75,6 @@ function harness(options: {
     assignment: { findFirst: jest.fn().mockResolvedValue({ id: 'assign-1' }) },
     contribution: { findFirst: jest.fn().mockResolvedValue({ id: 'cost-1' }) },
     staffMember: { findMany: jest.fn().mockResolvedValue([]) },
-    auditLog: { findFirst: jest.fn().mockResolvedValue(null) },
     ...options.tx,
   };
   const ctx = {
@@ -349,6 +348,7 @@ describe('sign-off (B-15, B-16, B-17, B-43)', () => {
     lastEditedBy: 'staff-1',
     basedOnAssignmentId: 'assign-1',
     pricingOverrideNote: null,
+    customerNote: null,
     approvalRequestedAt: null,
     ...overrides,
   });
@@ -406,11 +406,13 @@ describe('sign-off (B-15, B-16, B-17, B-43)', () => {
         approvalRequestedBy: 'staff-2',
         approvalRequestedAt: NOW,
         pricingOverrideNote: 'Urgent job',
+        customerNote: 'Replaces v2',
       });
       expect(effects.audit[0]).toMatchObject({
         action: 'Quote approval requested',
-        data: { changes: { version: 3, customerNote: 'Replaces v2' } },
+        data: { changes: { version: 3 } },
       });
+      expect(JSON.stringify(effects.audit[0])).not.toContain('Replaces v2');
       expect(effects.notify.map(({ event }) => event)).toEqual([
         'quote.approval_needed',
       ]);
@@ -494,13 +496,13 @@ describe('sign-off (B-15, B-16, B-17, B-43)', () => {
         actor: approver(),
         snap: { status: 'awaiting_payment' },
         tx: {
-          ...quoteTx(held({ pricingOverrideNote: 'No costing: urgent' })),
-          contribution: { findFirst: jest.fn().mockResolvedValue(null) },
-          auditLog: {
-            findFirst: jest.fn().mockResolvedValue({
-              metadata: { changes: { customerNote: 'Replaces v2' } },
+          ...quoteTx(
+            held({
+              pricingOverrideNote: 'No costing: urgent',
+              customerNote: 'Replaces v2',
             }),
-          },
+          ),
+          contribution: { findFirst: jest.fn().mockResolvedValue(null) },
         },
       });
       await approve(service, 'approver-1');
@@ -512,6 +514,7 @@ describe('sign-off (B-15, B-16, B-17, B-43)', () => {
         event: 'quote.ready',
         params: { requestCode: 'XPR-00001', note: 'Replaces v2' },
       });
+      expect(updateData(tx.quote.update, 0).customerNote).toBeNull();
     });
 
     it('writes one Quote approved audit and no publish audit (B-43)', async () => {
