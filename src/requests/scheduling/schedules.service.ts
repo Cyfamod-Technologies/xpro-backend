@@ -34,7 +34,7 @@ export class SchedulesService {
     userId: string,
     requestId: string,
     dto: { startAt: string; endAt: string; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -46,6 +46,7 @@ export class SchedulesService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -167,6 +168,7 @@ export class SchedulesService {
           new Date(ctx.now.getTime() + 48 * 60 * 60_000),
           schedule.id,
         );
+        ctx.approvals.close('schedule_needed', ctx.snap.id, 'proposed');
         ctx.audit('Schedule proposed', {
           resourceType: 'schedule',
           resourceId: schedule.id,
@@ -190,7 +192,7 @@ export class SchedulesService {
     requestId: string,
     scheduleId: string,
     dto: { accept: boolean; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -211,6 +213,7 @@ export class SchedulesService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -387,7 +390,7 @@ export class SchedulesService {
     requestId: string,
     scheduleId: string,
     dto: { note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -404,6 +407,7 @@ export class SchedulesService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
