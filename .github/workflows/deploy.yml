@@ -46,24 +46,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 22
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps
-
-      - name: Generate Prisma client
-        run: npx prisma generate
-
-      - name: Run linter
-        run: npm run lint --if-present
-
-      - name: Build TypeScript application
-        run: npm run build
-
       - name: Validate deployment configuration
         shell: bash
         run: |
@@ -167,17 +149,26 @@ jobs:
           echo "Build image: $FULL_IMAGE"
           echo "Registry image: $LOCAL_REGISTRY_IMAGE"
 
-      - name: Build Docker image
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-          docker build \
-            --platform linux/amd64 \
-            --file "$DOCKERFILE_PATH" \
-            --tag "$FULL_IMAGE" \
-            --tag "$LATEST_IMAGE" \
-            "$BUILD_CONTEXT"
+      # The GitHub Actions layer cache skips the in-image `npm ci` and
+      # `prisma generate` when package files and prisma/ are unchanged.
+      # provenance is off so `load` yields a plain single-platform image for
+      # the inspect, save and transfer steps below.
+      - name: Build Docker image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ env.BUILD_CONTEXT }}
+          file: ${{ env.DOCKERFILE_PATH }}
+          platforms: linux/amd64
+          tags: |
+            ${{ env.FULL_IMAGE }}
+            ${{ env.LATEST_IMAGE }}
+          load: true
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Verify built image
         shell: bash
@@ -873,7 +864,7 @@ jobs:
           exit 1
 
       - name: Clean temporary Docker images
-        if: success() && github.event_name != 'pull_request'
+        if: always() && github.event_name != 'pull_request'
         shell: bash
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
