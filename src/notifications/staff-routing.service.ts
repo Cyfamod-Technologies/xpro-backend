@@ -11,6 +11,7 @@ import {
 export type StaffRoutingRule =
   | 'gated'
   | 'gated_unscoped'
+  | 'all_holders'
   | 'informational'
   | 'unclaimed'
   | 'pricing'
@@ -66,6 +67,10 @@ export class StaffRoutingService {
       }
       case 'gated_unscoped':
         return this.holders(this.requirePermission(input), input.actorId);
+      case 'all_holders':
+        return (await this.activeMembers(this.requirePermission(input))).map(
+          (member) => member.userId,
+        );
       case 'informational':
         if (owner) return [owner.userId];
         return this.membersWhoCanOwn();

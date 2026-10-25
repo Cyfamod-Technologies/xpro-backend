@@ -13,9 +13,12 @@ type DispatchDb = Pick<
   Prisma.TransactionClient,
   'inAppNotification' | 'outboxEvent' | 'serviceRequest'
 >;
-type DispatchContext = {
+export type DispatchContext = {
   requestId: string;
+  /** The customer who owns the request; used for the `customer` audience only. */
   ownerId: string;
+  /** The staff owner as loaded before any auto-claim (02 §6.5); the owner for staff routing (02 §6.8). */
+  staffOwnerId: string | null;
   actorId: string | null;
 };
 type Recipient = {
@@ -89,6 +92,46 @@ export class NotificationDispatcher {
     }
   }
 
+  /**
+   * Alerts that belong to no request (05 §7, §8): every active holder of the
+   * permission, super admins included. Only `staff:all_holders` events qualify.
+   */
+  async dispatchAlert(
+    tx: DispatchDb,
+    event: string,
+    params: Record<string, unknown>,
+    actorId: string | null = null,
+  ): Promise<void> {
+    if (!(event in NOTIFICATION_CATALOGUE)) {
+      throw new Error(`Unknown notification event: ${event}`);
+    }
+    const rendered = renderNotification(
+      event as NotificationEvent,
+      params as never,
+    );
+    if (rendered.audience.kind !== 'staff:all_holders') {
+      throw new Error(`${event} is not a request-free alert.`);
+    }
+    const recipientIds = await this.staffRouting.audience('all_holders', {
+      requestId: null,
+      ownerId: null,
+      actorId,
+      permission: rendered.audience.permission,
+    });
+    await this.inbox.createMany(
+      tx,
+      recipientIds.map((recipientId) => ({
+        recipientId,
+        event: rendered.event,
+        title: rendered.title,
+        message: rendered.message,
+        requestId: null,
+        link: rendered.link,
+        mandatory: rendered.mandatory,
+      })),
+    );
+  }
+
   private async recipients(
     tx: DispatchDb,
     audience: (typeof NOTIFICATION_CATALOGUE)[NotificationEvent]['audience'],
@@ -156,7 +199,7 @@ export class NotificationDispatcher {
         return (
           await this.staffRouting.audience('gated', {
             requestId: context.requestId,
-            ownerId: context.ownerId,
+            ownerId: context.staffOwnerId,
             actorId: context.actorId,
             permission: audience.permission,
           })
@@ -169,7 +212,20 @@ export class NotificationDispatcher {
         return (
           await this.staffRouting.audience('gated_unscoped', {
             requestId: context.requestId,
-            ownerId: context.ownerId,
+            ownerId: context.staffOwnerId,
+            actorId: context.actorId,
+            permission: audience.permission,
+          })
+        ).map((recipientId) => ({
+          recipientId,
+          requestId: context.requestId,
+          link,
+        }));
+      case 'staff:all_holders':
+        return (
+          await this.staffRouting.audience('all_holders', {
+            requestId: context.requestId,
+            ownerId: context.staffOwnerId,
             actorId: context.actorId,
             permission: audience.permission,
           })
@@ -182,7 +238,7 @@ export class NotificationDispatcher {
         return (
           await this.staffRouting.audience('informational', {
             requestId: context.requestId,
-            ownerId: context.ownerId,
+            ownerId: context.staffOwnerId,
             actorId: context.actorId,
           })
         ).map((recipientId) => ({
@@ -201,7 +257,7 @@ export class NotificationDispatcher {
             )
           : await this.staffRouting.audience('unclaimed', {
               requestId: context.requestId,
-              ownerId: context.ownerId,
+              ownerId: context.staffOwnerId,
               actorId: context.actorId,
             });
         return recipients.map((recipientId) => ({
@@ -214,7 +270,7 @@ export class NotificationDispatcher {
         return (
           await this.staffRouting.audience('pricing', {
             requestId: context.requestId,
-            ownerId: context.ownerId,
+            ownerId: context.staffOwnerId,
             actorId: context.actorId,
           })
         ).map((recipientId) => ({
@@ -237,7 +293,7 @@ export class NotificationDispatcher {
             'customer_message',
             {
               requestId: context.requestId,
-              ownerId: context.ownerId,
+              ownerId: context.staffOwnerId,
               actorId: context.actorId,
             },
           );
@@ -268,7 +324,7 @@ export class NotificationDispatcher {
           ids.push(
             ...(await this.staffRouting.audience('gated', {
               requestId: context.requestId,
-              ownerId: context.ownerId,
+              ownerId: context.staffOwnerId,
               actorId: context.actorId,
               permission: 'message.provider',
             })),
@@ -276,7 +332,7 @@ export class NotificationDispatcher {
         } else if (channel === 'internal') {
           ids = await this.staffRouting.audience('gated_unscoped', {
             requestId: context.requestId,
-            ownerId: context.ownerId,
+            ownerId: context.staffOwnerId,
             actorId: context.actorId,
             permission: 'message.internal',
           });
