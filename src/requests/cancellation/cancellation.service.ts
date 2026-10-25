@@ -232,12 +232,10 @@ export class CancellationService {
             where: { id: ctx.snap.id },
             data: { status: 'cancelling', cancellationId: row.id },
           });
-          await this.payments.openForCancellation(ctx.tx, {
-            requestId: ctx.snap.id,
+          await this.payments.openForCancellation(ctx, {
             cancellationId: row.id,
             requestedBy: userId,
             workStarted,
-            now: ctx.now,
           });
         } else
           await ctx.tx.serviceRequest.update({
