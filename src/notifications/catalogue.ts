@@ -962,6 +962,58 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: your cancellation was approved.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
+  // new message: not in spec (05 §9 names "Refund requested" for Finance, not its body)
+  'refund.requested': entry<RequestParams & { amount: number }>({
+    key: 'refund.requested',
+    audience: { kind: 'staff:holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund to decide',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: a refund of ₦${naira(amount)} is waiting for a decision.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §6.4: a rejected refund needs a new valid decision)
+  'refund.rejected': entry<RequestParams>({
+    key: 'refund.rejected',
+    audience: { kind: 'staff:holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund rejected',
+    message: ({ requestCode }) =>
+      `${requestCode}: the refund was rejected. Request a new refund to finish the cancellation.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §6.4: a gateway failure leaves a Finance item)
+  'refund.failed': entry<RequestParams & { amount: number; detail: string }>({
+    key: 'refund.failed',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund needs attention',
+    message: ({ requestCode, amount, detail }) =>
+      `${requestCode}: the refund of ₦${naira(amount)} did not complete. ${detail} Check it and retry.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (04 §6.21 gives the transition, not the copy)
+  'cancellation.completed_customer': entry<RequestParams>({
+    key: 'cancellation.completed_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Request cancelled',
+    message: ({ requestCode }) =>
+      `${requestCode}: your cancellation is complete.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (04 §6.21 gives the transition, not the copy)
+  'cancellation.completed_provider': entry<
+    RequestParams & { assignmentId: string; providerUserId: string }
+  >({
+    key: 'cancellation.completed_provider',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Request cancelled',
+    message: ({ requestCode }) =>
+      `${requestCode}: this request was cancelled. You no longer have access to it.`,
+    link: () => null,
+  }),
 } as const;
 
 export type NotificationEvent = keyof typeof NOTIFICATION_CATALOGUE;

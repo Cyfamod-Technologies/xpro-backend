@@ -98,4 +98,49 @@ describe('notification catalogue', () => {
       title: 'Paid — schedule it',
     });
   });
+
+  it('renders the refund and cancellation-complete notices', () => {
+    const code = { requestCode: 'XPR-00042' };
+    expect(
+      renderNotification('refund.requested', { ...code, amount: 50_000_000 }),
+    ).toMatchObject({
+      audience: { kind: 'staff:holders', permission: 'refund.manage' },
+      mandatory: true,
+      title: 'Refund to decide',
+      message: 'XPR-00042: a refund of ₦500,000 is waiting for a decision.',
+    });
+    expect(renderNotification('refund.rejected', code)).toMatchObject({
+      audience: { kind: 'staff:holders', permission: 'refund.manage' },
+      title: 'Refund rejected',
+    });
+    expect(
+      renderNotification('refund.failed', {
+        ...code,
+        amount: 50_000_000,
+        detail: 'Paystack refused it.',
+      }),
+    ).toMatchObject({
+      audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+      mandatory: true,
+      title: 'Refund needs attention',
+    });
+    expect(
+      renderNotification('cancellation.completed_customer', code),
+    ).toMatchObject({
+      audience: { kind: 'customer' },
+      mandatory: true,
+      title: 'Request cancelled',
+    });
+    expect(
+      renderNotification('cancellation.completed_provider', {
+        ...code,
+        assignmentId: 'assignment-1',
+        providerUserId: 'provider-1',
+      }),
+    ).toMatchObject({
+      audience: { kind: 'provider:assignment' },
+      title: 'Request cancelled',
+      link: null,
+    });
+  });
 });
