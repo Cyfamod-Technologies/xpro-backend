@@ -5,7 +5,10 @@ import { AppError } from '../platform/errors/app-error';
 import { hashRequest } from '../platform/idempotency/idempotency.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { RequestUser } from '../common/types/request-user';
-import { RequestCommandRunner } from '../requests/command-runner';
+import {
+  RequestCommandRunner,
+  type CommandContext,
+} from '../requests/command-runner';
 import { ApprovalsHooks } from '../requests/approvals.hooks';
 import { resolveRequestId } from '../requests/request-ref';
 
@@ -138,6 +141,39 @@ export class EscalationsService {
         });
       },
     );
+  }
+
+  /**
+   * A super admin's dispute decision settles the `to: super_admin` escalation
+   * the dispute raised (04 §6.17, 02 §6.10): it is resolved with the decision
+   * note and its queue item closes, in the decision's own transaction.
+   */
+  async resolveForDispute(
+    ctx: Pick<CommandContext, 'tx' | 'snap' | 'now' | 'audit' | 'approvals'>,
+    resolvedBy: string,
+    note: string,
+  ): Promise<number> {
+    const open = await ctx.tx.requestEscalation.findMany({
+      where: {
+        requestId: ctx.snap.id,
+        target: 'super_admin',
+        resolvedAt: null,
+      },
+      select: { id: true },
+    });
+    for (const { id } of open) {
+      await ctx.tx.requestEscalation.update({
+        where: { id },
+        data: { resolvedBy, resolvedAt: ctx.now, resolution: note.trim() },
+      });
+      ctx.approvals.close('escalation', id, 'resolved');
+      ctx.audit('Request escalation resolved', {
+        resourceType: 'request_escalation',
+        resourceId: id,
+        note,
+      });
+    }
+    return open.length;
   }
 
   async list(user: RequestUser, requestRef: string) {

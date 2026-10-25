@@ -80,3 +80,70 @@ describe('EscalationsService.list reference lookup', () => {
     expect(prisma.requestEscalation.findMany).not.toHaveBeenCalled();
   });
 });
+
+describe('EscalationsService.resolveForDispute (D-28)', () => {
+  function setupDispute(open: Array<{ id: string }>) {
+    const tx = {
+      requestEscalation: {
+        findMany: jest.fn().mockResolvedValue(open),
+        update: jest.fn(),
+      },
+    };
+    const closes: unknown[] = [];
+    const audit: unknown[] = [];
+    const now = new Date('2026-10-26T10:00:00Z');
+    const ctx = {
+      tx,
+      snap: { id: REQUEST_ID },
+      now,
+      audit: (action: string, data: unknown) => audit.push({ action, data }),
+      approvals: {
+        open: jest.fn(),
+        close: (...args: unknown[]) => closes.push(args),
+      },
+    };
+    const service = new EscalationsService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { service, tx, closes, audit, ctx, now };
+  }
+
+  it('resolves the open super_admin escalation with the decision note and closes its queue item', async () => {
+    const { service, tx, closes, audit, ctx, now } = setupDispute([
+      { id: 'e-1' },
+    ]);
+
+    await expect(
+      service.resolveForDispute(ctx as never, 'admin-1', '  Final call.  '),
+    ).resolves.toBe(1);
+
+    expect(tx.requestEscalation.findMany).toHaveBeenCalledWith({
+      where: { requestId: REQUEST_ID, target: 'super_admin', resolvedAt: null },
+      select: { id: true },
+    });
+    expect(tx.requestEscalation.update).toHaveBeenCalledWith({
+      where: { id: 'e-1' },
+      data: {
+        resolvedBy: 'admin-1',
+        resolvedAt: now,
+        resolution: 'Final call.',
+      },
+    });
+    expect(closes).toEqual([['escalation', 'e-1', 'resolved']]);
+    expect(audit[0]).toMatchObject({ action: 'Request escalation resolved' });
+  });
+
+  it('does nothing when no super_admin escalation is open', async () => {
+    const { service, tx, closes, ctx } = setupDispute([]);
+
+    await expect(
+      service.resolveForDispute(ctx as never, 'admin-1', 'Final call.'),
+    ).resolves.toBe(0);
+
+    expect(tx.requestEscalation.update).not.toHaveBeenCalled();
+    expect(closes).toEqual([]);
+  });
+});
