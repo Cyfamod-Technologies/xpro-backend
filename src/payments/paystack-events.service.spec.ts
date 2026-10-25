@@ -66,6 +66,9 @@ function build() {
   const refunds = {
     settleFromGateway: jest.fn().mockResolvedValue({ applied: true }),
   };
+  const finance = {
+    settleTransferFromGateway: jest.fn().mockResolvedValue({ applied: true }),
+  };
   const registry = new TimerRegistry();
   const service = new PaystackEventsService(
     prisma as never,
@@ -74,6 +77,7 @@ function build() {
     inbox as never,
     payments as never,
     refunds as never,
+    finance as never,
     registry,
   );
   return {
@@ -83,6 +87,7 @@ function build() {
     inbox,
     payments,
     refunds,
+    finance,
     registry,
     received,
   };
@@ -430,6 +435,104 @@ describe('PaystackEventsService refund events', () => {
     await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
       'deadlock',
     );
+  });
+});
+
+describe('PaystackEventsService transfer events (C-19)', () => {
+  const transferEvent = (event: string) =>
+    signed({ event, data: { reference: 'xpro_tr_abc' } });
+  const withAttempt = () => {
+    const harness = build();
+    harness.prisma.transferAttempt.findUnique.mockResolvedValue({
+      id: 'attempt-1',
+    });
+    return harness;
+  };
+
+  it('verifies the transfer and settles it through the finance service, closing the inbox row in the same transaction', async () => {
+    const { service, gateway, finance, inbox } = withAttempt();
+    gateway.verifyTransfer.mockResolvedValue({
+      reference: 'xpro_tr_abc',
+      status: 'success',
+      amount: 9_000_000,
+    });
+    const { rawBody, signature } = transferEvent('transfer.success');
+
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'processed' });
+
+    expect(gateway.verifyTransfer).toHaveBeenCalledWith('xpro_tr_abc');
+    expect(finance.settleTransferFromGateway).toHaveBeenCalledWith(
+      'xpro_tr_abc',
+      'success',
+      expect.objectContaining({ actor: null, verifiedAmount: 9_000_000 }),
+    );
+    const options = finance.settleTransferFromGateway.mock.calls[0][2] as {
+      onSettled: (tx: unknown) => Promise<void>;
+    };
+    const tx = {};
+    await options.onSettled(tx);
+    expect(inbox.markDone).toHaveBeenCalledWith(tx, expect.any(String), {
+      status: 'processed',
+    });
+  });
+
+  it.each([
+    ['transfer.failed', 'failed'],
+    ['transfer.reversed', 'reversed'],
+  ])('settles %s as %s', async (event, outcome) => {
+    const { service, gateway, finance } = withAttempt();
+    gateway.verifyTransfer.mockResolvedValue({
+      reference: 'xpro_tr_abc',
+      status: outcome,
+    });
+    const { rawBody, signature } = transferEvent(event);
+
+    await service.handleWebhook(rawBody, signature);
+
+    expect(finance.settleTransferFromGateway).toHaveBeenCalledWith(
+      'xpro_tr_abc',
+      outcome,
+      expect.anything(),
+    );
+  });
+
+  it('ignores an event that Paystack does not confirm, or for an unknown reference', async () => {
+    const { service, gateway, finance, prisma } = withAttempt();
+    gateway.verifyTransfer.mockResolvedValue({
+      reference: 'xpro_tr_abc',
+      status: 'pending',
+    });
+    const { rawBody, signature } = transferEvent('transfer.success');
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'ignored' });
+
+    gateway.verifyTransfer.mockResolvedValue(null);
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'ignored' });
+
+    prisma.transferAttempt.findUnique.mockResolvedValue(null);
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'ignored' });
+    expect(finance.settleTransferFromGateway).not.toHaveBeenCalled();
+  });
+
+  it('reports a duplicate when the settlement changed nothing', async () => {
+    const { service, gateway, finance } = withAttempt();
+    gateway.verifyTransfer.mockResolvedValue({
+      reference: 'xpro_tr_abc',
+      status: 'success',
+    });
+    finance.settleTransferFromGateway.mockResolvedValue({ applied: false });
+    const { rawBody, signature } = transferEvent('transfer.success');
+
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'processed', duplicate: true });
   });
 });
 

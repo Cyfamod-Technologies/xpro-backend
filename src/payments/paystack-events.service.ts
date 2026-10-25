@@ -9,6 +9,10 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { TimerRegistry } from '../platform/timers/timer-registry';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  classifyGatewayTransfer,
+  type TransferOutcome,
+} from './domain/payout-rules';
 import { classifyGatewayRefund } from './domain/refund-rules';
 import { verifyPaystackSignature } from './domain/webhook-signature';
 import {
@@ -17,6 +21,7 @@ import {
   type InboundEvent,
 } from './gateway-inbox.service';
 import type { PaymentGateway } from './payment-gateway';
+import { FinanceService } from './finance.service';
 import { PAYMENT_GATEWAY, PaymentsService } from './payments.service';
 import { RefundsService } from './refunds.service';
 
@@ -48,6 +53,7 @@ export class PaystackEventsService implements OnModuleInit {
     private readonly inbox: GatewayInboxService,
     private readonly payments: PaymentsService,
     private readonly refunds: RefundsService,
+    private readonly finance: FinanceService,
     private readonly registry: TimerRegistry,
   ) {}
 
@@ -216,18 +222,25 @@ export class PaystackEventsService implements OnModuleInit {
     });
   }
 
+  /**
+   * `transfer.success`, `transfer.failed` and `transfer.reversed` (05 §6.5,
+   * §8). The event only names the transfer: its state is verified with
+   * Paystack, and the attempt, the payout (latest attempt and matching amount
+   * only), the notifications and the inbox row then change in one transaction
+   * (see `FinanceService`).
+   */
   private async transferSettled(
     event: InboundEvent,
     reference: string,
   ): Promise<EventOutcome> {
     const attempt = await this.prisma.transferAttempt.findUnique({
       where: { reference },
-      include: { payout: true },
+      select: { id: true },
     });
     const verified = attempt
       ? await this.gateway.verifyTransfer(reference)
       : null;
-    const expectedStatus =
+    const expectedStatus: TransferOutcome =
       event.event === 'transfer.success'
         ? 'success'
         : event.event === 'transfer.reversed'
@@ -237,33 +250,22 @@ export class PaystackEventsService implements OnModuleInit {
       !attempt ||
       !verified ||
       verified.reference !== reference ||
-      verified.status.toLowerCase() !== expectedStatus
+      classifyGatewayTransfer(verified.status) !== expectedStatus
     )
       return {
         status: 'ignored',
         reason: 'Transfer status could not be verified.',
       };
-    await this.prisma.$transaction(async (tx) => {
-      await tx.transferAttempt.update({
-        where: { id: attempt.id },
-        data: { status: expectedStatus, settledAt: new Date() },
-      });
-      await tx.payout.update({
-        where: { id: attempt.payoutId },
-        data: {
-          status:
-            expectedStatus === 'success'
-              ? 'paid'
-              : expectedStatus === 'reversed'
-                ? 'reversed'
-                : 'failed',
-          ...(expectedStatus === 'success' ? { paidAt: new Date() } : {}),
-        },
-      });
-      await this.inbox.markDone(tx, event.fingerprint, {
-        status: 'processed',
-      });
-    });
-    return { status: 'processed' };
+    const { applied } = await this.finance.settleTransferFromGateway(
+      reference,
+      expectedStatus,
+      {
+        actor: null,
+        verifiedAmount: verified.amount,
+        onSettled: (tx) =>
+          this.inbox.markDone(tx, event.fingerprint, { status: 'processed' }),
+      },
+    );
+    return { status: 'processed', duplicate: !applied };
   }
 }

@@ -7,6 +7,9 @@ import { ServiceUnavailableException } from '@nestjs/common';
  */
 export class GatewayRejectedError extends ServiceUnavailableException {}
 
+/** The gateway answered 404: it holds nothing under that reference. Unlike a timeout, this is a definite answer. */
+export class GatewayNotFoundError extends GatewayRejectedError {}
+
 export type GatewayRefund = { id: string; status: string; amount?: number };
 
 export type VerifiedTransaction = {
@@ -32,9 +35,13 @@ export interface PaymentGateway {
   verifyRefund(id: string): Promise<GatewayRefund>;
   /** Every refund the gateway holds for a transaction reference, to find one whose submission outcome was not recorded. */
   listRefunds(transactionReference: string): Promise<GatewayRefund[]>;
-  verifyTransfer(
-    reference: string,
-  ): Promise<{ reference: string; status: string; id?: string }>;
+  /** `null` when Paystack does not know the reference; a timeout or 5xx throws, because then the outcome is unknown. */
+  verifyTransfer(reference: string): Promise<{
+    reference: string;
+    status: string;
+    id?: string;
+    amount?: number;
+  } | null>;
   refund(input: {
     reference: string;
     amount: number;
@@ -45,10 +52,11 @@ export interface PaymentGateway {
     accountNumber: string;
     bankCode: string;
   }): Promise<{ recipientCode: string }>;
+  /** Resolves with Paystack's synchronous status (`pending`, `success`, `failed` or `otp`). Only a verified event marks a payout paid. */
   transfer(input: {
     amount: number;
     recipientCode: string;
     reference: string;
     reason: string;
-  }): Promise<{ transferId?: string }>;
+  }): Promise<{ transferId?: string; status: string }>;
 }

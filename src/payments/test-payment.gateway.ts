@@ -76,6 +76,9 @@ export class TestPaymentGateway implements PaymentGateway {
     reference: string;
     reason: string;
   }) {
-    return Promise.resolve({ transferId: `test-transfer-${input.reference}` });
+    return Promise.resolve({
+      transferId: `test-transfer-${input.reference}`,
+      status: 'pending',
+    });
   }
 }

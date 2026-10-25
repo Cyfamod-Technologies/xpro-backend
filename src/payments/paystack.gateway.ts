@@ -1,6 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  GatewayNotFoundError,
   GatewayRejectedError,
   type PaymentGateway,
   type VerifiedTransaction,
@@ -68,13 +69,20 @@ export class PaystackGateway implements PaymentGateway {
       reference: string;
       status: string;
       id?: number | string;
+      amount?: number;
     }>(`/transfer/verify/${encodeURIComponent(reference)}`, {
       method: 'GET',
-    }).then((data) => ({
-      reference: data.reference,
-      status: data.status,
-      id: data.id == null ? undefined : String(data.id),
-    }));
+    })
+      .then((data) => ({
+        reference: data.reference,
+        status: data.status,
+        id: data.id == null ? undefined : String(data.id),
+        amount: data.amount,
+      }))
+      .catch((error: unknown) => {
+        if (error instanceof GatewayNotFoundError) return null;
+        throw error;
+      });
   }
   refund(input: { reference: string; amount: number; reason: string }) {
     return this.request<{ id: number; status: string }>('/refund', {
@@ -108,7 +116,11 @@ export class PaystackGateway implements PaymentGateway {
     reference: string;
     reason: string;
   }) {
-    return this.request<{ transfer_code: string; id: number }>('/transfer', {
+    return this.request<{
+      transfer_code: string;
+      id: number;
+      status: string;
+    }>('/transfer', {
       method: 'POST',
       body: JSON.stringify({
         source: 'balance',
@@ -117,7 +129,10 @@ export class PaystackGateway implements PaymentGateway {
         reference: input.reference,
         reason: input.reason,
       }),
-    }).then((data) => ({ transferId: String(data.id) }));
+    }).then((data) => ({
+      transferId: String(data.id),
+      status: data.status,
+    }));
   }
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {
@@ -145,6 +160,7 @@ export class PaystackGateway implements PaymentGateway {
       const message =
         payload.message || 'Paystack could not process the request.';
       // A 4xx means Paystack refused the request; a 5xx leaves the outcome unknown.
+      if (response.status === 404) throw new GatewayNotFoundError(message);
       if (response.status >= 400 && response.status < 500)
         throw new GatewayRejectedError(message);
       throw new ServiceUnavailableException(message);

@@ -170,8 +170,12 @@ export class AdminFinanceController {
   @Get('refunds') refunds(
     @CurrentUser() user: RequestUser,
     @Query('page') page?: string,
+    @Query('status') status?: string,
   ) {
-    return this.refundCommands.list(user.id, Math.max(1, Number(page) || 1));
+    return this.refundCommands.list(user.id, {
+      page: Math.max(1, Number(page) || 1),
+      status,
+    });
   }
   @Post('refunds/:id/decide') decideRefund(
     @CurrentUser() user: RequestUser,
@@ -237,8 +241,12 @@ export class AdminFinanceController {
   @Get('payouts') payouts(
     @CurrentUser() user: RequestUser,
     @Query('page') page?: string,
+    @Query('status') status?: string,
   ) {
-    return this.finance.payouts(user.id, Math.max(1, Number(page) || 1));
+    return this.finance.payouts(user.id, {
+      page: Math.max(1, Number(page) || 1),
+      status,
+    });
   }
   @Post('payouts/:id/approve') approvePayout(
     @CurrentUser() user: RequestUser,
@@ -307,7 +315,10 @@ export class AdminFinanceController {
       }),
     )
     dto: PayoutTransferDto,
+    @IdempotencyKey({ required: true }) key: string,
+    @Req() req: Request,
   ) {
+    const idempotency = { key, url: req.originalUrl };
     if (dto.method === 'offline') {
       if (!dto.reference || !dto.proofFileId)
         throw new AppError(
@@ -315,13 +326,36 @@ export class AdminFinanceController {
           'VALIDATION_ERROR',
           'An offline transfer reference and proof file are required.',
         );
-      return this.finance.transferPayout(user.id, id, {
-        method: 'offline',
-        reference: dto.reference,
-        proofFileId: dto.proofFileId,
-      });
+      return this.finance.transferPayout(
+        user.id,
+        id,
+        {
+          method: 'offline',
+          reference: dto.reference,
+          proofFileId: dto.proofFileId,
+        },
+        idempotency,
+      );
     }
-    return this.finance.transferPayout(user.id, id, { method: 'paystack' });
+    return this.finance.transferPayout(
+      user.id,
+      id,
+      { method: 'paystack' },
+      idempotency,
+    );
+  }
+  @Post('payouts/:id/retry')
+  @HttpCode(HttpStatus.OK)
+  retryPayoutTransfer(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @IdempotencyKey({ required: true }) key: string,
+    @Req() req: Request,
+  ) {
+    return this.finance.retryTransfer(user.id, id, {
+      key,
+      url: req.originalUrl,
+    });
   }
   @Post('payouts/:id/reconcile') reconcilePayout(
     @CurrentUser() user: RequestUser,
@@ -345,7 +379,7 @@ export class AdminFinanceController {
 @UseGuards(JwtAuthGuard)
 export class ProviderEarningsController {
   constructor(private readonly finance: FinanceService) {}
-  @Get() get(@CurrentUser() user: RequestUser) {
-    return this.finance.earnings(user.id);
+  @Get() get(@CurrentUser() user: RequestUser, @Query('page') page?: string) {
+    return this.finance.earnings(user.id, Math.max(1, Number(page) || 1));
   }
 }
