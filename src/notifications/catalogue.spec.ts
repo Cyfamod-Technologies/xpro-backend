@@ -143,4 +143,52 @@ describe('notification catalogue', () => {
       link: null,
     });
   });
+
+  it('renders the payout notices for the provider and Finance (C-19)', () => {
+    const provider = {
+      requestCode: 'XPR-00042',
+      assignmentId: 'assignment-1',
+      providerUserId: 'provider-1',
+    };
+    expect(
+      renderNotification('payout.paid', { ...provider, amount: 9_000_000 }),
+    ).toMatchObject({
+      audience: { kind: 'provider:assignment' },
+      mandatory: true,
+      title: 'Payout sent',
+      message:
+        'XPR-00042: your payout of ₦90,000 has been sent to your bank account.',
+    });
+    expect(renderNotification('payout.failed', provider)).toMatchObject({
+      audience: { kind: 'provider:assignment' },
+      title: 'Payout delayed',
+    });
+    expect(
+      renderNotification('payout.reversed', { ...provider, amount: 9_000_000 }),
+    ).toMatchObject({
+      audience: { kind: 'provider:assignment' },
+      title: 'Payout returned',
+    });
+    expect(
+      renderNotification('payout.finance_update', {
+        requestCode: 'XPR-00042',
+        amount: 9_000_000,
+        outcome: 'failed',
+      }),
+    ).toMatchObject({
+      audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+      mandatory: true,
+      title: 'Payout failed',
+    });
+    expect(
+      renderNotification('payout.needs_attention', {
+        requestCode: 'XPR-00042',
+        amount: 9_000_000,
+        detail: 'Paystack did not confirm it.',
+      }),
+    ).toMatchObject({
+      audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+      title: 'Payout needs attention',
+    });
+  });
 });

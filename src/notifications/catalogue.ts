@@ -48,6 +48,10 @@ type AssignmentNoticeParams = RequestParams & {
   district: string;
   skill?: string;
 };
+type PayoutProviderParams = RequestParams & {
+  assignmentId: string;
+  providerUserId: string;
+};
 type QuoteNoticeParams = RequestParams & { note?: string };
 type QuoteAcceptedParams = RequestParams & { amount: number; dueDate: string };
 
@@ -991,6 +995,74 @@ export const NOTIFICATION_CATALOGUE = {
     message: ({ requestCode, amount, detail }) =>
       `${requestCode}: the refund of ₦${naira(amount)} did not complete. ${detail} Check it and retry.`,
     link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Payout paid" for the provider, not its body)
+  'payout.paid': entry<PayoutProviderParams & { amount: number }>({
+    key: 'payout.paid',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout sent',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your payout of ₦${naira(amount)} has been sent to your bank account.`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 names "Payout failed" for the provider, not its body)
+  'payout.failed': entry<PayoutProviderParams>({
+    key: 'payout.failed',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout delayed',
+    message: ({ requestCode }) =>
+      `${requestCode}: your payout could not be completed yet. XPro Finance is looking into it.`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 names "Payout reversed" for the provider, not its body)
+  'payout.reversed': entry<PayoutProviderParams & { amount: number }>({
+    key: 'payout.reversed',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout returned',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your payout of ₦${naira(amount)} was returned by the bank. XPro Finance will contact you.`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 lists Finance and the owner for paid/failed/reversed)
+  'payout.finance_update': entry<
+    RequestParams & {
+      amount: number;
+      outcome: 'paid' | 'failed' | 'reversed';
+    }
+  >({
+    key: 'payout.finance_update',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: ({ outcome }) =>
+      outcome === 'paid'
+        ? 'Payout paid'
+        : outcome === 'failed'
+          ? 'Payout failed'
+          : 'Payout reversed',
+    message: ({ requestCode, amount, outcome }) =>
+      `${requestCode}: the payout of ₦${naira(amount)} ${
+        outcome === 'paid'
+          ? 'was paid.'
+          : outcome === 'failed'
+            ? 'failed. Check it and retry.'
+            : 'was reversed. Check it and retry.'
+      }`,
+    link: () => '/admin/payouts',
+  }),
+  // new message: not in spec (05 §6.6 asks for urgent Finance review of a transfer that cannot be stopped)
+  'payout.needs_attention': entry<
+    RequestParams & { amount: number; detail: string }
+  >({
+    key: 'payout.needs_attention',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: () => 'Payout needs attention',
+    message: ({ requestCode, amount, detail }) =>
+      `${requestCode}: the payout of ₦${naira(amount)} needs a Finance check. ${detail}`,
+    link: () => '/admin/payouts',
   }),
   // new message: not in spec (04 §6.21 gives the transition, not the copy)
   'cancellation.completed_customer': entry<RequestParams>({
