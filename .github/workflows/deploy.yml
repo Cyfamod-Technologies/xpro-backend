@@ -387,78 +387,6 @@ jobs:
           PY
           REMOTE_SCRIPT
 
-      - name: Validate required environment variables
-        if: github.event_name != 'pull_request'
-        shell: bash
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-        run: |
-          set -euo pipefail
-
-          ssh \
-            -o ConnectTimeout=15 \
-            -o ConnectionAttempts=1 \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=3 \
-            "$SSH_USER@$SSH_HOST" \
-            "ENV_FILE='$SERVER_ENV_FILE' bash -s" <<'REMOTE_SCRIPT'
-          set -Eeuo pipefail
-
-          python3 - <<'PY'
-          import os
-          import sys
-
-          env_file = os.environ["ENV_FILE"]
-          required = ["DATABASE_URL", "JWT_SECRET", "REDIS_HOST", "ENCRYPTION_KEY"]
-          production_required = ["EMAIL_FROM", "EMAIL_FROM_NAME", "FRONTEND_URL", "EMAIL_ASSET_BASE_URL"]
-
-          found = {}
-          with open(env_file, "r", encoding="utf-8-sig") as f:
-              for line in f:
-                  line = line.rstrip("\r\n").strip()
-                  if not line or line.startswith("#") or "=" not in line:
-                      continue
-                  key, _, value = line.partition("=")
-                  key = key.strip()
-                  if value.strip():
-                      found[key] = value.strip()
-
-          node_env = found.get("NODE_ENV", "")
-          check_vars = list(required)
-          if node_env == "production":
-              check_vars += production_required
-
-          missing = [k for k in check_vars if k not in found]
-          if missing:
-              print(f"Missing required environment variables in {env_file}:")
-              for var in missing:
-                  print(f"  - {var}")
-              sys.exit(1)
-
-          # Mirror the app's remaining boot-time production checks so CI fails
-          # here instead of at container boot after a full image transfer.
-          errors = []
-          if node_env == "production":
-              for key in ("FRONTEND_URL", "EMAIL_ASSET_BASE_URL"):
-                  value = found.get(key, "")
-                  if value and not value.lower().startswith("https://"):
-                      errors.append(f"{key} must be an absolute HTTPS URL")
-
-              email_from = found.get("EMAIL_FROM", "")
-              if "@example.com" in email_from.lower():
-                  errors.append("EMAIL_FROM must not use example.com")
-
-          if errors:
-              print(f"Invalid environment values in {env_file}:")
-              for err in errors:
-                  print(f"  - {err}")
-              sys.exit(1)
-
-          print(f"All required environment variables present (NODE_ENV={node_env or 'unset'}).")
-          PY
-          REMOTE_SCRIPT
-
       - name: Transfer and load Docker image
         if: github.event_name != 'pull_request'
         shell: bash
@@ -489,6 +417,25 @@ jobs:
              docker image inspect '$FULL_IMAGE' >/dev/null;
              docker image inspect '$LATEST_IMAGE' >/dev/null;
              echo 'Transferred image verified on the server.'"
+
+      - name: Validate environment against the built image
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          set -euo pipefail
+
+          # Runs the app's own validateEnv() against the server env file, so this
+          # check can never drift from what the container enforces at boot.
+          ssh \
+            -o ConnectTimeout=15 \
+            -o ConnectionAttempts=1 \
+            "$SSH_USER@$SSH_HOST" \
+            "docker run --rm --network none \
+               --env-file '$SERVER_ENV_FILE' \
+               '$FULL_IMAGE' node dist/scripts/validate-env.js"
 
       - name: Publish image to local registry
         if: github.event_name != 'pull_request'
@@ -803,6 +750,45 @@ jobs:
           )
           echo "Dokploy Service Name: $SERVICE_NAME"
 
+          PREVIOUS_IMAGE=""
+          if docker service inspect "$SERVICE_NAME" >/dev/null 2>&1; then
+            PREVIOUS_IMAGE=$(docker service inspect "$SERVICE_NAME" \
+              --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}')
+          fi
+
+          # `docker service rollback` restores the whole previous spec (image AND
+          # env); --image alone would keep a bad env that Dokploy just applied.
+          rollback_to_previous() {
+            if [ -z "$PREVIOUS_IMAGE" ]; then
+              echo "No previous service to roll back to; leaving service as-is."
+              return 2
+            fi
+            echo "Rolling back to the previous service spec: $PREVIOUS_IMAGE"
+            if docker service rollback "$SERVICE_NAME" \
+              || docker service update --image "$PREVIOUS_IMAGE" \
+                   --update-order start-first "$SERVICE_NAME"; then
+              echo "WARNING: Dokploy still stores the failed image and env."
+              echo "A manual Dokploy redeploy will bring the failed version back;"
+              echo "fix the cause and redeploy through this workflow instead."
+              return 0
+            fi
+            echo "Rollback FAILED; the service may be down."
+            return 1
+          }
+
+          # Exit codes are read by the runner to report the outcome:
+          # 10 rolled back, 11 rollback failed, 12 nothing to roll back to.
+          deploy_failed() {
+            docker service logs "$SERVICE_NAME" --tail 100 || true
+            local status=0
+            rollback_to_previous || status=$?
+            case "$status" in
+              0) exit 10 ;;
+              2) exit 12 ;;
+              *) exit 11 ;;
+            esac
+          }
+
           echo "Configuring Dokploy provider..."
           dokploy_post "application.saveDockerProvider" "$PROVIDER_PAYLOAD"
 
@@ -834,13 +820,26 @@ jobs:
             if [ -n "$FAILED_TASKS" ]; then
               echo "Deployment container task exited unexpectedly:"
               echo "$FAILED_TASKS"
-              docker service logs "$SERVICE_NAME" --tail 100 || true
-              exit 1
+              deploy_failed
             fi
 
+            # A running task is not a serving app: a boot that hangs before
+            # app.listen() stays "Running" forever. Require /health to answer.
             if [ "$DESIRED_REPLICAS" -gt 0 ] && [ "$RUNNING_REPLICAS" -ge "$DESIRED_REPLICAS" ]; then
-              echo "Service successfully running with $RUNNING_REPLICAS replicas."
-              exit 0
+              CONTAINER_ID=$(docker ps \
+                --filter "label=com.docker.swarm.service.name=${SERVICE_NAME}" \
+                --format '{{.ID}} {{.Image}}' \
+                | awk -v image="$LOCAL_REGISTRY_IMAGE" 'index($2, image) == 1 { print $1; exit }')
+
+              if [ -n "$CONTAINER_ID" ] && docker exec "$CONTAINER_ID" \
+                sh -c 'wget -qO- "http://127.0.0.1:${PORT:-4000}/health"' >/dev/null 2>&1; then
+                echo "Service running with $RUNNING_REPLICAS replicas and /health answering."
+                exit 0
+              fi
+
+              echo "Health check attempt ${attempt}/120: replicas running, /health not answering yet..."
+              sleep 5
+              continue
             fi
 
             echo "Health check attempt ${attempt}/120: ${RUNNING_REPLICAS}/${DESIRED_REPLICAS} replicas running..."
@@ -848,8 +847,7 @@ jobs:
           done
 
           echo "Service failed to become healthy before timeout."
-          docker service logs "$SERVICE_NAME" --tail 100 || true
-          exit 1
+          deploy_failed
           REMOTE_SCRIPT
           } | ssh \
             -o ConnectTimeout=15 \
@@ -864,7 +862,15 @@ jobs:
              LOCAL_REGISTRY_IMAGE='$LOCAL_REGISTRY_IMAGE' \
              DOKPLOY_API_BASE_URL='$DOKPLOY_API_BASE_URL' \
              DOKPLOY_APPLICATION_ID='$DOKPLOY_APPLICATION_ID' \
-             bash -s"
+             bash -s" || DEPLOY_STATUS=$?
+
+          case "${DEPLOY_STATUS:-0}" in
+            0) exit 0 ;;
+            10) echo "DEPLOY_OUTCOME=rolled_back" >> "$GITHUB_ENV" ;;
+            11) echo "DEPLOY_OUTCOME=rollback_failed" >> "$GITHUB_ENV" ;;
+            12) echo "DEPLOY_OUTCOME=no_previous" >> "$GITHUB_ENV" ;;
+          esac
+          exit 1
 
       - name: Clean temporary Docker images
         if: success() && github.event_name != 'pull_request'
@@ -895,3 +901,64 @@ jobs:
             echo "- **Commit:** \`${GITHUB_SHA}\`"
             echo "- **Status:** \`Successfully Deployed to Dokploy\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify Discord (success)
+        if: success() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping notification."
+            exit 0
+          fi
+          export RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python3 - "$DISCORD_WEBHOOK_URL" <<'PY'
+          import json, os, sys, urllib.request
+          content = (
+              f"✅ **xpro-backend deployed** — commit `{os.environ.get('GITHUB_SHA', '')[:7]}` "
+              f"on `{os.environ.get('GITHUB_REF_NAME', '')}`.\n{os.environ['RUN_URL']}"
+          )
+          data = json.dumps({"content": content}).encode()
+          req = urllib.request.Request(
+              sys.argv[1], data=data, headers={"Content-Type": "application/json"}
+          )
+          urllib.request.urlopen(req, timeout=15)
+          PY
+
+      - name: Notify Discord (failure)
+        if: failure() && github.event_name != 'pull_request'
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping notification."
+            exit 0
+          fi
+          export RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python3 - "$DISCORD_WEBHOOK_URL" <<'PY'
+          import json, os, sys, urllib.request
+          detail = {
+              "rolled_back": "The new container never became healthy; the service was rolled "
+                             "back to the previous version. Dokploy still stores the failed config.",
+              "rollback_failed": "The new container never became healthy and the rollback FAILED "
+                                 "— the site may be down.",
+              "no_previous": "The new container never became healthy and there was no previous "
+                             "version to roll back to — the site may be down.",
+          }.get(
+              os.environ.get("DEPLOY_OUTCOME", ""),
+              "The run failed before the health-check stage; check the logs.",
+          )
+          content = (
+              f"\U0001f534 **xpro-backend deploy FAILED** — commit `{os.environ.get('GITHUB_SHA', '')[:7]}` "
+              f"on `{os.environ.get('GITHUB_REF_NAME', '')}`. {detail}\nLogs: {os.environ['RUN_URL']}"
+          )
+          data = json.dumps({"content": content}).encode()
+          req = urllib.request.Request(
+              sys.argv[1], data=data, headers={"Content-Type": "application/json"}
+          )
+          urllib.request.urlopen(req, timeout=15)
+          PY
