@@ -23,6 +23,8 @@ import { hasExpectedSignature, validateFile } from '../storage/file-validation';
 import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
+import { AppError } from '../platform/errors/app-error';
+import { confirmedJobConflictMessage } from '../requests/domain/schedule-checks';
 import { LocationsService } from '../platform/locations/locations.service';
 import {
   RequestEventsService,
@@ -609,12 +611,15 @@ export class ProvidersService {
           schedule.endAt,
           displayName,
         );
-        if (problem) {
-          const date = schedule.startAt.toISOString().slice(0, 10);
-          throw new ConflictException(
-            `You have a confirmed job on ${date} (${schedule.request.number}). Ask XPro to move it before changing these hours.`,
+        if (problem)
+          throw new AppError(
+            409,
+            'STATE_CONFLICT',
+            confirmedJobConflictMessage(
+              schedule.startAt,
+              schedule.request.number,
+            ),
           );
-        }
       }
       const proposed = await tx.schedule.findMany({
         where: { providerId: profile.id, status: 'proposed' },
