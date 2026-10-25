@@ -18,7 +18,7 @@ describe('EmailRendererService', () => {
     welcome: { firstName: 'Ada' },
     email_verification: {
       firstName: 'Ada',
-      code: '123456',
+      token: 'verification-token',
     },
     password_reset: {
       firstName: 'Ada',
@@ -84,29 +84,24 @@ describe('EmailRendererService', () => {
     expect(result.html).not.toContain('<script>alert(1)</script>');
   });
 
-  it('renders email verification as a code without a verification URL', () => {
+  it('renders email verification as a link', () => {
     const result = renderer.render({
       recipientEmail: 'ada+test@example.com',
       templateKey: 'email_verification',
       payload: {
         firstName: 'Ada',
-        code: '123456',
+        token: 'verification-token',
       },
     });
 
-    // Each digit renders in its own cell, so assert on the cells rather than
-    // on a contiguous "123456" that never appears in the markup.
-    const cellDigits = [
-      ...result.html.matchAll(
-        /<td class="email-code-cell"[^>]*>([^<]*)<\/td>/g,
-      ),
-    ].map((match) => match[1].trim());
-    expect(cellDigits).toHaveLength(6);
-    expect(cellDigits.join('')).toBe('123456');
-    expect(result.text).toContain('Verification code: 123456');
-    expect(result.html).not.toContain('/verify-email');
-    expect(result.text).not.toContain('/verify-email');
-    expect(result.html).not.toContain('token=');
+    expect(result.html).toContain(
+      'https://app.example.com/auth/verify-email?token=verification-token',
+    );
+    expect(result.text).toContain(
+      'Verification link: https://app.example.com/auth/verify-email?token=verification-token',
+    );
+    expect(result.html).not.toContain('Verification code');
+    expect(result.text).not.toContain('Verification code');
   });
 
   it('rejects a payload with a missing required field', () => {

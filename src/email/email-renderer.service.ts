@@ -110,8 +110,7 @@ export class EmailRendererService {
     payload: Record<string, unknown>,
   ): EmailVerificationPayload {
     return {
-      code: optionalString(payload, 'code'),
-      token: optionalString(payload, 'token'),
+      token: requiredString(payload, 'token'),
       firstName: optionalString(payload, 'firstName'),
     };
   }

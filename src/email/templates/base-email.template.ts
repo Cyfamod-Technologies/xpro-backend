@@ -30,8 +30,6 @@ export function renderBaseEmail(input: BaseEmailInput): string {
         .email-outer { padding: 20px 12px !important; }
         .email-card { padding: 28px 20px !important; }
         .email-heading { font-size: 25px !important; line-height: 32px !important; }
-        .email-code-cell { width: 34px !important; height: 44px !important; font-size: 18px !important; line-height: 22px !important; }
-        .email-code-gap { width: 5px !important; }
       }
     </style>
   </head>

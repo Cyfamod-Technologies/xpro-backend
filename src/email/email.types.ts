@@ -14,8 +14,7 @@ export interface WelcomeEmailPayload {
 }
 
 export interface EmailVerificationPayload {
-  code?: string;
-  token?: string;
+  token: string;
   firstName?: string;
 }
 

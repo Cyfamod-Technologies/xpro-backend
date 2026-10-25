@@ -63,34 +63,6 @@ export function renderFallbackUrl(href: string): string {
     </table>`;
 }
 
-export function renderVerificationCode(code: string): string {
-  const cells = code
-    .split('')
-    .map(
-      (digit, index) =>
-        `${
-          index > 0
-            ? '<td class="email-code-gap" width="7" style="width:7px;font-size:0;line-height:0;">&nbsp;</td>'
-            : ''
-        }<td class="email-code-cell" width="44" height="52" align="center" valign="middle" bgcolor="#FFFFFF" style="width:44px;height:52px;border:1px solid ${EMAIL_COLORS.border};border-radius:10px;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:22px;line-height:26px;font-weight:700;">${escapeHtml(digit)}</td>`,
-    )
-    .join('');
-
-  return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.muted}" style="width:100%;margin-top:24px;border:1px solid ${EMAIL_COLORS.border};border-radius:16px;">
-      <tr>
-        <td style="padding:20px 16px 8px;color:${EMAIL_COLORS.mutedForeground};font-family:${EMAIL_FONT_STACK};font-size:12px;line-height:18px;font-weight:700;text-align:center;text-transform:uppercase;letter-spacing:0.8px;">Verification code</td>
-      </tr>
-      <tr>
-        <td align="center" style="padding:0 12px 20px;">
-          <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
-            <tr>${cells}</tr>
-          </table>
-        </td>
-      </tr>
-    </table>`;
-}
-
 export function renderNoticePanel(
   title: string,
   message: string,

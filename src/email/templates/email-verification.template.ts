@@ -10,20 +10,15 @@ import {
   renderNoticePanel,
   renderParagraph,
   renderTextFooter,
-  renderVerificationCode,
 } from './components.template';
 
 export function renderEmailVerification(
   payload: EmailVerificationPayload,
   context: EmailRenderContext,
 ): RenderedEmail {
-  if (!payload.token && (!payload.code || !/^\d{6}$/.test(payload.code))) {
-    throw new Error('Email verification code must be six digits');
-  }
   const subject = `Verify your ${context.appName} email`;
-  const preheader = payload.token
-    ? 'Confirm your email address to activate your account.'
-    : 'Use your six-digit code to activate your account.';
+  const verificationUrl = `${context.frontendUrl}/auth/verify-email?token=${encodeURIComponent(payload.token)}`;
+  const preheader = 'Confirm your email address to activate your account.';
   const footerReason = `You received this email because a ${context.appName} account was created with this address.`;
   const greeting = payload.firstName ? `Hi ${payload.firstName}, ` : '';
   const content = [
@@ -31,22 +26,13 @@ export function renderEmailVerification(
     renderParagraph(
       `${greeting}confirm this email address to finish setting up your ${context.appName} account.`,
     ),
-    ...(payload.token
-      ? [
-          renderButton(
-            'Verify email address',
-            `${context.frontendUrl}/auth/verify-email?token=${encodeURIComponent(payload.token)}`,
-          ),
-        ]
-      : [renderVerificationCode(payload.code!)]),
+    renderButton('Verify email address', verificationUrl),
     renderParagraph(
-      payload.token
-        ? 'Open the verification link to verify your email address.'
-        : `Enter this code in ${context.appName} to verify your email address.`,
+      'Open the verification link to verify your email address.',
       20,
     ),
     renderNoticePanel(
-      'Keep this code private',
+      'Keep this link private',
       `It expires in 24 hours. ${context.appName} will never ask you to share it by email or chat.`,
     ),
     renderParagraph(
@@ -59,16 +45,9 @@ export function renderEmailVerification(
     '',
     `Confirm this email address to finish setting up your ${context.appName} account.`,
     '',
-    ...(payload.token
-      ? [
-          `Verification link: ${context.frontendUrl}/auth/verify-email?token=${encodeURIComponent(payload.token)}`,
-        ]
-      : [
-          `Verification code: ${payload.code}`,
-          `Enter this six-digit code in ${context.appName} to verify your email address.`,
-        ]),
+    `Verification link: ${verificationUrl}`,
     '',
-    'This verification code expires in 24 hours. Do not share it with anyone.',
+    'This verification link expires in 24 hours. Do not share it with anyone.',
     '',
     "If you didn't create this account, you can safely ignore this email.",
     '',
