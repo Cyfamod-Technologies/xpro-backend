@@ -3,9 +3,9 @@ import { validateEnv } from './env.validation';
 describe('validateEnv SMTP requirements', () => {
   const productionEnv = {
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgresql://localhost/xpro',
+    DATABASE_URL: 'postgresql://xpro:secret@postgres:5432/xpro',
     JWT_SECRET: 'test-secret',
-    REDIS_HOST: 'localhost',
+    REDIS_HOST: 'redis',
     ENCRYPTION_KEY: 'a'.repeat(32),
     SMTP_HOST: 'smtp.hostinger.com',
     SMTP_PORT: '465',
@@ -52,6 +52,37 @@ describe('validateEnv SMTP requirements', () => {
     ).toThrow('ENABLE_DEV_TOOLS must not be enabled in production');
     expect(
       validateEnv({ ...productionEnv, ENABLE_DEV_TOOLS: 'false' }),
+    ).toBeDefined();
+  });
+
+  it.each(['127.0.0.1', 'localhost', '::1'])(
+    'rejects REDIS_HOST=%s in production',
+    (host) => {
+      expect(() => validateEnv({ ...productionEnv, REDIS_HOST: host })).toThrow(
+        'REDIS_HOST must not be a loopback address in production',
+      );
+    },
+  );
+
+  it('rejects a loopback DATABASE_URL host in production', () => {
+    expect(() =>
+      validateEnv({
+        ...productionEnv,
+        DATABASE_URL: 'postgresql://xpro:secret@127.0.0.1:5432/xpro',
+      }),
+    ).toThrow(
+      'DATABASE_URL must not point at a loopback address in production',
+    );
+  });
+
+  it('allows loopback Redis and Postgres outside production', () => {
+    expect(
+      validateEnv({
+        ...productionEnv,
+        NODE_ENV: 'development',
+        REDIS_HOST: '127.0.0.1',
+        DATABASE_URL: 'postgresql://xpro:secret@localhost:5432/xpro',
+      }),
     ).toBeDefined();
   });
 
