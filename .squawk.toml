@@ -1,0 +1,22 @@
+# Squawk lints migration SQL for changes that are risky against a database
+# that already holds data: NOT NULL or UNIQUE on existing rows, constraints
+# validated against a live table, column type changes, drops.
+#
+# The excluded rules flag Prisma's generated style rather than data risk.
+# To accept a flagged statement deliberately, put
+# `-- squawk-ignore <rule>` on the line above it, so the decision is visible
+# in review.
+# Lets Squawk see that a table created earlier in the same migration has no
+# rows yet, so constraints on brand-new tables are not flagged.
+assume_in_transaction = true
+
+excluded_rules = [
+  "prefer-timestamp-tz",               # Prisma DateTime maps to timestamp(3)
+  "prefer-robust-stmts",               # Prisma never emits IF NOT EXISTS
+  "prefer-bigint-over-int",            # Prisma Int maps to integer
+  "prefer-identity",                   # Prisma autoincrement() maps to serial
+  "require-enum-value-ordering",       # Prisma appends enum values
+  "require-concurrent-index-creation", # Prisma does not generate CONCURRENTLY
+  "require-statement-timeout",
+  "require-lock-timeout",
+]
