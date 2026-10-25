@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { RequestUser } from '../common/types/request-user';
 import { RequestCommandRunner } from '../requests/command-runner';
 import { ApprovalsHooks } from '../requests/approvals.hooks';
+import { resolveRequestId } from '../requests/request-ref';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
@@ -24,7 +25,7 @@ export class EscalationsService {
     user: RequestUser,
     requestId: string,
     dto: { target: 'operations' | 'super_admin'; note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -36,6 +37,7 @@ export class EscalationsService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -44,8 +46,6 @@ export class EscalationsService {
           : {}),
       },
       async (ctx) => {
-        if (['closed', 'cancelled', 'rejected'].includes(ctx.snap.status))
-          throw conflict('This request is no longer open.');
         const duplicate = await ctx.tx.requestEscalation.findFirst({
           where: {
             requestId: ctx.snap.id,
@@ -89,7 +89,7 @@ export class EscalationsService {
     requestId: string,
     escalationId: string,
     dto: { note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -101,6 +101,7 @@ export class EscalationsService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -139,14 +140,11 @@ export class EscalationsService {
     );
   }
 
-  async list(user: RequestUser, requestId: string) {
+  async list(user: RequestUser, requestRef: string) {
     const actor = await this.actors.resolve(user.id);
     requirePermission(actor, 'request.escalation.resolve');
-    const request = await this.prisma.serviceRequest.findUnique({
-      where: { id: requestId },
-      select: { id: true },
-    });
-    if (!request)
+    const requestId = await resolveRequestId(this.prisma, requestRef);
+    if (!requestId)
       throw new AppError(
         404,
         'NOT_FOUND',
