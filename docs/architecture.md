@@ -75,8 +75,8 @@ Session lifetime comes from `SESSION_DURATION_MINUTES`, falling back to the
 `RedisAuthService` default.
 
 Redis also holds short-lived auth material, each under its own key namespace:
-email verification codes, password reset tokens, pending MFA secrets, and
-re-authentication tokens.
+password reset tokens, pending MFA secrets, and re-authentication tokens. Email
+verification uses single-use tokens stored in Postgres.
 
 ### MFA
 

@@ -51,7 +51,7 @@ Six ship with the template:
 | Key | Payload |
 | --- | --- |
 | `welcome` | `{ firstName }` |
-| `email_verification` | `{ code, firstName? }` |
+| `email_verification` | `{ token, firstName? }` |
 | `password_reset` | `{ resetToken, firstName? }` |
 | `custom_email` | `{ subject, preheader?, html, text }` |
 | `staff_invite` | `{ name, token, expiresAt }` |
