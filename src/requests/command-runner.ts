@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import type { ActorContext } from '../platform/actor/actor.types';
+import { SYSTEM_ACTOR, type ActorContext } from '../platform/actor/actor.types';
 import { AppError } from '../platform/errors/app-error';
 import { IdempotencyService } from '../platform/idempotency/idempotency.service';
 import { OutboxService } from '../platform/outbox/outbox.service';
@@ -18,7 +18,10 @@ import { RequestSnapshotLoader } from './snapshot.loader';
 import type { DispatchTrigger } from '@prisma/client';
 import type { TimerKind } from '../platform/timers/timer-kinds';
 import { mayAutoClaim } from './domain/auto-claim';
+import { REQUEST_GUARDS } from './domain/request-guard-registry';
 import type { RequestSnapshot } from './domain/snapshot';
+import { toActorView } from './actor-view';
+import { ApprovalsHooks } from './approvals.hooks';
 
 type AuditInput = {
   note?: string;
@@ -28,16 +31,66 @@ type AuditInput = {
   resourceId?: string;
 };
 type PendingNotification = { event: string; params: Record<string, unknown> };
-type PendingTimerStart = {
-  kind: TimerKind;
-  dueAt: Date;
-  refId?: string;
-  payload?: object;
+type Effect =
+  | {
+      type: 'timer.start';
+      kind: TimerKind;
+      dueAt: Date;
+      refId?: string;
+      payload?: object;
+    }
+  | { type: 'timer.stop'; kind: TimerKind | TimerKind[]; refId?: string }
+  | { type: 'approval.open'; kind: string; itemId: string }
+  | { type: 'approval.close'; kind: string; itemId: string; reason?: string };
+/** Everything a command buffers until its transaction flushes. `effects` keeps timer and approval operations in call order. */
+type EffectBuffer = {
+  notifications: PendingNotification[];
+  auditRows: Array<{ action: string; data?: AuditInput }>;
+  effects: Effect[];
+  cascadeTrigger?: DispatchTrigger;
+  dueNowTimer: boolean;
 };
+type EffectTarget = {
+  requestId: string;
+  ownerId: string;
+  /** The staff owner as loaded before the command ran and before any auto-claim (02 §6.5). */
+  staffOwnerId: string | null;
+  actor: ActorContext;
+  command: string;
+  now: Date;
+};
+/** The `REQUEST_GUARDS` entry a command runs under (default: the command key) and the body its guard may check. */
+type GuardOptions = {
+  /** `null` skips the guard; only for system commands and domain events that make their own checks. */
+  guard?: string | null;
+  input?: unknown;
+};
+type ExecuteOptions = GuardOptions & {
+  command: string;
+  actor: ActorContext;
+  requestRef: string;
+  expectedVersion?: number;
+  autoClaim?: boolean;
+  /** Set to `false` for commands that change no request row (reminders). Default `true`. */
+  bumpVersion?: boolean;
+};
+type ExecuteOutcome = {
+  status: number;
+  body: RequestDetailDto;
+  changed: boolean;
+  dueNowTimer: boolean;
+  notified: boolean;
+};
+
+/** Thrown inside a system transaction to roll it back when the handler reports `{ changed: false }`. */
+class NoChange extends Error {}
+
 type CommandResult = void | {
   status?: number;
   changed?: boolean;
   warning?: string;
+  /** Overrides the option for this run, for handlers that only sometimes change a request row. */
+  bumpVersion?: boolean;
 };
 
 export type CommandContext = {
@@ -52,6 +105,11 @@ export type CommandContext = {
     start(kind: TimerKind, dueAt: Date, refId?: string, payload?: object): void;
     stop(kind: TimerKind | TimerKind[], refId?: string): void;
   };
+  /** Approval deadlines are opened and closed in the same ordered list as timers. */
+  approvals: {
+    open(kind: string, itemId: string): void;
+    close(kind: string, itemId: string, reason?: string): void;
+  };
   enqueueCascade(trigger: DispatchTrigger): void;
 };
 
@@ -65,6 +123,7 @@ export class RequestCommandRunner {
     private readonly dispatcher: NotificationDispatcher,
     private readonly timersService: TimersService,
     private readonly outboxService: OutboxService,
+    private readonly approvalsHooks: ApprovalsHooks,
   ) {}
 
   /** Execute the initial request submission through the same transaction and side-effect path as later commands. */
@@ -111,13 +170,7 @@ export class RequestCommandRunner {
         value,
       ]),
     );
-    const notifications: PendingNotification[] = [];
-    const auditRows: Array<{ action: string; data?: AuditInput }> = [];
-    const timerStarts: PendingTimerStart[] = [];
-    const timerStops: Array<{ kind: TimerKind | TimerKind[]; refId?: string }> =
-      [];
-    let cascadeTrigger: DispatchTrigger | undefined;
-    let dueNowTimer = false;
+    const buffer = newBuffer();
 
     const outcome = await this.prisma.$transaction(
       async (tx) => {
@@ -140,38 +193,28 @@ export class RequestCommandRunner {
         const id = await createRow(tx, now, settings);
         const loaded = await this.loader.load(tx, id, { forUpdate: true });
         if (!loaded) throw opaqueNotFound();
-        const context: CommandContext = {
+        const context = this.buildContext(
           tx,
-          snap: loaded.snapshot,
+          loaded.snapshot,
           actor,
           now,
           settings,
-          audit: (action, data) => auditRows.push({ action, data }),
-          notify: (event, params) => notifications.push({ event, params }),
-          timers: {
-            start: (kind, dueAt, refId, payload) => {
-              timerStarts.push({ kind, dueAt, refId, payload });
-              if (dueAt <= now) dueNowTimer = true;
-            },
-            stop: (kind, refId) => timerStops.push({ kind, refId }),
-          },
-          enqueueCascade: (trigger) => {
-            cascadeTrigger = trigger;
-          },
-        };
+          buffer,
+        );
         const result = await fn(context);
         await this.flushEffects(
           tx,
-          loaded.row.id,
-          loaded.row.ownerId,
-          actor,
-          auditRows,
-          notifications,
-          timerStarts,
-          timerStops,
-          cascadeTrigger,
-          now,
+          {
+            requestId: loaded.row.id,
+            ownerId: loaded.row.ownerId,
+            staffOwnerId: loaded.row.staffOwnerId,
+            actor,
+            command: 'request.create',
+            now,
+          },
+          buffer,
         );
+        await this.startCascade(tx, loaded.row.id, buffer, now);
         const freshInTransaction = await this.loader.load(tx, loaded.row.id);
         if (!freshInTransaction) throw opaqueNotFound();
         const body = this.project(
@@ -213,8 +256,8 @@ export class RequestCommandRunner {
       };
     }
 
-    if (dueNowTimer) await this.timersService.kick();
-    if (notifications.length) await this.outboxService.kick();
+    if (buffer.dueNowTimer) await this.timersService.kick();
+    if (buffer.notifications.length) await this.outboxService.kick();
     return {
       status: outcome.status,
       body: outcome.body,
@@ -224,7 +267,7 @@ export class RequestCommandRunner {
   }
 
   async run(
-    options: {
+    options: GuardOptions & {
       command: string;
       actor: ActorContext;
       requestRef: string;
@@ -260,19 +303,7 @@ export class RequestCommandRunner {
     }
 
     const now = new Date();
-    const settings = Object.fromEntries(
-      (await this.settingsService.snapshot()).map(({ key, value }) => [
-        key,
-        value,
-      ]),
-    );
-    const notifications: PendingNotification[] = [];
-    const auditRows: Array<{ action: string; data?: AuditInput }> = [];
-    const timerStarts: PendingTimerStart[] = [];
-    const timerStops: Array<{ kind: TimerKind | TimerKind[]; refId?: string }> =
-      [];
-    let cascadeTrigger: DispatchTrigger | undefined;
-    let dueNowTimer = false;
+    const settings = await this.settingsMap();
 
     const outcome = await this.prisma.$transaction(
       async (tx) => {
@@ -294,170 +325,18 @@ export class RequestCommandRunner {
               },
             };
         }
-        const loaded = await this.loader.load(tx, options.requestRef, {
-          forUpdate: true,
-        });
-        if (!loaded) throw opaqueNotFound();
-        const visibleRole = this.visibleRole(loaded.snapshot, actor);
-        if (!visibleRole) throw opaqueNotFound();
-
-        if (
-          options.expectedVersion !== undefined &&
-          options.expectedVersion !== loaded.row.version
-        ) {
-          const current = this.project(
-            loaded.row,
-            loaded.snapshot,
-            actor,
-            visibleRole,
-            now,
-            settings,
-          );
-          throw new AppError(
-            409,
-            'VERSION_CONFLICT',
-            'This request has changed. Refresh and retry.',
-            { current },
-          );
-        }
-
-        const context: CommandContext = {
-          tx,
-          snap: loaded.snapshot,
-          actor,
-          now,
-          settings,
-          audit: (action, data) => auditRows.push({ action, data }),
-          notify: (event, params) => notifications.push({ event, params }),
-          timers: {
-            start: (kind, dueAt, refId, payload) => {
-              timerStarts.push({ kind, dueAt, refId, payload });
-              if (dueAt <= now) dueNowTimer = true;
-            },
-            stop: (kind, refId) => timerStops.push({ kind, refId }),
-          },
-          enqueueCascade: (trigger) => {
-            cascadeTrigger = trigger;
-          },
-        };
-        const result = await fn(context);
-        if (result?.changed === false) {
-          const status = result.status ?? 200;
-          const body = this.project(
-            loaded.row,
-            loaded.snapshot,
-            actor,
-            visibleRole,
-            now,
-            settings,
-          );
-          if (
-            options.idempotencyKey &&
-            actor.userId &&
-            options.idempotencyHash
-          ) {
-            await this.idempotency.store(
-              actor.userId,
-              options.idempotencyKey,
-              options.idempotencyHash,
-              status,
-              body,
-              tx,
-            );
-          }
-          return { status, body, changed: false };
-        }
-        await tx.serviceRequest.update({
-          where: { id: loaded.row.id },
-          data: { version: { increment: 1 }, updatedAt: now },
-        });
-
-        if (auditRows.length) {
-          await tx.auditLog.createMany({
-            data: auditRows.map(({ action, data }) => ({
-              actorType: actor.kind,
-              actorId: actor.userId,
-              entityType: data?.resourceType ?? 'service_request',
-              entityId: data?.resourceId ?? loaded.row.id,
-              action,
-              metadata: {
-                ...(data ?? {}),
-                requestId: loaded.row.id,
-                command: options.command,
-              } as Prisma.InputJsonValue,
-            })),
-          });
-        }
-        for (const notification of notifications) {
-          await this.dispatcher.dispatch(
-            tx,
-            notification.event,
-            notification.params,
-            {
-              requestId: loaded.row.id,
-              ownerId: loaded.row.ownerId,
-              actorId: actor.userId,
-            },
-          );
-        }
-        for (const start of timerStarts) {
-          await this.timersService.start(tx, {
-            requestId: loaded.row.id,
-            kind: start.kind,
-            dueAt: start.dueAt,
-            refId: start.refId,
-            payload: start.payload,
-          });
-        }
-        for (const stop of timerStops) {
-          await this.timersService.stop(tx, {
-            requestId: loaded.row.id,
-            kinds: Array.isArray(stop.kind) ? stop.kind : [stop.kind],
-            refId: stop.refId,
-          });
-        }
-        if (
-          options.autoClaim &&
-          mayAutoClaim(
-            actor,
-            options.command,
-            loaded.row.staffOwnerId === null,
-            isOpenRequestStatus(loaded.row.status),
-          )
-        ) {
-          await this.autoClaim(tx, loaded.row, actor, now, options.command);
-        }
-        if (cascadeTrigger) {
-          await this.timersService.start(tx, {
-            requestId: loaded.row.id,
-            kind: 'dispatch.cascade',
-            dueAt: now,
-            payload: { trigger: cascadeTrigger },
-          });
-          dueNowTimer = true;
-        }
-        const fresh = await this.loader.load(tx, loaded.row.id);
-        if (!fresh) throw opaqueNotFound();
-        const status = result?.status ?? 200;
-        const body = this.project(
-          fresh.row,
-          fresh.snapshot,
-          actor,
-          visibleRole,
-          now,
-          settings,
-        );
+        const executed = await this.execute(tx, options, fn, now, settings);
         if (options.idempotencyKey && actor.userId && options.idempotencyHash) {
           await this.idempotency.store(
             actor.userId,
             options.idempotencyKey,
             options.idempotencyHash,
-            status,
-            body,
+            executed.status,
+            executed.body,
             tx,
           );
         }
-        return { status, body, changed: true };
+        return { executed };
       },
       { timeout: 15_000 },
     );
@@ -470,13 +349,300 @@ export class RequestCommandRunner {
         etag: formatEtag(body.version),
       };
     }
-    if (outcome.changed && dueNowTimer) await this.timersService.kick();
-    if (outcome.changed && notifications.length)
-      await this.outboxService.kick();
+    const { executed } = outcome;
+    await this.kickAfterCommit(executed);
     return {
-      status: outcome.status,
-      body: outcome.body,
-      etag: formatEtag(outcome.body.version),
+      status: executed.status,
+      body: executed.body,
+      etag: formatEtag(executed.body.version),
+    };
+  }
+
+  /**
+   * Run a timer or domain-event command as the system (or the dispatch engine,
+   * via `opts.actor`). There is no `If-Match` and no idempotency key. Reminder
+   * handlers that write no request row pass `opts.bumpVersion: false` so the
+   * version (and the ETag) stays put; their notifications still flush. When `fn`
+   * returns `{ changed: false }` the whole transaction is rolled back, so
+   * nothing is written: no version bump, audit rows, notifications, timers or
+   * approval deadlines. The rollback works by throwing a private sentinel
+   * inside the transaction and catching it outside.
+   */
+  async runSystem(
+    command: string,
+    requestRef: string,
+    fn: (context: CommandContext) => Promise<CommandResult>,
+    opts?: { actor?: ActorContext; bumpVersion?: boolean },
+  ): Promise<{ changed: boolean; version?: number }> {
+    const now = new Date();
+    const settings = await this.settingsMap();
+    let executed: ExecuteOutcome;
+    try {
+      executed = await this.prisma.$transaction(
+        async (tx) => {
+          const result = await this.execute(
+            tx,
+            {
+              command,
+              actor: opts?.actor ?? SYSTEM_ACTOR,
+              requestRef,
+              bumpVersion: opts?.bumpVersion,
+              // Timers and engine jobs decide for themselves whether they still apply.
+              guard: null,
+            },
+            fn,
+            now,
+            settings,
+          );
+          if (!result.changed) throw new NoChange();
+          return result;
+        },
+        { timeout: 15_000 },
+      );
+    } catch (error) {
+      if (error instanceof NoChange) return { changed: false };
+      throw error;
+    }
+    await this.kickAfterCommit(executed);
+    return { changed: true, version: executed.body.version };
+  }
+
+  /**
+   * Same steps as `run()` (lock, visibility, version check, `fn`, version bump,
+   * effects flush, auto-claim, cascade) inside the caller's transaction, so a
+   * money row and the request transition commit together. It opens no
+   * transaction and has no idempotency. A `{ changed: false }` result skips the
+   * bump and the flush, but cannot undo writes `fn` already made on `tx`, so
+   * `fn` must not write before deciding nothing changed. Call the returned
+   * `afterCommit()` once the outer transaction has committed to kick the timer
+   * sweeper and the outbox.
+   */
+  async runInTx(
+    tx: Prisma.TransactionClient,
+    options: ExecuteOptions,
+    fn: (context: CommandContext) => Promise<CommandResult>,
+  ): Promise<{
+    status: number;
+    body: RequestDetailDto;
+    etag: string;
+    changed: boolean;
+    afterCommit: () => Promise<void>;
+  }> {
+    const now = new Date();
+    const settings = await this.settingsMap();
+    const executed = await this.execute(tx, options, fn, now, settings);
+    return {
+      status: executed.status,
+      body: executed.body,
+      etag: formatEtag(executed.body.version),
+      changed: executed.changed,
+      afterCommit: () => this.kickAfterCommit(executed),
+    };
+  }
+
+  private async settingsMap(): Promise<Readonly<Record<string, unknown>>> {
+    return Object.fromEntries(
+      (await this.settingsService.snapshot()).map(({ key, value }) => [
+        key,
+        value,
+      ]),
+    );
+  }
+
+  private async kickAfterCommit(executed: ExecuteOutcome): Promise<void> {
+    if (!executed.changed) return;
+    if (executed.dueNowTimer) await this.timersService.kick();
+    if (executed.notified) await this.outboxService.kick();
+  }
+
+  private async execute(
+    tx: Prisma.TransactionClient,
+    options: ExecuteOptions,
+    fn: (context: CommandContext) => Promise<CommandResult>,
+    now: Date,
+    settings: Readonly<Record<string, unknown>>,
+  ): Promise<ExecuteOutcome> {
+    const { actor } = options;
+    const loaded = await this.loader.load(tx, options.requestRef, {
+      forUpdate: true,
+    });
+    if (!loaded) throw opaqueNotFound();
+    const visibleRole = this.visibleRole(loaded.snapshot, actor);
+    if (!visibleRole) throw opaqueNotFound();
+    const current = () =>
+      this.project(
+        loaded.row,
+        loaded.snapshot,
+        actor,
+        visibleRole,
+        now,
+        settings,
+      );
+
+    if (
+      options.expectedVersion !== undefined &&
+      options.expectedVersion !== loaded.row.version
+    ) {
+      throw new AppError(
+        409,
+        'VERSION_CONFLICT',
+        'This request has changed. Refresh and retry.',
+        { current: current() },
+      );
+    }
+
+    this.enforceGuard(options, loaded.snapshot, now, settings, current);
+
+    const buffer = newBuffer();
+    const context = this.buildContext(
+      tx,
+      loaded.snapshot,
+      actor,
+      now,
+      settings,
+      buffer,
+    );
+    let result: CommandResult;
+    try {
+      result = await fn(context);
+    } catch (error) {
+      if (
+        error instanceof AppError &&
+        error.getStatus() === 409 &&
+        !error.details
+      ) {
+        throw new AppError(409, error.code, error.message, {
+          current: current(),
+        });
+      }
+      throw error;
+    }
+    if (result?.changed === false) {
+      return {
+        status: result.status ?? 200,
+        body: current(),
+        changed: false,
+        dueNowTimer: false,
+        notified: false,
+      };
+    }
+    if (result?.bumpVersion ?? options.bumpVersion ?? true)
+      await tx.serviceRequest.update({
+        where: { id: loaded.row.id },
+        data: { version: { increment: 1 }, updatedAt: now },
+      });
+    await this.flushEffects(
+      tx,
+      {
+        requestId: loaded.row.id,
+        ownerId: loaded.row.ownerId,
+        staffOwnerId: loaded.row.staffOwnerId,
+        actor,
+        command: options.command,
+        now,
+      },
+      buffer,
+    );
+    if (
+      options.autoClaim &&
+      mayAutoClaim(
+        actor,
+        options.command,
+        loaded.row.staffOwnerId === null,
+        isOpenRequestStatus(loaded.row.status),
+      )
+    ) {
+      await this.autoClaim(tx, loaded.row, actor, now, options.command);
+    }
+    await this.startCascade(tx, loaded.row.id, buffer, now);
+    const fresh = await this.loader.load(tx, loaded.row.id);
+    if (!fresh) throw opaqueNotFound();
+    return {
+      status: result?.status ?? 200,
+      body: this.project(
+        fresh.row,
+        fresh.snapshot,
+        actor,
+        visibleRole,
+        now,
+        settings,
+      ),
+      changed: true,
+      dueNowTimer: buffer.dueNowTimer,
+      notified: buffer.notifications.length > 0,
+    };
+  }
+
+  /** 04 §2.1: one registry guard per command, after the lock, visibility and version checks and before the handler. */
+  private enforceGuard(
+    options: ExecuteOptions,
+    snapshot: RequestSnapshot,
+    now: Date,
+    settings: Readonly<Record<string, unknown>>,
+    current: () => RequestDetailDto,
+  ): void {
+    const key = options.guard === undefined ? options.command : options.guard;
+    if (key === null) return;
+    const guard = REQUEST_GUARDS[key];
+    if (!guard)
+      throw new Error(
+        `No request guard is registered for "${key}". Add it to REQUEST_GUARDS, or pass guard: null for a command that makes its own checks.`,
+      );
+    const result = guard(
+      snapshot,
+      toActorView(options.actor),
+      options.input,
+      now,
+      settings,
+    );
+    if (result.ok) return;
+    throw new AppError(
+      result.status,
+      result.code,
+      result.message,
+      result.status === 409 ? { current: current() } : undefined,
+    );
+  }
+
+  private buildContext(
+    tx: Prisma.TransactionClient,
+    snap: RequestSnapshot,
+    actor: ActorContext,
+    now: Date,
+    settings: Readonly<Record<string, unknown>>,
+    buffer: EffectBuffer,
+  ): CommandContext {
+    return {
+      tx,
+      snap,
+      actor,
+      now,
+      settings,
+      audit: (action, data) => buffer.auditRows.push({ action, data }),
+      notify: (event, params) => buffer.notifications.push({ event, params }),
+      timers: {
+        start: (kind, dueAt, refId, payload) => {
+          buffer.effects.push({
+            type: 'timer.start',
+            kind,
+            dueAt,
+            refId,
+            payload,
+          });
+          if (dueAt <= now) buffer.dueNowTimer = true;
+        },
+        stop: (kind, refId) =>
+          buffer.effects.push({ type: 'timer.stop', kind, refId }),
+      },
+      approvals: {
+        open: (kind, itemId) =>
+          buffer.effects.push({ type: 'approval.open', kind, itemId }),
+        close: (kind, itemId, reason) =>
+          buffer.effects.push({ type: 'approval.close', kind, itemId, reason }),
+      },
+      enqueueCascade: (trigger) => {
+        buffer.cascadeTrigger = trigger;
+      },
     };
   }
 
@@ -590,19 +756,13 @@ export class RequestCommandRunner {
 
   private async flushEffects(
     tx: Prisma.TransactionClient,
-    requestId: string,
-    ownerId: string,
-    actor: ActorContext,
-    auditRows: Array<{ action: string; data?: AuditInput }>,
-    notifications: PendingNotification[],
-    timerStarts: PendingTimerStart[],
-    timerStops: Array<{ kind: TimerKind | TimerKind[]; refId?: string }>,
-    cascadeTrigger: DispatchTrigger | undefined,
-    now: Date,
+    target: EffectTarget,
+    buffer: EffectBuffer,
   ): Promise<void> {
-    if (auditRows.length)
+    const { requestId, ownerId, staffOwnerId, actor, command, now } = target;
+    if (buffer.auditRows.length)
       await tx.auditLog.createMany({
-        data: auditRows.map(({ action, data }) => ({
+        data: buffer.auditRows.map(({ action, data }) => ({
           actorType: actor.kind,
           actorId: actor.userId,
           entityType: data?.resourceType ?? 'service_request',
@@ -611,40 +771,83 @@ export class RequestCommandRunner {
           metadata: {
             ...(data ?? {}),
             requestId,
-            command: 'request.create',
+            command,
           } as Prisma.InputJsonValue,
         })),
       });
-    for (const notification of notifications) {
+    for (const notification of buffer.notifications) {
       await this.dispatcher.dispatch(
         tx,
         notification.event,
         notification.params,
-        { requestId, ownerId, actorId: actor.userId },
+        { requestId, ownerId, staffOwnerId, actorId: actor.userId },
       );
     }
-    for (const start of timerStarts)
-      await this.timersService.start(tx, {
-        requestId,
-        kind: start.kind,
-        dueAt: start.dueAt,
-        refId: start.refId,
-        payload: start.payload,
-      });
-    for (const stop of timerStops)
-      await this.timersService.stop(tx, {
-        requestId,
-        kinds: Array.isArray(stop.kind) ? stop.kind : [stop.kind],
-        refId: stop.refId,
-      });
-    if (cascadeTrigger)
-      await this.timersService.start(tx, {
-        requestId,
-        kind: 'dispatch.cascade',
-        dueAt: now,
-        payload: { trigger: cascadeTrigger },
-      });
+    for (const effect of buffer.effects) {
+      switch (effect.type) {
+        case 'timer.start':
+          await this.timersService.start(tx, {
+            requestId,
+            kind: effect.kind,
+            dueAt: effect.dueAt,
+            refId: effect.refId,
+            payload: effect.payload,
+          });
+          break;
+        case 'timer.stop':
+          await this.timersService.stop(tx, {
+            requestId,
+            kinds: Array.isArray(effect.kind) ? effect.kind : [effect.kind],
+            refId: effect.refId,
+          });
+          break;
+        case 'approval.open':
+          await this.approvalsHooks.open(
+            tx,
+            effect.kind,
+            effect.itemId,
+            requestId,
+            now,
+            actor.userId,
+          );
+          break;
+        case 'approval.close':
+          await this.approvalsHooks.close(
+            tx,
+            effect.kind,
+            effect.itemId,
+            now,
+            effect.reason,
+          );
+          break;
+      }
+    }
   }
+
+  private async startCascade(
+    tx: Prisma.TransactionClient,
+    requestId: string,
+    buffer: EffectBuffer,
+    now: Date,
+  ): Promise<void> {
+    if (!buffer.cascadeTrigger) return;
+    await this.timersService.start(tx, {
+      requestId,
+      kind: 'dispatch.cascade',
+      dueAt: now,
+      payload: { trigger: buffer.cascadeTrigger },
+    });
+    buffer.dueNowTimer = true;
+  }
+}
+
+function newBuffer(): EffectBuffer {
+  return {
+    notifications: [],
+    auditRows: [],
+    effects: [],
+    dueNowTimer: false,
+  };
 }
 
 function opaqueNotFound() {
