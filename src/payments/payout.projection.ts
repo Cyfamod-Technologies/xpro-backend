@@ -31,6 +31,8 @@ export type PayoutQueueItem = {
   method: 'offline' | 'paystack';
   transferReference: string | null;
   paidAt: Date | null;
+  /** The `ETag` value of the record; send it back as `If-Match` (05 §11). */
+  version: number;
   createdAt: Date;
 };
 
@@ -57,6 +59,7 @@ export function toPayoutQueueItem(
     method: payoutMethod(row),
     transferReference: canSeePricing ? row.transferReference : null,
     paidAt: row.paidAt,
+    version: row.version,
     createdAt: row.createdAt,
   };
 }
@@ -79,6 +82,8 @@ export type RefundQueueItem = {
   amount: number | null;
   reason: string;
   method: string | null;
+  /** The `ETag` value of the record; send it back as `If-Match` (05 §11). */
+  version: number;
   createdAt: Date;
   completedAt: Date | null;
 };
@@ -97,6 +102,7 @@ export function toRefundQueueItem(
     amount: amountFor(row.amount, canSeePricing),
     reason: row.reason,
     method,
+    version: row.version,
     createdAt: row.createdAt,
     completedAt: row.completedAt,
   };

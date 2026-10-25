@@ -9,6 +9,10 @@ import type { ActorContext } from '../platform/actor/actor.types';
 import { requirePermission } from '../platform/actor/actor.guards';
 import { ActorService } from '../platform/actor/actor.service';
 import { AppError } from '../platform/errors/app-error';
+import {
+  hashRequest,
+  IdempotencyService,
+} from '../platform/idempotency/idempotency.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   RequestCommandRunner,
@@ -36,7 +40,9 @@ import {
   type GatewayRefund,
   type PaymentGateway,
 } from './payment-gateway';
+import type { IdempotencyInput } from './finance.service';
 import { PAYMENT_GATEWAY } from './payments.service';
+import { assertExpectedVersion } from './record-version';
 import { toRefundQueueItem } from './payout.projection';
 import { refreshPaymentRefundStatus } from './refund-status';
 
@@ -101,6 +107,7 @@ export class RefundsService {
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
     private readonly runner: RequestCommandRunner,
     private readonly requestEvents: RequestEventsService,
+    private readonly idempotency: IdempotencyService,
   ) {}
 
   /** The refund queue: an allow-list DTO, a `?status` filter, and amounts only for staff with `view.pricing` (C-42, E-27). */
@@ -228,8 +235,12 @@ export class RefundsService {
             paymentId,
             reference: payment.reference,
             cancellationId: cancellation?.id ?? null,
-            amount: Number(plan.amount),
             replacedRefundIds: replaced.map(({ id }) => id),
+            before: null,
+            after: {
+              status: 'pending_approval',
+              amount: Number(plan.amount),
+            },
           },
         });
         ctx.notify('refund.requested', {
@@ -253,9 +264,14 @@ export class RefundsService {
     userId: string,
     id: string,
     dto: { approve: boolean; amount?: number; reason: string },
+    idempotency: IdempotencyInput,
+    expectedVersion?: number,
   ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'refund.manage');
+    const hash = hashRequest('POST', idempotency.url, dto);
+    const replay = await this.idempotency.lookup(userId, idempotency.key, hash);
+    if (replay) return replay.body;
     const known = await this.known(id, NOT_AWAITING_DECISION);
     let submit = false;
     await this.runner.run(
@@ -272,6 +288,7 @@ export class RefundsService {
           known.paymentId,
           NOT_AWAITING_DECISION,
         );
+        assertExpectedVersion(expectedVersion, refund.version);
         if (refund.status !== 'pending_approval')
           throw conflict(NOT_AWAITING_DECISION);
         failWith(checkDecider(refund.requestedBy, userId));
@@ -302,6 +319,7 @@ export class RefundsService {
             status,
             decidedBy: userId,
             reason: dto.reason.trim(),
+            version: { increment: 1 },
           },
         });
         if (claimed.count !== 1) throw conflict(NOT_AWAITING_DECISION);
@@ -322,20 +340,20 @@ export class RefundsService {
             }),
           },
         );
+        this.notifyDecision(ctx, refund, status, plan.amount);
         if (status === 'rejected') {
           ctx.approvals.close('refund', id, 'rejected');
-          if (refund.cancellationId) {
-            // 05 §6.4: the cancellation stays open until a new valid decision exists.
-            ctx.approvals.open('refund', id);
-            ctx.notify('refund.rejected', { requestCode: ctx.snap.number });
-          }
+          // 05 §6.4: the cancellation stays open until a new valid decision exists.
+          if (refund.cancellationId) ctx.approvals.open('refund', id);
         } else if (status !== 'awaiting_second_approval')
           ctx.approvals.close('refund', id, 'approved');
         return { bumpVersion: false };
       },
     );
     if (submit) await this.submit(actor, id);
-    return this.view(id);
+    const result = await this.view(id);
+    await this.idempotency.store(userId, idempotency.key, hash, 200, result);
+    return result;
   }
 
   /** `refund.secondApprove` (05 §5): a Super admin other than the first decider signs off a refund decided after work started. */
@@ -343,6 +361,7 @@ export class RefundsService {
     userId: string,
     id: string,
     dto: { approve: boolean; reason: string },
+    expectedVersion?: number,
   ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'refund.manage');
@@ -363,6 +382,7 @@ export class RefundsService {
           known.paymentId,
           NOT_AWAITING_SECOND,
         );
+        assertExpectedVersion(expectedVersion, refund.version);
         if (refund.status !== 'awaiting_second_approval')
           throw conflict(NOT_AWAITING_SECOND);
         failWith(
@@ -388,6 +408,7 @@ export class RefundsService {
           data: {
             status,
             secondApprover: userId,
+            version: { increment: 1 },
             ...(status === 'rejected' ? { reason: dto.reason.trim() } : {}),
             ...(status === 'waived' ? { completedAt: ctx.now } : {}),
           },
@@ -414,12 +435,10 @@ export class RefundsService {
             },
           },
         );
+        this.notifyDecision(ctx, refund, status, refund.amount);
         if (status === 'rejected') {
           ctx.approvals.close('refund', id, 'rejected');
-          if (refund.cancellationId) {
-            ctx.approvals.open('refund', id);
-            ctx.notify('refund.rejected', { requestCode: ctx.snap.number });
-          }
+          if (refund.cancellationId) ctx.approvals.open('refund', id);
         } else {
           ctx.approvals.close('refund', id, status);
           if (status === 'waived' && refund.cancellationId) {
@@ -443,6 +462,7 @@ export class RefundsService {
     userId: string,
     id: string,
     dto: { reference: string; proofFileId: string; note?: string },
+    expectedVersion?: number,
   ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'refund.manage');
@@ -461,6 +481,7 @@ export class RefundsService {
           known.paymentId,
           NOT_READY_FOR_TRANSFER,
         );
+        assertExpectedVersion(expectedVersion, refund.version);
         if (refund.status !== 'approved' || payment.method !== 'offline')
           throw conflict(NOT_READY_FOR_TRANSFER);
         const note = dto.note?.trim();
@@ -471,6 +492,7 @@ export class RefundsService {
             transferReference: dto.reference,
             transferProofId: dto.proofFileId,
             transferRecordedBy: userId,
+            version: { increment: 1 },
             ...(note ? { reason: `${refund.reason}\n${note}` } : {}),
           },
         });
@@ -507,7 +529,12 @@ export class RefundsService {
    * transfer. The reconciler is neither the one who recorded the transfer nor
    * the refund's requester, and may not complete a refund they started.
    */
-  async reconcile(userId: string, id: string, note: string) {
+  async reconcile(
+    userId: string,
+    id: string,
+    note: string,
+    expectedVersion?: number,
+  ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'refund.manage');
     const known = await this.known(id, NOT_AWAITING_RECONCILIATION);
@@ -526,6 +553,7 @@ export class RefundsService {
           known.paymentId,
           NOT_AWAITING_RECONCILIATION,
         );
+        assertExpectedVersion(expectedVersion, refund.version);
         if (refund.status !== 'processing' || !refund.transferRecordedBy)
           throw conflict(NOT_AWAITING_RECONCILIATION);
         failWith(
@@ -553,12 +581,14 @@ export class RefundsService {
             status: 'completed',
             reconciledBy: userId,
             completedAt: ctx.now,
+            version: { increment: 1 },
             reason: `${refund.reason}\nReconciled: ${note.trim()}`,
           },
         });
         if (claimed.count !== 1) throw conflict(NOT_AWAITING_RECONCILIATION);
         await refreshPaymentRefundStatus(ctx.tx, refund.paymentId);
         ctx.approvals.close('refund', id, 'completed');
+        this.notifyCompleted(ctx, refund.amount);
         ctx.audit('Refund reconciled', {
           resourceType: 'refund',
           resourceId: id,
@@ -646,7 +676,11 @@ export class RefundsService {
             gatewayRefundId: refund.gatewayRefundId,
             updatedAt: refund.updatedAt,
           },
-          data: { status: 'processing', gatewayRefundId: null },
+          data: {
+            status: 'processing',
+            gatewayRefundId: null,
+            version: { increment: 1 },
+          },
         });
         if (claimed.count !== 1) throw conflict(NOT_RETRYABLE);
         ctx.approvals.close('refund', id, 'retried');
@@ -714,6 +748,25 @@ export class RefundsService {
           gateway.amount != null &&
           gateway.amount !== Number(refund.amount)
         ) {
+          ctx.audit('Refund event not applied', {
+            resourceType: 'refund',
+            resourceId: refundId,
+            changes: {
+              ...this.auditChanges(refund, payment, {
+                status: refund.status,
+                amount: refund.amount,
+              }),
+              gatewayRefundId: gateway.id,
+              gatewayStatus: gateway.status,
+              reportedAmount: gateway.amount,
+              reason: 'amount_mismatch',
+            },
+          });
+          ctx.notify('refund.mismatch', {
+            requestCode: ctx.snap.number,
+            approvedAmount: Number(refund.amount),
+            reportedAmount: gateway.amount,
+          });
           await options.onSettled?.(ctx.tx);
           return { bumpVersion: false };
         }
@@ -740,10 +793,19 @@ export class RefundsService {
                   status: 'completed',
                   completedAt: ctx.now,
                   gatewayRefundId: gateway.id,
+                  version: { increment: 1 },
                 }
               : state === 'failed'
-                ? { status: 'failed', gatewayRefundId: gateway.id }
-                : { status: 'processing', gatewayRefundId: gateway.id },
+                ? {
+                    status: 'failed',
+                    gatewayRefundId: gateway.id,
+                    version: { increment: 1 },
+                  }
+                : {
+                    status: 'processing',
+                    gatewayRefundId: gateway.id,
+                    version: { increment: 1 },
+                  },
         });
         if (claim.count === 1) {
           applied = true;
@@ -759,6 +821,7 @@ export class RefundsService {
           if (state === 'processed') {
             await refreshPaymentRefundStatus(ctx.tx, refund.paymentId);
             ctx.approvals.close('refund', refundId, 'completed');
+            this.notifyCompleted(ctx, refund.amount);
             ctx.audit('Refund completed', {
               resourceType: 'refund',
               resourceId: refundId,
@@ -845,7 +908,7 @@ export class RefundsService {
         await this.lockPayment(ctx, refund.paymentId);
         const claimed = await ctx.tx.refund.updateMany({
           where: { id, status: 'processing', gatewayRefundId: null },
-          data: { gatewayRefundId: result.id },
+          data: { gatewayRefundId: result.id, version: { increment: 1 } },
         });
         if (claimed.count !== 1) return { changed: false };
         ctx.audit('Refund submitted to Paystack', {
@@ -890,7 +953,7 @@ export class RefundsService {
                 status: 'processing',
                 gatewayRefundId: null,
               },
-              data: { status: 'failed' },
+              data: { status: 'failed', version: { increment: 1 } },
             });
             if (claimed.count !== 1) return { changed: false };
           }
@@ -1016,6 +1079,43 @@ export class RefundsService {
         select: { amount: true, status: true },
       }),
     );
+  }
+
+  /** 05 §9: Finance and Super admin hear every decision; the customer hears an approval. A rejection that holds a cancellation open keeps its own notice. */
+  private notifyDecision(
+    ctx: CommandContext,
+    refund: Refund,
+    status: string,
+    amount: bigint,
+  ): void {
+    const requestCode = ctx.snap.number;
+    const kobo = Number(amount);
+    if (status === 'rejected') {
+      if (refund.cancellationId) ctx.notify('refund.rejected', { requestCode });
+      else
+        ctx.notify('refund.decided', {
+          requestCode,
+          outcome: 'rejected',
+          amount: kobo,
+        });
+      return;
+    }
+    const outcome =
+      status === 'awaiting_second_approval'
+        ? 'awaiting_second_approval'
+        : status === 'waived'
+          ? 'waived'
+          : 'approved';
+    ctx.notify('refund.decided', { requestCode, outcome, amount: kobo });
+    if (outcome === 'approved')
+      ctx.notify('refund.approved_customer', { requestCode, amount: kobo });
+  }
+
+  /** 05 §9: Finance is told, and the customer gets their refund receipt. */
+  private notifyCompleted(ctx: CommandContext, amount: bigint): void {
+    const params = { requestCode: ctx.snap.number, amount: Number(amount) };
+    ctx.notify('refund.completed', params);
+    ctx.notify('refund.completed_customer', params);
   }
 
   private auditChanges(

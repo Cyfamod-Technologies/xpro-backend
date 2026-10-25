@@ -468,9 +468,11 @@ describe('PaystackEventsService transfer events (C-19)', () => {
       'success',
       expect.objectContaining({ actor: null, verifiedAmount: 9_000_000 }),
     );
-    const options = finance.settleTransferFromGateway.mock.calls[0][2] as {
-      onSettled: (tx: unknown) => Promise<void>;
-    };
+    const options = (
+      finance.settleTransferFromGateway.mock.calls as unknown as Array<
+        [string, string, { onSettled: (tx: unknown) => Promise<void> }]
+      >
+    )[0][2];
     const tx = {};
     await options.onSettled(tx);
     expect(inbox.markDone).toHaveBeenCalledWith(tx, expect.any(String), {

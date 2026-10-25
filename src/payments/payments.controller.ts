@@ -9,15 +9,18 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
   ValidationPipe,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../common/types/request-user';
+import { formatEtag } from '../platform/concurrency/etag.util';
+import { IfMatch } from '../platform/concurrency/if-match.decorator';
 import { IdempotencyKey } from '../platform/idempotency/idempotency-key.decorator';
 import { AppError } from '../platform/errors/app-error';
 import { PaymentsService } from './payments.service';
@@ -38,6 +41,13 @@ import {
   RefundRequestDto,
   RejectPaymentDto,
 } from './payments.dto';
+
+/** The record's `version` is its ETag (05 §11). A replayed response may predate the column, so a missing version sends no header. */
+function withEtag<T>(res: Response, result: T): T {
+  const version = (result as { version?: unknown } | null)?.version;
+  if (typeof version === 'number') res.setHeader('ETag', formatEtag(version));
+  return result;
+}
 
 @ApiTags('Payments')
 @ApiBearerAuth()
@@ -177,7 +187,7 @@ export class AdminFinanceController {
       status,
     });
   }
-  @Post('refunds/:id/decide') decideRefund(
+  @Post('refunds/:id/decide') async decideRefund(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -188,10 +198,23 @@ export class AdminFinanceController {
       }),
     )
     dto: RefundDecisionDto,
+    @IfMatch() version: number | undefined,
+    @IdempotencyKey({ required: true }) key: string,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.refundCommands.decide(user.id, id, dto);
+    return withEtag(
+      res,
+      await this.refundCommands.decide(
+        user.id,
+        id,
+        dto,
+        { key, url: req.originalUrl },
+        version,
+      ),
+    );
   }
-  @Post('refunds/:id/second-approve') secondApproveRefund(
+  @Post('refunds/:id/second-approve') async secondApproveRefund(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -202,10 +225,15 @@ export class AdminFinanceController {
       }),
     )
     dto: RefundDecisionDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.refundCommands.secondApprove(user.id, id, dto);
+    return withEtag(
+      res,
+      await this.refundCommands.secondApprove(user.id, id, dto, version),
+    );
   }
-  @Post('refunds/:id/transfer') transferRefund(
+  @Post('refunds/:id/transfer') async transferRefund(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -216,10 +244,15 @@ export class AdminFinanceController {
       }),
     )
     dto: OfflineTransferDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.refundCommands.recordTransfer(user.id, id, dto);
+    return withEtag(
+      res,
+      await this.refundCommands.recordTransfer(user.id, id, dto, version),
+    );
   }
-  @Post('refunds/:id/reconcile') reconcileRefund(
+  @Post('refunds/:id/reconcile') async reconcileRefund(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -230,8 +263,13 @@ export class AdminFinanceController {
       }),
     )
     dto: FinanceNoteDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.refundCommands.reconcile(user.id, id, dto.note);
+    return withEtag(
+      res,
+      await this.refundCommands.reconcile(user.id, id, dto.note, version),
+    );
   }
   @Post('refunds/:id/retry')
   @HttpCode(HttpStatus.OK)
@@ -248,7 +286,7 @@ export class AdminFinanceController {
       status,
     });
   }
-  @Post('payouts/:id/approve') approvePayout(
+  @Post('payouts/:id/approve') async approvePayout(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -259,10 +297,15 @@ export class AdminFinanceController {
       }),
     )
     dto: PayoutDecisionDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.finance.approvePayout(user.id, id, dto.note);
+    return withEtag(
+      res,
+      await this.finance.approvePayout(user.id, id, dto.note, version),
+    );
   }
-  @Post('payouts/:id/second-approve') secondApprovePayout(
+  @Post('payouts/:id/second-approve') async secondApprovePayout(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -273,10 +316,21 @@ export class AdminFinanceController {
       }),
     )
     dto: PayoutSecondApprovalDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.finance.secondApprovePayout(user.id, id, dto.approve, dto.note);
+    return withEtag(
+      res,
+      await this.finance.secondApprovePayout(
+        user.id,
+        id,
+        dto.approve,
+        dto.note,
+        version,
+      ),
+    );
   }
-  @Post('payouts/:id/hold') holdPayout(
+  @Post('payouts/:id/hold') async holdPayout(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -287,10 +341,15 @@ export class AdminFinanceController {
       }),
     )
     dto: PayoutHoldDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.finance.payoutHold(user.id, id, true, dto.reason);
+    return withEtag(
+      res,
+      await this.finance.payoutHold(user.id, id, true, dto.reason, version),
+    );
   }
-  @Post('payouts/:id/release') releasePayout(
+  @Post('payouts/:id/release') async releasePayout(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -301,10 +360,15 @@ export class AdminFinanceController {
       }),
     )
     dto: PayoutHoldDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.finance.payoutHold(user.id, id, false, dto.reason);
+    return withEtag(
+      res,
+      await this.finance.payoutHold(user.id, id, false, dto.reason, version),
+    );
   }
-  @Post('payouts/:id/transfer') transferPayout(
+  @Post('payouts/:id/transfer') async transferPayout(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -315,8 +379,10 @@ export class AdminFinanceController {
       }),
     )
     dto: PayoutTransferDto,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey({ required: true }) key: string,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const idempotency = { key, url: req.originalUrl };
     if (dto.method === 'offline') {
@@ -326,22 +392,30 @@ export class AdminFinanceController {
           'VALIDATION_ERROR',
           'An offline transfer reference and proof file are required.',
         );
-      return this.finance.transferPayout(
-        user.id,
-        id,
-        {
-          method: 'offline',
-          reference: dto.reference,
-          proofFileId: dto.proofFileId,
-        },
-        idempotency,
+      return withEtag(
+        res,
+        await this.finance.transferPayout(
+          user.id,
+          id,
+          {
+            method: 'offline',
+            reference: dto.reference,
+            proofFileId: dto.proofFileId,
+          },
+          idempotency,
+          version,
+        ),
       );
     }
-    return this.finance.transferPayout(
-      user.id,
-      id,
-      { method: 'paystack' },
-      idempotency,
+    return withEtag(
+      res,
+      await this.finance.transferPayout(
+        user.id,
+        id,
+        { method: 'paystack' },
+        idempotency,
+        version,
+      ),
     );
   }
   @Post('payouts/:id/retry')
@@ -357,7 +431,7 @@ export class AdminFinanceController {
       url: req.originalUrl,
     });
   }
-  @Post('payouts/:id/reconcile') reconcilePayout(
+  @Post('payouts/:id/reconcile') async reconcilePayout(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @Body(
@@ -368,8 +442,13 @@ export class AdminFinanceController {
       }),
     )
     dto: FinanceNoteDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.finance.reconcilePayout(user.id, id, dto.note);
+    return withEtag(
+      res,
+      await this.finance.reconcilePayout(user.id, id, dto.note, version),
+    );
   }
 }
 

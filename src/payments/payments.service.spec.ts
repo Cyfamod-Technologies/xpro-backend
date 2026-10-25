@@ -468,7 +468,7 @@ describe('PaymentsService.reconcile of a late offline payment', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn(),
       },
-      refund: { create: jest.fn() },
+      refund: { create: jest.fn().mockResolvedValue({ id: 'refund-9' }) },
       serviceRequest: { update: jest.fn() },
     };
     const kit = systemCommandKit({
@@ -514,8 +514,14 @@ describe('PaymentsService.reconcile of a late offline payment', () => {
     });
     expect(tx.serviceRequest.update).not.toHaveBeenCalled();
     expect(kit.effects.notify.map((entry) => entry.event)).toEqual([
+      'refund.requested',
       'payment.late',
+      'payment.late_customer',
     ]);
+    expect(kit.effects.approvalOpens).toContainEqual({
+      kind: 'refund',
+      itemId: 'refund-9',
+    });
   });
 });
 
@@ -1261,6 +1267,271 @@ describe('PaymentsService.openForCancellation (C-39)', () => {
     ).rejects.toMatchObject({
       status: 409,
       message: 'There is nothing left to refund on this payment.',
+    });
+  });
+});
+
+describe('payment audit rows and notices (C-21, C-24)', () => {
+  type Row = {
+    resourceType: string;
+    resourceId: string;
+    note?: string;
+    changes: { reference?: string; before: unknown; after: unknown };
+  };
+  const rowOf = (
+    effects: { audit: Array<{ action: string; data?: unknown }> },
+    action: string,
+  ): Row => {
+    const found = effects.audit.find((entry) => entry.action === action);
+    if (!found) throw new Error(`No audit row "${action}"`);
+    return found.data as Row;
+  };
+
+  it('initiate audits the pending attempt from nothing, with its reference', async () => {
+    const h = build();
+    h.actors.resolve.mockResolvedValue(customerActor());
+
+    await h.service.initiate(
+      { id: 'customer-1' } as unknown as RequestUser,
+      'XPR-00042',
+      'key-1',
+      '/requests/XPR-00042/payments',
+    );
+
+    expect(rowOf(h.effects, 'Payment initiated')).toMatchObject({
+      resourceType: 'payment',
+      changes: {
+        reference: expect.stringMatching(/^xpro_/) as unknown,
+        before: null,
+        after: { status: 'pending', amount: 500_000 },
+      },
+    });
+  });
+
+  it('recordOffline audits the record from nothing, with the note and proof but no bank details', async () => {
+    const h = build();
+    h.actors.resolve.mockResolvedValue(finance());
+
+    await h.service.recordOffline('finance-1', 'XPR-00042', {
+      ...recordDto,
+      note: 'Cash at the office.',
+    });
+
+    const row = rowOf(h.effects, 'Offline payment recorded');
+    expect(row).toMatchObject({
+      resourceType: 'payment',
+      note: 'Cash at the office.',
+      changes: {
+        reference: 'BANK-1',
+        before: null,
+        after: { status: 'recorded', amount: 500_000 },
+      },
+    });
+    expect(JSON.stringify(row)).not.toMatch(/account/i);
+  });
+
+  it('reconcile audits recorded -> paid with the second person and the note', async () => {
+    const h = build({ snap: recordedOffline() });
+    h.actors.resolve.mockResolvedValue(finance('finance-2'));
+    h.tx.payment.findUnique.mockResolvedValue(offlineRow());
+    h.tx.payment.findUniqueOrThrow.mockResolvedValue(
+      offlineRow({ status: 'paid' }),
+    );
+
+    await h.service.reconcile('finance-2', 'payment-1', 'Seen on statement.');
+
+    expect(rowOf(h.effects, 'Offline payment reconciled')).toMatchObject({
+      resourceId: 'payment-1',
+      note: 'Seen on statement.',
+      changes: {
+        reference: 'BANK-1',
+        before: { status: 'recorded' },
+        after: { status: 'paid' },
+      },
+    });
+  });
+
+  it('rejecting an offline payment audits it and tells the customer it was not completed', async () => {
+    const h = build({ snap: recordedOffline() });
+    h.actors.resolve.mockResolvedValue(finance('finance-2'));
+    h.tx.payment.findUnique.mockResolvedValue(offlineRow());
+    h.tx.payment.findUniqueOrThrow.mockResolvedValue(
+      offlineRow({ status: 'failed' }),
+    );
+
+    await h.service.rejectOffline(
+      'finance-2',
+      'payment-1',
+      'Not on the statement.',
+    );
+
+    expect(rowOf(h.effects, 'Offline payment rejected')).toMatchObject({
+      note: 'Not on the statement.',
+      changes: {
+        before: { status: 'recorded' },
+        after: { status: 'failed' },
+      },
+    });
+    expect(h.effects.notify).toEqual([
+      {
+        event: 'payment.failed_customer',
+        params: { requestCode: 'XPR-00042' },
+      },
+    ]);
+  });
+
+  it('closing an unpaid Paystack attempt after 30 minutes audits it and tells the customer', async () => {
+    const attempt = {
+      id: 'payment-1',
+      requestId: 'request-1',
+      quoteId: 'quote-1',
+      reference: 'xpro_1',
+      amount: 500_000n,
+      method: 'paystack',
+      status: 'pending',
+      createdAt: new Date(NOW.getTime() - 45 * minutes),
+    };
+    const h = build({
+      prisma: { payment: { findUnique: jest.fn().mockResolvedValue(attempt) } },
+      gateway: {
+        verify: jest.fn().mockResolvedValue({
+          status: 'abandoned',
+          reference: 'xpro_1',
+          amount: 500_000,
+          currency: 'NGN',
+        }),
+      },
+    });
+
+    await expect(h.service.recheckPending('payment-1')).resolves.toBe('failed');
+
+    expect(
+      rowOf(h.effects, 'Payment attempt closed (no charge)'),
+    ).toMatchObject({
+      resourceType: 'payment',
+      resourceId: 'payment-1',
+      changes: { before: { status: 'pending' }, after: { status: 'failed' } },
+    });
+    expect(h.effects.notify.map(({ event }) => event)).toEqual([
+      'payment.failed_customer',
+    ]);
+  });
+
+  it('a failed checkout start is audited but does not send a notice', async () => {
+    const h = build({
+      gateway: { initialize: jest.fn().mockRejectedValue(new Error('down')) },
+    });
+    h.actors.resolve.mockResolvedValue(customerActor());
+
+    await expect(
+      h.service.initiate(
+        { id: 'customer-1' } as unknown as RequestUser,
+        'XPR-00042',
+        'key-1',
+        '/requests/XPR-00042/payments',
+      ),
+    ).rejects.toThrow('down');
+
+    expect(
+      h.runs.some(({ command }) => command === 'payment.attemptFailed'),
+    ).toBe(true);
+    expect(h.effects.notify).toEqual([]);
+    expect(h.effects.audit.map(({ action }) => action)).toContain(
+      'Payment initialization failed',
+    );
+  });
+
+  it('settling a Paystack charge writes one system row in the shared audit shape', async () => {
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      payment: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      auditLog: { create: jest.fn() },
+    };
+    const h = build({
+      prisma: {
+        $transaction: jest.fn((fn: (t: unknown) => unknown) => fn(tx)),
+      },
+    });
+
+    await h.service.settleCharge(
+      {
+        id: 'payment-1',
+        requestId: 'request-1',
+        quoteId: 'quote-1',
+        status: 'pending',
+      },
+      { status: 'success', reference: 'xpro_1' } as VerifiedTransaction,
+      { source: 'webhook' },
+    );
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        actorType: 'system',
+        entityType: 'payment',
+        entityId: 'payment-1',
+        action: 'Payment settled',
+        metadata: {
+          requestId: 'request-1',
+          command: 'payment.settle',
+          resourceType: 'payment',
+          resourceId: 'payment-1',
+          changes: {
+            reference: 'xpro_1',
+            source: 'webhook',
+            before: { status: 'pending' },
+            after: { status: 'paid' },
+          },
+        },
+      },
+    });
+  });
+
+  it('quarantining writes the reason as the note and never the raw gateway body', async () => {
+    const tx = {
+      auditLog: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      },
+      serviceRequest: {
+        findUnique: jest.fn().mockResolvedValue({ number: 42 }),
+      },
+    };
+    const h = build({
+      prisma: {
+        $transaction: jest.fn((fn: (t: unknown) => unknown) => fn(tx)),
+      },
+    });
+
+    await h.service.quarantine({
+      payment: {
+        id: 'payment-1',
+        requestId: 'request-1',
+        reference: 'xpro_1',
+        quoteId: 'quote-1',
+      },
+      reference: 'xpro_1',
+      reason: 'The transaction amount differs.',
+    });
+
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        actorType: 'system',
+        entityType: 'payment',
+        entityId: 'payment-1',
+        action: 'Payment quarantined',
+        metadata: {
+          requestId: 'request-1',
+          command: 'payment.quarantine',
+          resourceType: 'payment',
+          resourceId: 'payment-1',
+          note: 'The transaction amount differs.',
+          changes: {
+            reference: 'xpro_1',
+            before: { quarantined: false },
+            after: { quarantined: true },
+          },
+        },
+      },
     });
   });
 });

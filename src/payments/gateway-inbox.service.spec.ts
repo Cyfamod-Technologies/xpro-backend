@@ -239,6 +239,26 @@ describe('GatewayInboxService.receive', () => {
       'gateway.event_dead_lettered',
       { event: 'charge.success', reference: 'xpro_1' },
     );
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        actorType: 'system',
+        entityType: 'gateway_event',
+        entityId: 'fp-1',
+        action: 'Gateway event dead-lettered',
+        metadata: {
+          requestId: null,
+          command: 'gateway.deadLetter',
+          resourceType: 'gateway_event',
+          resourceId: 'fp-1',
+          changes: {
+            event: 'charge.success',
+            reference: 'xpro_1',
+            before: { status: 'processing' },
+            after: { status: 'dead_letter' },
+          },
+        },
+      },
+    });
   });
 
   it('keeps a quarantined event quarantined when it is redelivered', async () => {

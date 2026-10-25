@@ -169,7 +169,7 @@ export class GatewayInboxService {
   ): Promise<boolean> {
     const decision = decideReclaim(row, now, source);
     if (decision.action === 'dead_letter') {
-      await this.deadLetter(row.fingerprint, now);
+      await this.deadLetter(row.fingerprint, row.status, now);
       return false;
     }
     if (decision.action !== 'reclaim') return false;
@@ -214,10 +214,14 @@ export class GatewayInboxService {
       },
     });
     if (updated.count === 1 && next.status === GatewayEventStatus.deadLetter)
-      await this.alertDeadLetter(event);
+      await this.alertDeadLetter(event, GatewayEventStatus.processing);
   }
 
-  private async deadLetter(fingerprint: string, now: Date): Promise<void> {
+  private async deadLetter(
+    fingerprint: string,
+    from: string,
+    now: Date,
+  ): Promise<void> {
     const updated = await this.prisma.gatewayEvent.updateMany({
       where: {
         fingerprint,
@@ -235,10 +239,13 @@ export class GatewayInboxService {
     const row = await this.prisma.gatewayEvent.findUnique({
       where: { fingerprint },
     });
-    if (row) await this.alertDeadLetter(rowToEvent(row));
+    if (row) await this.alertDeadLetter(rowToEvent(row), from);
   }
 
-  private async alertDeadLetter(event: InboundEvent): Promise<void> {
+  private async alertDeadLetter(
+    event: InboundEvent,
+    from: string,
+  ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       await tx.auditLog.create({
         data: {
@@ -246,7 +253,18 @@ export class GatewayInboxService {
           entityType: 'gateway_event',
           entityId: event.fingerprint,
           action: 'Gateway event dead-lettered',
-          metadata: { event: event.event, reference: event.reference },
+          metadata: {
+            requestId: null,
+            command: 'gateway.deadLetter',
+            resourceType: 'gateway_event',
+            resourceId: event.fingerprint,
+            changes: {
+              event: event.event,
+              reference: event.reference,
+              before: { status: from },
+              after: { status: GatewayEventStatus.deadLetter },
+            },
+          },
         },
       });
       await this.dispatcher.dispatchAlert(tx, 'gateway.event_dead_lettered', {

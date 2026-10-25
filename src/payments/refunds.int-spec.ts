@@ -36,6 +36,7 @@ describe('refund commands (integration)', () => {
     listRefunds: jest.fn().mockResolvedValue([]),
   };
   const createdRequests: string[] = [];
+  const IDEM = { key: 'idem-key-0001', url: '/admin/refunds/decide' };
 
   const staffActor = (userId: string, superAdmin = false): ActorContext =>
     ({
@@ -238,16 +239,26 @@ describe('refund commands (integration)', () => {
 
     const results = await Promise.all([
       outcome(
-        refunds.decide(deciderA, seeded.refundIds[0], {
-          approve: true,
-          reason: 'Approved by A.',
-        }),
+        refunds.decide(
+          deciderA,
+          seeded.refundIds[0],
+          {
+            approve: true,
+            reason: 'Approved by A.',
+          },
+          IDEM,
+        ),
       ),
       outcome(
-        refunds.decide(deciderB, seeded.refundIds[0], {
-          approve: true,
-          reason: 'Approved by B.',
-        }),
+        refunds.decide(
+          deciderB,
+          seeded.refundIds[0],
+          {
+            approve: true,
+            reason: 'Approved by B.',
+          },
+          IDEM,
+        ),
       ),
     ]);
 
@@ -287,16 +298,26 @@ describe('refund commands (integration)', () => {
 
     const results = await Promise.all([
       outcome(
-        refunds.decide(deciderA, seeded.refundIds[0], {
-          approve: true,
-          reason: 'First.',
-        }),
+        refunds.decide(
+          deciderA,
+          seeded.refundIds[0],
+          {
+            approve: true,
+            reason: 'First.',
+          },
+          IDEM,
+        ),
       ),
       outcome(
-        refunds.decide(deciderB, second.id, {
-          approve: true,
-          reason: 'Second.',
-        }),
+        refunds.decide(
+          deciderB,
+          second.id,
+          {
+            approve: true,
+            reason: 'Second.',
+          },
+          IDEM,
+        ),
       ),
     ]);
 
@@ -316,11 +337,16 @@ describe('refund commands (integration)', () => {
       withAssignment: true,
     });
 
-    await refunds.decide(decider, seeded.refundIds[0], {
-      approve: true,
-      amount: 0,
-      reason: 'The job was finished before the cancellation.',
-    });
+    await refunds.decide(
+      decider,
+      seeded.refundIds[0],
+      {
+        approve: true,
+        amount: 0,
+        reason: 'The job was finished before the cancellation.',
+      },
+      IDEM,
+    );
     expect(
       (
         await prisma.refund.findUniqueOrThrow({
@@ -371,10 +397,15 @@ describe('refund commands (integration)', () => {
       withAssignment: true,
     });
     for (const id of seeded.refundIds) {
-      await refunds.decide(decider, id, {
-        approve: true,
-        reason: 'Full refund before work.',
-      });
+      await refunds.decide(
+        decider,
+        id,
+        {
+          approve: true,
+          reason: 'Full refund before work.',
+        },
+        IDEM,
+      );
       await prisma.refund.update({
         where: { id },
         data: {
@@ -451,10 +482,15 @@ describe('refund commands (integration)', () => {
       payments: [{ amount: 500_000n, method: 'offline' }],
     });
 
-    await refunds.decide(decider, seeded.refundIds[0], {
-      approve: false,
-      reason: 'Wrong details.',
-    });
+    await refunds.decide(
+      decider,
+      seeded.refundIds[0],
+      {
+        approve: false,
+        reason: 'Wrong details.',
+      },
+      IDEM,
+    );
     expect(
       (
         await prisma.serviceRequest.findUniqueOrThrow({
@@ -471,10 +507,15 @@ describe('refund commands (integration)', () => {
     const replacement = await refunds.request(requester, seeded.paymentIds[0], {
       reason: 'Replace the rejected refund.',
     });
-    await refunds.decide(decider, replacement.id, {
-      approve: true,
-      reason: 'Full refund before work.',
-    });
+    await refunds.decide(
+      decider,
+      replacement.id,
+      {
+        approve: true,
+        reason: 'Full refund before work.',
+      },
+      IDEM,
+    );
     await prisma.refund.update({
       where: { id: replacement.id },
       data: {

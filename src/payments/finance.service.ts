@@ -38,10 +38,12 @@ import {
 } from './domain/payout-rules';
 import { GatewayRejectedError, type PaymentGateway } from './payment-gateway';
 import { PAYMENT_GATEWAY } from './payments.service';
+import { assertExpectedVersion } from './record-version';
 import {
   toEarningsItem,
   toPayoutDto,
   toPayoutQueueItem,
+  safeHoldReason,
   type PayoutQueueItem,
 } from './payout.projection';
 
@@ -72,7 +74,7 @@ type CommandFn = Parameters<RequestCommandRunner['runSystem']>[2];
 /** What `createPrimary` needs from a command context: the transaction, the clock, the settings and the ordered effects. */
 export type PayoutCreationContext = Pick<
   CommandContext,
-  'tx' | 'now' | 'settings' | 'approvals' | 'audit'
+  'tx' | 'now' | 'settings' | 'approvals' | 'audit' | 'notify' | 'snap'
 >;
 
 export type IdempotencyInput = { key: string; url: string };
@@ -163,6 +165,7 @@ export class FinanceService {
     const provider = await tx.providerProfile.findUnique({
       where: { id: input.providerId },
       select: {
+        userId: true,
         verification: true,
         reliabilityStatus: true,
         user: { select: { status: true } },
@@ -209,8 +212,26 @@ export class FinanceService {
         status: plan.status,
         holdSource: plan.holdSource,
         approvalDueAt: plan.approvalDueAt.toISOString(),
+        before: null,
+        after: { status: plan.status, amount: Number(input.amount) },
       },
     });
+    ctx.notify('payout.created', {
+      requestCode: ctx.snap.number,
+      amount: Number(input.amount),
+      dueDate: plan.approvalDueAt.toLocaleDateString('en-NG', {
+        timeZone: 'Africa/Lagos',
+      }),
+      onHold: plan.status === 'on_hold',
+    });
+    const heldReason = safeHoldReason(plan.status, plan.holdSource);
+    if (provider && heldReason)
+      ctx.notify('payout.held', {
+        requestCode: ctx.snap.number,
+        assignmentId: input.assignmentId,
+        providerUserId: provider.userId,
+        reason: heldReason,
+      });
     return payout;
   }
 
@@ -267,7 +288,12 @@ export class FinanceService {
    * `pending_approval`. An amount above `payout.secondApprovalThreshold` waits
    * for a second approver.
    */
-  async approvePayout(userId: string, id: string, note?: string) {
+  async approvePayout(
+    userId: string,
+    id: string,
+    note?: string,
+    expectedVersion?: number,
+  ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payout.approve');
     const known = await this.known(id);
@@ -280,6 +306,7 @@ export class FinanceService {
       },
       async (ctx) => {
         const payout = await this.lock(ctx, id);
+        assertExpectedVersion(expectedVersion, payout.version);
         if (payout.status !== 'pending_approval')
           throw conflict(PAYOUT_MESSAGES.notAwaitingApproval);
         const facts = await this.bankFacts(ctx, payout.providerId);
@@ -310,6 +337,7 @@ export class FinanceService {
             status,
             bankAccountId: bank.id,
             bankLast4: bank.last4,
+            version: { increment: 1 },
           },
         });
         if (claimed.count !== 1)
@@ -324,7 +352,13 @@ export class FinanceService {
           },
         });
         ctx.approvals.close('payout', id, 'approved');
-        if (second) ctx.approvals.open('payout_second', id);
+        if (second) {
+          ctx.approvals.open('payout_second', id);
+          ctx.notify('payout.second_approval_needed', {
+            requestCode: ctx.snap.number,
+            amount: Number(payout.amount),
+          });
+        }
         ctx.audit('Payout approved', {
           resourceType: 'payout',
           resourceId: id,
@@ -350,6 +384,7 @@ export class FinanceService {
     id: string,
     approve: boolean,
     note: string,
+    expectedVersion?: number,
   ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payout.approve');
@@ -363,6 +398,7 @@ export class FinanceService {
       },
       async (ctx) => {
         const payout = await this.lock(ctx, id);
+        assertExpectedVersion(expectedVersion, payout.version);
         if (payout.status !== 'awaiting_second_approval')
           throw conflict(PAYOUT_MESSAGES.notAwaitingSecond);
         const { bank } = await this.bankFacts(ctx, payout.providerId);
@@ -378,7 +414,7 @@ export class FinanceService {
         if (!plan.ok) raise(plan);
         const claimed = await ctx.tx.payout.updateMany({
           where: { id, status: 'awaiting_second_approval' },
-          data: { status: plan.status },
+          data: { status: plan.status, version: { increment: 1 } },
         });
         if (claimed.count !== 1)
           throw conflict(PAYOUT_MESSAGES.notAwaitingSecond);
@@ -425,7 +461,13 @@ export class FinanceService {
    * Finance review instead. The person who acted is in the audit row; the
    * `holdSource` column says why (C-40).
    */
-  async payoutHold(userId: string, id: string, hold: boolean, reason: string) {
+  async payoutHold(
+    userId: string,
+    id: string,
+    hold: boolean,
+    reason: string,
+    expectedVersion?: number,
+  ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payout.approve');
     const known = await this.known(id);
@@ -439,6 +481,7 @@ export class FinanceService {
       },
       async (ctx) => {
         const payout = await this.lock(ctx, id);
+        assertExpectedVersion(expectedVersion, payout.version);
         return hold
           ? this.applyHold(ctx, payout, reason.trim())
           : this.applyRelease(ctx, payout, reason.trim());
@@ -461,6 +504,7 @@ export class FinanceService {
       | { method: 'paystack' }
       | { method: 'offline'; reference: string; proofFileId: string },
     idempotency: IdempotencyInput,
+    expectedVersion?: number,
   ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payout.approve');
@@ -469,8 +513,8 @@ export class FinanceService {
     if (replay) return replay.body;
     const result =
       dto.method === 'offline'
-        ? await this.transferOffline(actor, userId, id, dto)
-        : await this.transferPaystack(actor, id);
+        ? await this.transferOffline(actor, userId, id, dto, expectedVersion)
+        : await this.transferPaystack(actor, id, expectedVersion);
     return this.store(userId, idempotency, hash, result);
   }
 
@@ -540,7 +584,11 @@ export class FinanceService {
             status: payout.status,
             updatedAt: payout.updatedAt,
           },
-          data: { status: 'processing', transferReference: reference },
+          data: {
+            status: 'processing',
+            transferReference: reference,
+            version: { increment: 1 },
+          },
         });
         if (claimed.count !== 1) throw conflict(PAYOUT_MESSAGES.notRetryable);
         await ctx.tx.transferAttempt.updateMany({
@@ -589,7 +637,12 @@ export class FinanceService {
   }
 
   /** `payout.reconcile` (05 §6.5, Q14): a second person confirms an offline transfer, which then becomes `paid`. */
-  async reconcilePayout(userId: string, id: string, note: string) {
+  async reconcilePayout(
+    userId: string,
+    id: string,
+    note: string,
+    expectedVersion?: number,
+  ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'payout.approve');
     const known = await this.known(id);
@@ -602,6 +655,7 @@ export class FinanceService {
       },
       async (ctx) => {
         const payout = await this.lock(ctx, id);
+        assertExpectedVersion(expectedVersion, payout.version);
         if (payout.status !== 'processing' || !payout.transferRecordedBy)
           throw conflict('This offline payout is not awaiting reconciliation.');
         if (payout.transferRecordedBy === userId)
@@ -618,7 +672,12 @@ export class FinanceService {
             status: 'processing',
             transferRecordedBy: { not: userId },
           },
-          data: { status: 'paid', paidAt: ctx.now, reconciledBy: userId },
+          data: {
+            status: 'paid',
+            paidAt: ctx.now,
+            reconciledBy: userId,
+            version: { increment: 1 },
+          },
         });
         if (claimed.count !== 1)
           throw conflict('This offline payout is not awaiting reconciliation.');
@@ -697,6 +756,7 @@ export class FinanceService {
               where: { id: payout.id, status: { in: [...plan.payout.from] } },
               data: {
                 status: plan.payout.to,
+                version: { increment: 1 },
                 ...(outcome === 'success' ? { paidAt: ctx.now } : {}),
               },
             });
@@ -829,7 +889,11 @@ export class FinanceService {
     if (action === 'flag') {
       const flagged = await ctx.tx.payout.updateMany({
         where: { id: payout.id, status: 'processing' },
-        data: { holdReason: reason, holdSource: 'manual' },
+        data: {
+          holdReason: reason,
+          holdSource: 'manual',
+          version: { increment: 1 },
+        },
       });
       if (flagged.count !== 1) throw conflict(PAYOUT_MESSAGES.cannotHold);
       ctx.audit('Payout flagged for urgent review', {
@@ -849,7 +913,12 @@ export class FinanceService {
     }
     const claimed = await ctx.tx.payout.updateMany({
       where: { id: payout.id, status: payout.status },
-      data: { status: 'on_hold', holdReason: reason, holdSource: 'manual' },
+      data: {
+        status: 'on_hold',
+        holdReason: reason,
+        holdSource: 'manual',
+        version: { increment: 1 },
+      },
     });
     if (claimed.count !== 1) throw conflict(PAYOUT_MESSAGES.cannotHold);
     if (payout.status === 'awaiting_second_approval')
@@ -863,6 +932,7 @@ export class FinanceService {
       note: reason,
       changes: this.change(payout, 'on_hold', { holdSource: 'manual' }),
     });
+    await this.notifyHold(ctx, payout, 'held');
     return { bumpVersion: false };
   }
 
@@ -896,6 +966,7 @@ export class FinanceService {
         status: 'pending_approval',
         holdReason: null,
         holdSource: null,
+        version: { increment: 1 },
         ...(facts.bank
           ? { bankAccountId: facts.bank.id, bankLast4: facts.bank.last4 }
           : {}),
@@ -912,6 +983,7 @@ export class FinanceService {
         invalidatedApprovalIds: invalidated,
       }),
     });
+    await this.notifyHold(ctx, payout, 'released');
     return { bumpVersion: false };
   }
 
@@ -920,6 +992,7 @@ export class FinanceService {
     userId: string,
     id: string,
     dto: { reference: string; proofFileId: string },
+    expectedVersion?: number,
   ) {
     const known = await this.known(id);
     await this.runner.run(
@@ -931,6 +1004,7 @@ export class FinanceService {
       },
       async (ctx) => {
         const payout = await this.lock(ctx, id);
+        assertExpectedVersion(expectedVersion, payout.version);
         this.assertApprovedForTransfer(payout);
         await this.assertTransferable(ctx.tx, payout);
         const claimed = await ctx.tx.payout.updateMany({
@@ -940,6 +1014,7 @@ export class FinanceService {
             transferReference: dto.reference,
             transferProofId: dto.proofFileId,
             transferRecordedBy: userId,
+            version: { increment: 1 },
           },
         });
         if (claimed.count !== 1)
@@ -966,12 +1041,17 @@ export class FinanceService {
     return this.view(id, actor);
   }
 
-  private async transferPaystack(actor: ActorContext, id: string) {
+  private async transferPaystack(
+    actor: ActorContext,
+    id: string,
+    expectedVersion?: number,
+  ) {
     const payout = await this.prisma.payout.findUnique({
       where: { id },
       include: { approvals: true },
     });
     if (!payout) throw notFound();
+    assertExpectedVersion(expectedVersion, payout.version);
     this.assertApprovedForTransfer(payout);
     const recipientCode = await this.recipientFor(payout);
     const started = { reference: '', attemptId: '' };
@@ -984,12 +1064,17 @@ export class FinanceService {
       },
       async (ctx) => {
         const locked = await this.lock(ctx, id);
+        assertExpectedVersion(expectedVersion, locked.version);
         this.assertApprovedForTransfer(locked);
         await this.assertTransferable(ctx.tx, locked);
         const reference = newTransferReference();
         const claimed = await ctx.tx.payout.updateMany({
           where: { id, status: 'approved' },
-          data: { status: 'processing', transferReference: reference },
+          data: {
+            status: 'processing',
+            transferReference: reference,
+            version: { increment: 1 },
+          },
         });
         if (claimed.count !== 1)
           throw conflict(PAYOUT_MESSAGES.notApprovedForTransfer);
@@ -1090,7 +1175,7 @@ export class FinanceService {
           if (failed.count !== 1) return { bumpVersion: false };
           await ctx.tx.payout.updateMany({
             where: { id: payout.id, status: 'processing' },
-            data: { status: 'failed' },
+            data: { status: 'failed', version: { increment: 1 } },
           });
           ctx.approvals.open('payout', payout.id);
           ctx.audit('Payout transfer failed', {
@@ -1169,7 +1254,7 @@ export class FinanceService {
             if (failed.count !== 1) return { bumpVersion: false };
             await ctx.tx.payout.updateMany({
               where: { id: payout.id, status: 'processing' },
-              data: { status: 'failed' },
+              data: { status: 'failed', version: { increment: 1 } },
             });
             ctx.approvals.open('payout', payout.id);
             ctx.audit('Payout transfer refused by Paystack', {
@@ -1288,6 +1373,31 @@ export class FinanceService {
     ctx.notify('payout.finance_update', {
       requestCode: ctx.snap.number,
       amount,
+      outcome,
+    });
+  }
+
+  /** 05 §9: the provider hears of a hold (with a safe reason) and its release; Finance hears of both. */
+  private async notifyHold(
+    ctx: CommandContext,
+    payout: Payout,
+    outcome: 'held' | 'released',
+  ): Promise<void> {
+    const provider = await ctx.tx.providerProfile.findUnique({
+      where: { id: payout.providerId },
+      select: { userId: true },
+    });
+    const reason = safeHoldReason('on_hold', 'manual');
+    if (provider && (outcome === 'released' || reason))
+      ctx.notify(`payout.${outcome}`, {
+        requestCode: ctx.snap.number,
+        assignmentId: payout.assignmentId,
+        providerUserId: provider.userId,
+        ...(outcome === 'held' ? { reason } : {}),
+      });
+    ctx.notify('payout.finance_update', {
+      requestCode: ctx.snap.number,
+      amount: Number(payout.amount),
       outcome,
     });
   }

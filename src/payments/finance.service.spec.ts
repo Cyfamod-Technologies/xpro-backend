@@ -77,6 +77,7 @@ const payoutRow = (overrides: Record<string, unknown> = {}) => ({
   transferRecordedBy: null,
   reconciledBy: null,
   paidAt: null,
+  version: 1,
   createdAt: LONG_AGO,
   updatedAt: LONG_AGO,
   approvals: [] as unknown[],
@@ -465,7 +466,12 @@ describe('FinanceService.approvePayout (C-17)', () => {
 
     expect(h.tx.payout.updateMany).toHaveBeenCalledWith({
       where: { id: 'payout-1', status: 'pending_approval' },
-      data: { status: 'approved', bankAccountId: 'bank-1', bankLast4: '1234' },
+      data: {
+        status: 'approved',
+        bankAccountId: 'bank-1',
+        bankLast4: '1234',
+        version: { increment: 1 },
+      },
     });
     expect(h.tx.payoutApproval.create).toHaveBeenCalledWith({
       data: {
@@ -551,7 +557,7 @@ describe('FinanceService.secondApprovePayout (C-18)', () => {
 
     expect(h.tx.payout.updateMany).toHaveBeenCalledWith({
       where: { id: 'payout-1', status: 'awaiting_second_approval' },
-      data: { status: 'approved' },
+      data: { status: 'approved', version: { increment: 1 } },
     });
     expect(h.tx.payoutApproval.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -587,7 +593,7 @@ describe('FinanceService.secondApprovePayout (C-18)', () => {
 
     expect(h.tx.payout.updateMany).toHaveBeenCalledWith({
       where: { id: 'payout-1', status: 'awaiting_second_approval' },
-      data: { status: 'pending_approval' },
+      data: { status: 'pending_approval', version: { increment: 1 } },
     });
     expect(h.tx.payoutApproval.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -649,6 +655,7 @@ describe('FinanceService hold and release (C-40)', () => {
         status: 'on_hold',
         holdReason: 'Checking bank.',
         holdSource: 'manual',
+        version: { increment: 1 },
       },
     });
     const audit = h.effects.audit[0].data as { changes: { after: unknown } };
@@ -675,7 +682,11 @@ describe('FinanceService hold and release (C-40)', () => {
 
     expect(h.tx.payout.updateMany).toHaveBeenCalledWith({
       where: { id: 'payout-1', status: 'processing' },
-      data: { holdReason: 'Wrong account.', holdSource: 'manual' },
+      data: {
+        holdReason: 'Wrong account.',
+        holdSource: 'manual',
+        version: { increment: 1 },
+      },
     });
     expect(h.effects.notify[0]).toMatchObject({
       event: 'payout.needs_attention',
@@ -791,6 +802,7 @@ describe('FinanceService.transferPayout (C-05, C-23, C-43)', () => {
       data: {
         status: 'processing',
         transferReference: attempt.data.reference,
+        version: { increment: 1 },
       },
     });
     expect(h.gateway.transfer).toHaveBeenCalledWith(
@@ -887,7 +899,7 @@ describe('FinanceService.transferPayout (C-05, C-23, C-43)', () => {
     });
     expect(h.tx.payout.updateMany).toHaveBeenLastCalledWith({
       where: { id: 'payout-1', status: 'processing' },
-      data: { status: 'failed' },
+      data: { status: 'failed', version: { increment: 1 } },
     });
     expect(h.effects.notify.map((n) => n.event)).toEqual([
       'payout.failed',
@@ -916,7 +928,7 @@ describe('FinanceService.transferPayout (C-05, C-23, C-43)', () => {
     });
     expect(h.tx.payout.updateMany).toHaveBeenLastCalledWith({
       where: { id: 'payout-1', status: 'processing' },
-      data: { status: 'failed' },
+      data: { status: 'failed', version: { increment: 1 } },
     });
   });
 
@@ -990,6 +1002,7 @@ describe('FinanceService.transferPayout (C-05, C-23, C-43)', () => {
         transferReference: 'BANK-REF',
         transferProofId: 'file-1',
         transferRecordedBy: 'finance-1',
+        version: { increment: 1 },
       },
     });
     expect(h.uploads.attach).toHaveBeenCalled();
@@ -1192,7 +1205,7 @@ describe('FinanceService.settleTransferFromGateway (C-19)', () => {
 
     expect(h.tx.payout.updateMany).toHaveBeenCalledWith({
       where: { id: 'payout-1', status: { in: ['processing', 'failed'] } },
-      data: { status: 'paid', paidAt: NOW },
+      data: { status: 'paid', paidAt: NOW, version: { increment: 1 } },
     });
     expect(h.effects.notify.map((n) => n.event)).toEqual([
       'payout.paid',
@@ -1325,7 +1338,12 @@ describe('FinanceService.reconcilePayout', () => {
         status: 'processing',
         transferRecordedBy: { not: 'finance-2' },
       },
-      data: { status: 'paid', paidAt: NOW, reconciledBy: 'finance-2' },
+      data: {
+        status: 'paid',
+        paidAt: NOW,
+        reconciledBy: 'finance-2',
+        version: { increment: 1 },
+      },
     });
     expect(h.effects.notify.map((n) => n.event)).toContain('payout.paid');
   });
@@ -1449,5 +1467,397 @@ describe('FinanceService queues (C-41, C-42, E-27)', () => {
     expect(prisma.payout.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ skip: 25, take: 25 }),
     );
+  });
+});
+
+describe('payout audit rows, notices and versions (C-21, C-24, C-46)', () => {
+  type Row = {
+    resourceType: string;
+    resourceId: string;
+    note?: string;
+    changes: { before: unknown; after: unknown; [key: string]: unknown };
+  };
+  const auditRow = (h: ReturnType<typeof build>, action: string): Row => {
+    const found = h.effects.audit.find((entry) => entry.action === action);
+    if (!found) throw new Error(`No audit row "${action}"`);
+    return found.data as Row;
+  };
+  const events = (h: ReturnType<typeof build>) =>
+    h.effects.notify.map(({ event }) => event);
+  const approved = { status: 'approved', approvals: [approvalRow()] };
+  const awaiting = {
+    status: 'awaiting_second_approval',
+    approvals: [approvalRow()],
+  };
+  const paystack = { method: 'paystack' as const };
+
+  it.each([
+    [
+      'approve',
+      'Payout approved',
+      {},
+      'finance-1',
+      (h: ReturnType<typeof build>) =>
+        h.service.approvePayout('finance-1', 'payout-1', 'Fine.'),
+      'approved',
+    ],
+    [
+      'second approval',
+      'Payout second approval given',
+      awaiting,
+      'finance-2',
+      (h: ReturnType<typeof build>) =>
+        h.service.secondApprovePayout('finance-2', 'payout-1', true, 'OK.'),
+      'approved',
+    ],
+    [
+      'hold',
+      'Payout held',
+      { status: 'approved' },
+      'finance-1',
+      (h: ReturnType<typeof build>) =>
+        h.service.payoutHold('finance-1', 'payout-1', true, 'Checking bank.'),
+      'on_hold',
+    ],
+    [
+      'release',
+      'Payout released',
+      { status: 'on_hold', holdSource: 'manual', holdReason: 'x' },
+      'finance-1',
+      (h: ReturnType<typeof build>) =>
+        h.service.payoutHold('finance-1', 'payout-1', false, 'Resolved.'),
+      'pending_approval',
+    ],
+    [
+      'Paystack transfer',
+      'Payout transfer started',
+      approved,
+      'finance-1',
+      (h: ReturnType<typeof build>) =>
+        h.service.transferPayout('finance-1', 'payout-1', paystack, idem),
+      'processing',
+    ],
+    [
+      'offline transfer',
+      'Payout offline transfer recorded',
+      approved,
+      'finance-1',
+      (h: ReturnType<typeof build>) =>
+        h.service.transferPayout(
+          'finance-1',
+          'payout-1',
+          { method: 'offline', reference: 'BANK-REF', proofFileId: 'file-1' },
+          idem,
+        ),
+      'processing',
+    ],
+    [
+      'reconcile',
+      'Payout reconciled',
+      { status: 'processing', transferRecordedBy: 'finance-1' },
+      'finance-2',
+      (h: ReturnType<typeof build>) =>
+        h.service.reconcilePayout('finance-2', 'payout-1', 'Seen.'),
+      'paid',
+    ],
+  ])(
+    '%s writes one audit row with the actor, resource, before and after',
+    async (_name, action, payout, userId, run, after) => {
+      const h = build({ payout });
+      asStaff(h, userId);
+
+      await run(h);
+
+      const row = auditRow(h, action);
+      expect(row).toMatchObject({
+        resourceType: 'payout',
+        resourceId: 'payout-1',
+        changes: {
+          before: { amount: 9_000_000 },
+          after: { status: after, amount: 9_000_000 },
+        },
+      });
+      expect(h.runs[0]).toBeDefined();
+      expect(JSON.stringify(row)).not.toMatch(/account|plain:|enc:/i);
+    },
+  );
+
+  it('settling a transfer from Paystack audits the system action with the reference', async () => {
+    const h = build({ payout: { status: 'processing' } });
+
+    await h.service.settleTransferFromGateway(
+      'xpro_tr_' + 'a'.repeat(32),
+      'success',
+      { actor: null },
+    );
+
+    expect(auditRow(h, 'Payout paid').changes).toMatchObject({
+      reference: 'xpro_tr_' + 'a'.repeat(32),
+      before: { status: 'processing' },
+      after: { status: 'paid' },
+    });
+  });
+
+  describe('retry', () => {
+    beforeEach(() => {
+      jest.useFakeTimers({
+        now: NOW,
+        doNotFake: [
+          'nextTick',
+          'setImmediate',
+          'clearImmediate',
+          'setInterval',
+          'clearInterval',
+          'setTimeout',
+          'clearTimeout',
+          'queueMicrotask',
+          'performance',
+          'hrtime',
+        ],
+      });
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('audits the new attempt with the previous reference', async () => {
+      const h = build({
+        payout: { status: 'processing', approvals: [approvalRow()] },
+      });
+      asStaff(h, 'finance-1');
+
+      await h.service.retryTransfer('finance-1', 'payout-1', {
+        key: 'idem-key-12345',
+        url: '/admin/payouts/payout-1/retry',
+      });
+
+      expect(auditRow(h, 'Payout transfer retried').changes).toMatchObject({
+        previousReference: 'xpro_tr_' + 'a'.repeat(32),
+        before: { status: 'processing' },
+        after: { status: 'processing' },
+      });
+    });
+  });
+
+  it('creation audits from nothing and tells Finance the payout is ready, with a due date', async () => {
+    const h = build({
+      settings: {
+        'calendar.holidays': [],
+        'approvals.deadlines': { payout: 1200 },
+      },
+    });
+
+    await h.service.createPrimary(h.ctx, {
+      requestId: 'request-1',
+      assignmentId: 'assignment-1',
+      providerId: 'provider-1',
+      amount: 9_000_000n,
+      payoutAssignmentId: 'assignment-1',
+    });
+
+    expect(auditRow(h, 'Payout created')).toMatchObject({
+      resourceId: 'payout-new',
+      changes: {
+        before: null,
+        after: { status: 'pending_approval', amount: 9_000_000 },
+      },
+    });
+    expect(h.effects.notify).toEqual([
+      {
+        event: 'payout.created',
+        params: {
+          requestCode: 'XPR-00042',
+          amount: 9_000_000,
+          dueDate: '28/10/2026',
+          onHold: false,
+        },
+      },
+    ]);
+  });
+
+  it('creation on hold tells the provider with a safe reason only', async () => {
+    const h = build({
+      settings: {
+        'calendar.holidays': [],
+        'approvals.deadlines': { payout: 1200 },
+      },
+      issues: ['open'],
+    });
+
+    await h.service.createPrimary(h.ctx, {
+      requestId: 'request-1',
+      assignmentId: 'assignment-1',
+      providerId: 'provider-1',
+      amount: 9_000_000n,
+      payoutAssignmentId: 'assignment-1',
+    });
+
+    expect(events(h)).toEqual(['payout.created', 'payout.held']);
+    expect(h.effects.notify[1].params).toEqual({
+      requestCode: 'XPR-00042',
+      assignmentId: 'assignment-1',
+      providerUserId: 'provider-user-1',
+      reason: 'On hold while a reported issue is reviewed.',
+    });
+  });
+
+  it('a first approval above the threshold asks eligible second approvers', async () => {
+    const h = build({
+      settings: { 'payout.secondApprovalThreshold': 8_999_999 },
+    });
+    asStaff(h, 'finance-1');
+
+    await h.service.approvePayout('finance-1', 'payout-1');
+
+    expect(h.effects.notify).toEqual([
+      {
+        event: 'payout.second_approval_needed',
+        params: { requestCode: 'XPR-00042', amount: 9_000_000 },
+      },
+    ]);
+  });
+
+  it('a hold tells the provider why in safe words, and Finance', async () => {
+    const h = build({ payout: { status: 'approved' } });
+    asStaff(h, 'finance-1');
+
+    await h.service.payoutHold('finance-1', 'payout-1', true, 'Private note.');
+
+    expect(h.effects.notify).toEqual([
+      {
+        event: 'payout.held',
+        params: {
+          requestCode: 'XPR-00042',
+          assignmentId: 'assignment-1',
+          providerUserId: 'provider-user-1',
+          reason: 'On hold while XPro Finance reviews this payout.',
+        },
+      },
+      {
+        event: 'payout.finance_update',
+        params: {
+          requestCode: 'XPR-00042',
+          amount: 9_000_000,
+          outcome: 'held',
+        },
+      },
+    ]);
+    expect(JSON.stringify(h.effects.notify)).not.toContain('Private note.');
+  });
+
+  it('a release tells the provider and Finance', async () => {
+    const h = build({
+      payout: { status: 'on_hold', holdSource: 'manual', holdReason: 'x' },
+    });
+    asStaff(h, 'finance-1');
+
+    await h.service.payoutHold('finance-1', 'payout-1', false, 'Resolved.');
+
+    expect(events(h)).toEqual(['payout.released', 'payout.finance_update']);
+    expect(h.effects.notify[1].params).toMatchObject({ outcome: 'released' });
+  });
+
+  describe('If-Match', () => {
+    const stale = { version: 5 };
+    const conflict = {
+      status: 409,
+      code: 'VERSION_CONFLICT',
+      message: 'This record has changed. Refresh and retry.',
+    };
+
+    it.each([
+      [
+        'approve',
+        {},
+        'finance-1',
+        (h: ReturnType<typeof build>) =>
+          h.service.approvePayout('finance-1', 'payout-1', undefined, 4),
+      ],
+      [
+        'second approval',
+        awaiting,
+        'finance-2',
+        (h: ReturnType<typeof build>) =>
+          h.service.secondApprovePayout(
+            'finance-2',
+            'payout-1',
+            true,
+            'OK.',
+            4,
+          ),
+      ],
+      [
+        'hold',
+        { status: 'approved' },
+        'finance-1',
+        (h: ReturnType<typeof build>) =>
+          h.service.payoutHold('finance-1', 'payout-1', true, 'Why.', 4),
+      ],
+      [
+        'release',
+        { status: 'on_hold', holdSource: 'manual' },
+        'finance-1',
+        (h: ReturnType<typeof build>) =>
+          h.service.payoutHold('finance-1', 'payout-1', false, 'Done.', 4),
+      ],
+      [
+        'Paystack transfer',
+        approved,
+        'finance-1',
+        (h: ReturnType<typeof build>) =>
+          h.service.transferPayout('finance-1', 'payout-1', paystack, idem, 4),
+      ],
+      [
+        'offline transfer',
+        approved,
+        'finance-1',
+        (h: ReturnType<typeof build>) =>
+          h.service.transferPayout(
+            'finance-1',
+            'payout-1',
+            { method: 'offline', reference: 'R', proofFileId: 'f' },
+            idem,
+            4,
+          ),
+      ],
+      [
+        'reconcile',
+        { status: 'processing', transferRecordedBy: 'finance-1' },
+        'finance-2',
+        (h: ReturnType<typeof build>) =>
+          h.service.reconcilePayout('finance-2', 'payout-1', 'Seen.', 4),
+      ],
+    ])(
+      '%s refuses a stale version and changes nothing',
+      async (_n, payout, userId, run) => {
+        const h = build({ payout: { ...payout, ...stale } });
+        asStaff(h, userId);
+
+        await expect(run(h)).rejects.toMatchObject(conflict);
+
+        expect(h.tx.payout.updateMany).not.toHaveBeenCalled();
+        expect(h.effects.audit).toEqual([]);
+        expect(h.gateway.transfer).not.toHaveBeenCalled();
+      },
+    );
+
+    it('goes ahead when the version matches or no If-Match is sent, and every claim bumps it', async () => {
+      for (const expected of [5, undefined]) {
+        const h = build({ payout: { status: 'approved', version: 5 } });
+        asStaff(h, 'finance-1');
+
+        await h.service.payoutHold(
+          'finance-1',
+          'payout-1',
+          true,
+          'Checking.',
+          expected,
+        );
+
+        expect(h.tx.payout.updateMany.mock.calls[0][0]).toMatchObject({
+          data: { version: { increment: 1 } },
+        });
+      }
+    });
   });
 });

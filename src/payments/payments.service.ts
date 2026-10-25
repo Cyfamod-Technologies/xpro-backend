@@ -149,9 +149,11 @@ export class PaymentsService {
         resourceId: refund.id,
         changes: {
           paymentId: id,
+          reference: payment.reference,
           cancellationId: input.cancellationId,
-          amount: Number(balance),
           workStarted: input.workStarted,
+          before: null,
+          after: { status: 'pending_approval', amount: Number(balance) },
         },
       });
       ctx.approvals.open('refund', refund.id);
@@ -301,8 +303,9 @@ export class PaymentsService {
           resourceId: payment.id,
           changes: {
             reference,
-            amount: Number(quote.total),
             quoteVersion: quote.version,
+            before: null,
+            after: { status: 'pending', amount: Number(quote.total) },
           },
         });
         await ctx.tx.idempotencyKey.deleteMany({
@@ -456,9 +459,10 @@ export class PaymentsService {
             changes: {
               reference: dto.reference,
               channel: dto.channel,
-              amount: dto.amount,
               proofFileId: dto.proofFileId,
               recordedBy: userId,
+              before: null,
+              after: { status: 'recorded', amount: dto.amount },
             },
           });
           ctx.approvals.open('offline_payment', paymentId);
@@ -605,6 +609,9 @@ export class PaymentsService {
         if (claimed.count !== 1)
           throw conflict('This payment is no longer awaiting reconciliation.');
         ctx.approvals.close('offline_payment', payment.id, 'rejected');
+        ctx.notify('payment.failed_customer', {
+          requestCode: ctx.snap.number,
+        });
         ctx.audit('Offline payment rejected', {
           resourceType: 'payment',
           resourceId: payment.id,
@@ -660,6 +667,7 @@ export class PaymentsService {
         payment.id,
         'Checkout was not completed.',
         'Payment attempt closed (no charge)',
+        true,
       );
       return 'failed';
     }
@@ -713,10 +721,15 @@ export class PaymentsService {
             action: 'Payment settled',
             metadata: {
               requestId: payment.requestId,
-              reference: verified.reference,
-              source: options.source,
-              before: { status: payment.status },
-              after: { status: 'paid' },
+              command: 'payment.settle',
+              resourceType: 'payment',
+              resourceId: payment.id,
+              changes: {
+                reference: verified.reference,
+                source: options.source,
+                before: { status: payment.status },
+                after: { status: 'paid' },
+              },
             },
           },
         });
@@ -786,8 +799,15 @@ export class PaymentsService {
           action,
           metadata: {
             requestId: input.payment?.requestId ?? null,
-            reference: input.reference,
-            reason: input.reason,
+            command: 'payment.quarantine',
+            resourceType: input.payment ? 'payment' : 'gateway_event',
+            resourceId: entityId,
+            note: input.reason,
+            changes: {
+              reference: input.reference,
+              before: { quarantined: false },
+              after: { quarantined: true },
+            },
           },
         },
       });
@@ -839,6 +859,7 @@ export class PaymentsService {
     paymentId: string,
     failureReason: string,
     action: string,
+    notifyCustomer = false,
   ) {
     await this.runner.runSystem(
       'payment.attemptFailed',
@@ -850,6 +871,10 @@ export class PaymentsService {
         });
         if (claimed.count !== 1) return { changed: false };
         ctx.timers.stop('payment.pendingCheck', paymentId);
+        if (notifyCustomer)
+          ctx.notify('payment.failed_customer', {
+            requestCode: ctx.snap.number,
+          });
         ctx.audit(action, {
           resourceType: 'payment',
           resourceId: paymentId,
