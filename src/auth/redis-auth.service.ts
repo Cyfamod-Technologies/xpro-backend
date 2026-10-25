@@ -174,10 +174,6 @@ export class RedisAuthService {
     return `pwd_reset:${tokenHash}`;
   }
 
-  private emailVerificationUserKey(userId: string) {
-    return `email_verify_user:${userId}`;
-  }
-
   async storePasswordResetToken(userId: string, tokenHash: string) {
     await this.redis.setex(this.resetTokenKey(tokenHash), 60 * 60, userId);
   }
@@ -187,30 +183,6 @@ export class RedisAuthService {
     const userId = await this.redis.get(key);
     if (userId) await this.redis.del(key);
     return userId;
-  }
-
-  async storeEmailVerificationCode(userId: string, codeHash: string) {
-    await this.redis.setex(
-      this.emailVerificationUserKey(userId),
-      60 * 60 * 24,
-      codeHash,
-    );
-  }
-
-  async consumeEmailVerificationCode(
-    userId: string,
-    codeHash: string,
-  ): Promise<boolean> {
-    const result = await this.redis.eval(
-      `if redis.call('GET', KEYS[1]) == ARGV[1] then
-        return redis.call('DEL', KEYS[1])
-      end
-      return 0`,
-      1,
-      this.emailVerificationUserKey(userId),
-      codeHash,
-    );
-    return result === 1;
   }
 
   private mfaPendingKey(userId: string) {

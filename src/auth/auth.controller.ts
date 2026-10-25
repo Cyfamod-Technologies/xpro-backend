@@ -29,9 +29,7 @@ import {
   ResendVerificationDto,
   RegisterDto,
   ResetPasswordDto,
-  SignupDto,
   UpdateMeDto,
-  VerifyEmailDto,
   VerifyEmailTokenDto,
 } from './dto/auth.dto';
 
@@ -39,15 +37,6 @@ import {
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
-
-  @Post('signup')
-  @ApiOperation({ summary: 'Register a new user account' })
-  @ApiResponse({ status: 201, description: 'Account created.' })
-  @ApiResponse({ status: 400, description: 'Invalid signup payload.' })
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  async signup(@Body() dto: SignupDto) {
-    return this.authService.signup(dto);
-  }
 
   @Post('register')
   @ApiOperation({ summary: 'Register a customer or provider account' })
@@ -83,28 +72,6 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   resendEmailVerification(@Body() dto: ResendVerificationDto) {
     return this.authService.resendEmailVerification(dto);
-  }
-
-  @Post('verify-email')
-  @ApiOperation({ summary: 'Verify an account email with a six-digit code' })
-  @ApiResponse({ status: 201, description: 'Email verified.' })
-  @ApiResponse({ status: 400, description: 'Invalid verification code.' })
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
-  async verifyEmail(
-    @Body() dto: VerifyEmailDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const result = await this.authService.verifyEmail(dto);
-    this.setSessionCookie(res, result.accessToken);
-    return result;
-  }
-
-  @Post('resend-verification')
-  @ApiOperation({ summary: 'Request a new email verification code' })
-  @ApiResponse({ status: 201, description: 'Verification request accepted.' })
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  resendVerification(@Body() dto: ResendVerificationDto) {
-    return this.authService.resendVerification(dto);
   }
 
   @Post('login')
