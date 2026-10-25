@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { UploadPurpose, UploadStatus } from '@prisma/client';
 import { RequestUser } from '../common/types/request-user';
+import { REQUEST_ENTITY } from './entity-types';
 import { FileAccessService } from './file-access.service';
 
 describe('FileAccessService', () => {
@@ -19,7 +20,7 @@ describe('FileAccessService', () => {
     contentType: 'application/pdf',
     size: 100,
     storageKey: 'request_attachment/2026/10/upload-1',
-    entityType: 'request',
+    entityType: REQUEST_ENTITY,
     entityId: 'request-1',
     expiresAt: new Date(),
     completedAt: new Date(),
@@ -54,7 +55,7 @@ describe('FileAccessService', () => {
   it('returns a short lived URL only after the entity resolver allows access', async () => {
     const { service, storage } = createService();
     const resolver = jest.fn().mockResolvedValue(true);
-    service.register('request', resolver);
+    service.register(REQUEST_ENTITY, resolver);
     await expect(service.getFileUrl(actor, upload.id)).resolves.toEqual({
       url: 'https://signed.test/file',
       expiresInSeconds: 300,
@@ -69,7 +70,7 @@ describe('FileAccessService', () => {
 
   it('hides files when the entity resolver denies access', async () => {
     const { service, storage } = createService();
-    service.register('request', jest.fn().mockResolvedValue(false));
+    service.register(REQUEST_ENTITY, jest.fn().mockResolvedValue(false));
     await expect(service.getFileUrl(actor, upload.id)).rejects.toBeInstanceOf(
       NotFoundException,
     );
