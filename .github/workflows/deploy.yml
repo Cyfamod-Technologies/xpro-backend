@@ -894,6 +894,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Notify Discord (success)
+        # A notification problem must never fail, or re-label, a deploy.
+        continue-on-error: true
         if: success() && github.event_name != 'pull_request'
         shell: bash
         env:
@@ -913,12 +915,21 @@ jobs:
           )
           data = json.dumps({"content": content}).encode()
           req = urllib.request.Request(
-              sys.argv[1], data=data, headers={"Content-Type": "application/json"}
+              sys.argv[1],
+              data=data,
+              headers={
+                  "Content-Type": "application/json",
+                  # Discord's Cloudflare front rejects urllib's default
+                  # User-Agent with 403 (error 1010).
+                  "User-Agent": "xpro-backend-deploy (+https://github.com/Cyfamod-Technologies/xpro-backend)",
+              },
           )
           urllib.request.urlopen(req, timeout=15)
           PY
 
       - name: Notify Discord (failure)
+        # A notification problem must never fail, or re-label, a deploy.
+        continue-on-error: true
         if: failure() && github.event_name != 'pull_request'
         shell: bash
         env:
@@ -949,7 +960,14 @@ jobs:
           )
           data = json.dumps({"content": content}).encode()
           req = urllib.request.Request(
-              sys.argv[1], data=data, headers={"Content-Type": "application/json"}
+              sys.argv[1],
+              data=data,
+              headers={
+                  "Content-Type": "application/json",
+                  # Discord's Cloudflare front rejects urllib's default
+                  # User-Agent with 403 (error 1010).
+                  "User-Agent": "xpro-backend-deploy (+https://github.com/Cyfamod-Technologies/xpro-backend)",
+              },
           )
           urllib.request.urlopen(req, timeout=15)
           PY
