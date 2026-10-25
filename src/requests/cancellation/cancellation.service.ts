@@ -13,8 +13,6 @@ import { RequestCommandRunner } from '../command-runner';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
-const invalid = (message: string) =>
-  new AppError(422, 'VALIDATION_ERROR', message);
 
 @Injectable()
 export class CancellationService {
@@ -28,7 +26,7 @@ export class CancellationService {
     user: RequestUser,
     requestId: string,
     dto: { reasonCode: string; note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -40,6 +38,7 @@ export class CancellationService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -48,20 +47,6 @@ export class CancellationService {
           : {}),
       },
       async (ctx) => {
-        if (user.id !== ctx.snap.ownerId)
-          throw new AppError(
-            404,
-            'NOT_FOUND',
-            'This request is no longer available to your account.',
-          );
-        if (
-          ['closed', 'cancelled', 'rejected', 'cancelling'].includes(
-            ctx.snap.status,
-          )
-        )
-          throw conflict('This request can no longer be cancelled.');
-        if (ctx.snap.pendingCancellation)
-          throw conflict('Your cancellation request is already awaiting XPro.');
         const workStarted =
           ctx.snap.status === 'in_progress' || ctx.snap.status === 'blocked';
         const row = await ctx.tx.cancellation.create({
@@ -96,7 +81,7 @@ export class CancellationService {
     requestId: string,
     cancellationId: string,
     dto: { note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -108,6 +93,7 @@ export class CancellationService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -151,7 +137,7 @@ export class CancellationService {
     userId: string,
     requestId: string,
     dto: { approve: boolean; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -163,6 +149,7 @@ export class CancellationService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -175,26 +162,11 @@ export class CancellationService {
           where: { requestId: ctx.snap.id, status: 'pending' },
           orderBy: { createdAt: 'desc' },
         });
+        // The runner guard checked the pending cancellation, the active-cancel permission, the reject note and the payment window; this narrows the row.
         if (!row)
           throw conflict(
             'This cancellation request is no longer awaiting a decision.',
           );
-        if (row.paid || row.workStarted)
-          requirePermission(actor, 'request.cancel.active');
-        if (!dto.approve && !dto.note?.trim())
-          throw invalid(
-            'Add a reason for rejecting this cancellation request.',
-          );
-        const pendingPayment = await ctx.tx.payment.findFirst({
-          where: {
-            requestId: ctx.snap.id,
-            status: 'pending',
-            createdAt: { gte: new Date(ctx.now.getTime() - 30 * 60_000) },
-          },
-          select: { id: true },
-        });
-        if (dto.approve && pendingPayment)
-          throw conflict('A payment is still processing. Try again shortly.');
         if (!dto.approve) {
           await ctx.tx.cancellation.update({
             where: { id: row.id },
