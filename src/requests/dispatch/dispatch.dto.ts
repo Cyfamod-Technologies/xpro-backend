@@ -1,3 +1,4 @@
+import { Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
@@ -8,6 +9,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 export class DispatchModeDto {
@@ -21,7 +23,6 @@ export class AutoAssignDto {
 export class OfferDto {
   @IsString() providerId!: string;
   @IsString() rankingRunId!: string;
-  @IsOptional() @IsArray() @IsString({ each: true }) overrideRules?: string[];
   @IsOptional() @IsString() @MaxLength(500) note?: string;
   @IsOptional() @IsString() @MinLength(5) @MaxLength(500) overrideNote?: string;
 }
@@ -30,10 +31,14 @@ export class AssignmentRespondDto {
   @IsOptional() @IsString() @MinLength(3) @MaxLength(500) note?: string;
   @IsOptional() @IsInt() @Min(1) @Max(100) crewSize?: number;
 }
+export class ShareDto {
+  @IsBoolean() description!: boolean;
+  @IsArray() @IsString({ each: true }) attachmentIds!: string[];
+}
 export class AssignmentReviewDto {
   @IsBoolean() approve!: boolean;
   @IsOptional() @IsString() @MaxLength(500) note?: string;
-  @IsOptional() share?: { description: string; attachmentIds: string[] };
+  @IsOptional() @ValidateNested() @Type(() => ShareDto) share?: ShareDto;
   @IsOptional() @IsString() @MinLength(5) @MaxLength(500) overrideNote?: string;
 }
 export class AssignmentNoteDto {

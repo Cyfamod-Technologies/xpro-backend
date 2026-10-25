@@ -10,20 +10,26 @@ import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import { SETTINGS_REGISTRY } from '../../platform/settings/settings.registry';
 import { addWorkingMinutes } from '../../platform/calendar/business-calendar';
-import {
-  serviceLines,
-  intakeFields,
-} from '../../platform/catalog/service-lines';
+import type { TimerKind } from '../../platform/timers/timer-kinds';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RequestCommandRunner, type CommandContext } from '../command-runner';
+import {
+  assessManualOffer,
+  assessReviewRecheck,
+  noLongerAvailableMessage,
+  OFFER_NOT_APPROVED_MESSAGE,
+  OFFER_STALE_MESSAGE,
+} from '../domain/assignment-rules';
+import { buildDispatchRequest } from '../domain/dispatch-request';
 import { offerExpiry } from '../domain/offer-expiry';
 import {
+  evaluateAll,
   evaluateEligibility,
-  OVERRIDABLE_RULES,
   type DispatchProvider,
-  type DispatchRequest,
 } from '../domain/eligibility';
+import { providerBlocked } from '../domain/provider-standing';
 import { rankProviders, type DispatchWeights } from '../domain/ranking';
+import { runAutoDispatch } from './dispatch-engine';
 import { ProviderDispatchLoader } from './provider-dispatch.loader';
 
 const conflict = (message: string) =>
@@ -38,6 +44,28 @@ const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+const stringList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+const settingHours = (
+  ctx: CommandContext,
+  key: 'pricing.stallReminderHours' | 'pricing.stallEscalateHours',
+) => Number(ctx.settings[key] ?? SETTINGS_REGISTRY[key].defaultValue);
+
+const REVIEW_WORKING_MINUTES = 4 * 60;
+const SCHEDULE_TIMERS: TimerKind[] = [
+  'T11.reminder24h',
+  'T11.staff48h',
+  'T12.reminder24h',
+  'T12.reminder2h',
+  'T13.noShowCheck',
+];
+const QUOTE_TIMERS: TimerKind[] = [
+  'T8.reminder3d',
+  'T8.reminder1d',
+  'T8.expire',
+];
 
 @Injectable()
 export class DispatchService {
@@ -51,6 +79,8 @@ export class DispatchService {
   async rankingRun(userId: string, ref: string) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'dispatch.manage');
+    // One instant for the providers, the ranking and the stored run (04 §6.6 determinism).
+    const at = new Date();
     const row = await this.findRequest(ref);
     const settings = Object.fromEntries(
       (await this.prisma.setting.findMany()).map(({ key, value }) => [
@@ -58,16 +88,17 @@ export class DispatchService {
         value,
       ]),
     );
-    const request = this.toDispatchRequest(row);
-    const providers = await this.providers.list(new Date(), row.id);
+    const locations = await this.prisma.location.findMany({
+      where: { id: { in: [row.districtId, row.cityId] } },
+      select: { id: true, name: true },
+    });
+    const request = buildDispatchRequest(row, {
+      districtName: locations.find(({ id }) => id === row.districtId)?.name,
+      cityName: locations.find(({ id }) => id === row.cityId)?.name,
+    });
+    const providers = await this.providers.list(at, row.id);
     const weights = (settings['assignment.weights'] ??
       SETTINGS_REGISTRY['assignment.weights'].defaultValue) as DispatchWeights;
-    const eligible = [] as Array<{
-      providerId: string;
-      providerName: string;
-      total: number;
-      factors: Record<string, number>;
-    }>;
     const excluded = [] as Array<{
       providerId: string;
       providerName: string;
@@ -89,20 +120,14 @@ export class DispatchService {
           reason: result.reason,
         });
     }
-    const ranked = rankProviders(
-      eligibleProviders,
-      request,
-      weights,
-      new Date(),
-    );
-    for (const item of ranked)
-      eligible.push({
+    const eligible = rankProviders(eligibleProviders, request, weights, at).map(
+      (item) => ({
         providerId: item.provider.id,
         providerName: item.provider.name,
         total: item.total,
         factors: item.factors,
-      });
-    const at = new Date();
+      }),
+    );
     const run = await this.prisma.dispatchRun.create({
       data: {
         requestId: row.id,
@@ -114,10 +139,6 @@ export class DispatchService {
         excluded: excluded,
       },
     });
-    await this.prisma.serviceRequest.update({
-      where: { id: row.id },
-      data: { lastRunId: run.id },
-    });
     return { runId: run.id, at, eligible, excluded };
   }
 
@@ -125,7 +146,7 @@ export class DispatchService {
     userId: string,
     ref: string,
     dto: { resetAttempts?: boolean; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -139,146 +160,17 @@ export class DispatchService {
       dto,
       key,
       async (ctx) => {
-        if (!['under_review', 'matched'].includes(ctx.snap.status))
-          throw conflict('This request does not need an assignment.');
         const request = await ctx.tx.serviceRequest.findUnique({
           where: { id: ctx.snap.id },
         });
         if (!request) throw requestNotFound();
-        const maxAttempts = Number(
-          ctx.settings['assignment.maxAutoAttempts'] ?? 3,
-        );
-        if (request.autoAttempts >= maxAttempts && !dto.resetAttempts)
-          throw conflict(
-            `Automatic assignment has used its ${maxAttempts} offers. Reset the count with a note, or choose a provider.`,
-          );
-        if (dto.resetAttempts && !dto.note?.trim())
-          throw new AppError(
-            422,
-            'VALIDATION_ERROR',
-            'Add a note explaining why you are resetting automatic assignment.',
-          );
-        const previousCount = dto.resetAttempts ? 0 : request.autoAttempts;
-        const candidates = await this.providers.list(ctx.now, ctx.snap.id);
-        const dispatchRequest = this.toDispatchRequest(request);
-        const eligible = candidates.filter(
-          (candidate) =>
-            evaluateEligibility(candidate, dispatchRequest, {
-              requireVerifiedBank:
-                ctx.settings['assignment.requireVerifiedBank'] !== false,
-            }).eligible,
-        );
-        const ranked = rankProviders(
-          eligible,
-          dispatchRequest,
-          (ctx.settings['assignment.weights'] ??
-            SETTINGS_REGISTRY['assignment.weights']
-              .defaultValue) as DispatchWeights,
-          ctx.now,
-        );
-        const run = await ctx.tx.dispatchRun.create({
-          data: {
-            requestId: ctx.snap.id,
-            trigger: 'staff_auto',
-            actorId: userId,
-            at: ctx.now,
-            settings: ctx.settings as Prisma.InputJsonValue,
-            eligible: ranked.map(({ provider, total, factors }) => ({
-              providerId: provider.id,
-              providerName: provider.name,
-              total,
-              factors,
-            })),
-            excluded: [] as Prisma.InputJsonArray,
-          },
-        });
-        if (!ranked.length || previousCount >= maxAttempts) {
-          const reason =
-            previousCount >= maxAttempts ? 'limit_reached' : 'no_eligible';
-          await ctx.tx.serviceRequest.update({
-            where: { id: ctx.snap.id },
-            data: {
-              needsAssignmentReason: reason,
-              lastRunId: run.id,
-              autoAttempts: previousCount,
-            },
-          });
-          ctx.audit('Automatic assignment needs staff', {
-            note: dto.note,
-            changes: { reason, runId: run.id },
-          });
-          ctx.notify('request.needs_manual_assignment', {
-            requestCode: ctx.snap.number,
-          });
-          return;
-        }
-        const choice = ranked[0];
-        const profile = await ctx.tx.$queryRaw<Array<{ id: string }>>(
-          Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${choice.provider.id} FOR UPDATE`,
-        );
-        if (!profile.length)
-          throw conflict(
-            'The provider is no longer available. Refresh the ranked list.',
-          );
-        const expiry = offerExpiry(
-          ctx.now,
-          Number(ctx.settings['assignment.offerExpiryHours'] ?? 24),
-          Number(ctx.settings['assignment.offerMinWorkingHours'] ?? 4),
-          choice.provider.workingHours,
-          choice.provider.timeOff,
-        );
-        const assignment = await ctx.tx.assignment.create({
-          data: {
-            requestId: ctx.snap.id,
-            providerId: choice.provider.id,
-            providerUserId: choice.provider.userId,
-            status: 'offered',
-            source: 'auto',
-            attempt: previousCount + 1,
-            rankingRunId: run.id,
-            score: { total: choice.total, factors: choice.factors },
-            note: dto.note?.trim() || null,
-            offeredAt: ctx.now,
-            expiresAt: expiry,
-          },
-        });
-        await ctx.tx.providerProfile.update({
-          where: { id: choice.provider.id },
-          data: { lastOfferedAt: ctx.now },
-        });
-        await ctx.tx.serviceRequest.update({
-          where: { id: ctx.snap.id },
-          data: {
-            autoAttempts: previousCount + 1,
-            needsAssignmentReason: null,
-            lastRunId: run.id,
-          },
-        });
-        ctx.timers.start(
-          'T1.reminder',
-          new Date(
-            ctx.now.getTime() + (expiry.getTime() - ctx.now.getTime()) * 0.75,
-          ),
-          assignment.id,
-        );
-        ctx.timers.start('T1.expire', expiry, assignment.id);
-        ctx.audit('Assignment offered', {
-          resourceType: 'assignment',
-          resourceId: assignment.id,
+        // The runner guard (04 §6.6) already refused a run at the limit without `resetAttempts`.
+        await runAutoDispatch(this.providers, ctx, {
+          trigger: 'staff_auto',
+          actorId: userId,
+          request,
+          attemptsBefore: dto.resetAttempts ? 0 : request.autoAttempts,
           note: dto.note,
-          changes: {
-            providerId: choice.provider.id,
-            source: 'auto',
-            score: choice.total,
-          },
-        });
-        ctx.notify('assignment.offered', {
-          assignmentId: assignment.id,
-          providerUserId: choice.provider.userId,
-          requestCode: ctx.snap.number,
-          service: request.service,
-          district: ctx.snap.districtName ?? '',
-          skill: dispatchRequest.skill ?? request.service,
         });
       },
     );
@@ -291,10 +183,10 @@ export class DispatchService {
     dto: {
       approve: boolean;
       note?: string;
-      share?: { description: string; attachmentIds: string[] };
+      share?: { description: boolean; attachmentIds: string[] };
       overrideNote?: string;
     },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -308,6 +200,7 @@ export class DispatchService {
       dto,
       key,
       async (ctx) => {
+        // The runner guard checked the current assignment; the path id needs the row (04 §6.9 row 1).
         const assignment = await ctx.tx.assignment.findFirst({
           where: { id: assignmentId, requestId: ctx.snap.id },
         });
@@ -315,12 +208,6 @@ export class DispatchService {
           throw conflict('This assignment is no longer awaiting approval.');
         if (!dto.approve) {
           const note = dto.note?.trim() ?? '';
-          if (note.length < 3)
-            throw new AppError(
-              422,
-              'VALIDATION_ERROR',
-              'Explain why the assignment is not confirmed.',
-            );
           await ctx.tx.assignment.update({
             where: { id: assignment.id },
             data: {
@@ -341,9 +228,15 @@ export class DispatchService {
             },
           });
           ctx.timers.stop('T3.review', assignment.id);
-          ctx.audit('Assignment acceptance rejected', {
+          ctx.audit('Assignment rejected', {
             resourceType: 'assignment',
             resourceId: assignment.id,
+            note,
+          });
+          ctx.notify('assignment.not_confirmed', {
+            assignmentId: assignment.id,
+            providerUserId: assignment.providerUserId,
+            requestCode: ctx.snap.number,
             note,
           });
           if (
@@ -357,38 +250,43 @@ export class DispatchService {
             });
           return;
         }
-        const provider = await this.providers
-          .list(ctx.now, ctx.snap.id)
-          .then((rows) =>
-            rows.find((item) => item.id === assignment.providerId),
-          );
         const requestRow = await ctx.tx.serviceRequest.findUnique({
           where: { id: ctx.snap.id },
         });
+        const provider = await this.providers.one(
+          assignment.providerId,
+          ctx.now,
+          ctx.snap.id,
+          ctx.tx,
+        );
         if (!provider || !requestRow)
           throw conflict(
             'The provider is no longer available. Refresh the request.',
           );
-        const eligibility = evaluateEligibility(
-          provider,
-          this.toDispatchRequest(requestRow),
-          {
-            requireVerifiedBank:
-              ctx.settings['assignment.requireVerifiedBank'] !== false,
-          },
+        // 04 §6.9 re-check table; capacity and previous aren't re-checked for the provider's own offer.
+        const recheck = assessReviewRecheck({
+          providerName: provider.name,
+          failures: evaluateAll(
+            provider,
+            buildDispatchRequest(requestRow, {
+              districtName: ctx.snap.districtName,
+              cityName: ctx.snap.cityName,
+            }),
+            {
+              requireVerifiedBank:
+                ctx.settings['assignment.requireVerifiedBank'] !== false,
+            },
+          ),
+          overrideNote: dto.overrideNote,
+        });
+        if (!recheck.ok)
+          throw new AppError(recheck.status, recheck.code, recheck.message);
+        const sharedDetails = await this.releasedOnConfirm(
+          ctx,
+          requestRow.shareOnConfirm,
+          dto.share,
+          userId,
         );
-        if (!eligibility.eligible) {
-          if (!OVERRIDABLE_RULES.includes(eligibility.rule))
-            throw conflict(
-              `${provider.name} can no longer take this job (${eligibility.reason}).`,
-            );
-          if (!dto.overrideNote?.trim())
-            throw new AppError(
-              422,
-              'VALIDATION_ERROR',
-              `Add an override note to confirm this assignment: ${eligibility.reason}.`,
-            );
-        }
         const updated = await ctx.tx.assignment.update({
           where: { id: assignment.id },
           data: {
@@ -396,7 +294,7 @@ export class DispatchService {
             reviewedBy: userId,
             reviewedAt: ctx.now,
             reviewNote: dto.note?.trim() || null,
-            sharedDetails: dto.share,
+            sharedDetails,
           },
         });
         const acceptedQuote = await ctx.tx.quote.findFirst({
@@ -423,14 +321,21 @@ export class DispatchService {
         });
         ctx.timers.stop('T3.review', assignment.id);
         if (!acceptedQuote) {
+          const hour = 60 * 60 * 1000;
           ctx.timers.start(
             'T7.reminder24h',
-            new Date(ctx.now.getTime() + 24 * 60 * 60 * 1000),
+            new Date(
+              ctx.now.getTime() +
+                settingHours(ctx, 'pricing.stallReminderHours') * hour,
+            ),
             assignment.id,
           );
           ctx.timers.start(
             'T7.stall48h',
-            new Date(ctx.now.getTime() + 48 * 60 * 60 * 1000),
+            new Date(
+              ctx.now.getTime() +
+                settingHours(ctx, 'pricing.stallEscalateHours') * hour,
+            ),
             assignment.id,
           );
         }
@@ -457,7 +362,11 @@ export class DispatchService {
           const payoutHold =
             ctx.snap.hold ||
             ctx.snap.openIssues.length > 0 ||
-            provider.userStatus === 'suspended';
+            providerBlocked({
+              userStatus: provider.userStatus,
+              verification: provider.verification,
+              reliabilityStatus: provider.reliabilityStatus,
+            }).blocked;
           await ctx.tx.payout.create({
             data: {
               requestId: ctx.snap.id,
@@ -475,10 +384,16 @@ export class DispatchService {
             },
           });
         }
-        ctx.audit('Assignment confirmed', {
+        ctx.audit('Assignment approved', {
           resourceType: 'assignment',
           resourceId: updated.id,
           note: dto.note,
+          changes: recheck.overridden
+            ? {
+                overrideNote: dto.overrideNote?.trim(),
+                overriddenRules: recheck.overriddenRules,
+              }
+            : undefined,
         });
         ctx.notify('assignment.confirmed_customer', {
           requestCode: ctx.snap.number,
@@ -497,7 +412,7 @@ export class DispatchService {
     ref: string,
     assignmentId: string,
     note: string,
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -515,24 +430,14 @@ export class DispatchService {
           where: {
             id: assignmentId,
             requestId: ctx.snap.id,
-            status: { in: ['offered', 'pending_approval'] },
+            status: { in: ['offered', 'pending_approval', 'accepted'] },
           },
         });
         if (!assignment) throw conflict('This offer is no longer current.');
-        if (
-          await ctx.tx.quote.findFirst({
-            where: { requestId: ctx.snap.id, status: 'accepted' },
-          })
-        )
-          throw conflict(
-            'This provider has an accepted quote. Replace the provider instead.',
-          );
-        if (!note.trim())
-          throw new AppError(
-            422,
-            'VALIDATION_ERROR',
-            'Add a note for withdrawing this offer.',
-          );
+        const request = await ctx.tx.serviceRequest.findUnique({
+          where: { id: ctx.snap.id },
+        });
+        if (!request) throw requestNotFound();
         await ctx.tx.assignment.update({
           where: { id: assignment.id },
           data: {
@@ -548,20 +453,49 @@ export class DispatchService {
           data: { status: 'under_review', needsAssignmentReason: 'withdrawn' },
         });
         ctx.timers.stop(
-          ['T1.reminder', 'T1.expire', 'T3.review'],
+          [
+            'T1.reminder',
+            'T1.expire',
+            'T3.review',
+            'T7.reminder24h',
+            'T7.stall48h',
+          ],
           assignment.id,
         );
+        // 04 §5.5, §5.6: unpaid sent quotes are superseded and open schedules cancelled.
+        const sentQuotes = await ctx.tx.quote.findMany({
+          where: { requestId: ctx.snap.id, status: 'sent' },
+          select: { id: true },
+        });
+        if (sentQuotes.length) {
+          await ctx.tx.quote.updateMany({
+            where: { id: { in: sentQuotes.map(({ id }) => id) } },
+            data: { status: 'superseded' },
+          });
+          for (const quote of sentQuotes)
+            ctx.timers.stop(QUOTE_TIMERS, quote.id);
+        }
+        await this.cancelOpenSchedules(ctx);
+        const dispatchRequest = buildDispatchRequest(request, {
+          districtName: ctx.snap.districtName,
+          cityName: ctx.snap.cityName,
+        });
         ctx.audit('Assignment withdrawn', {
           resourceType: 'assignment',
           resourceId: assignment.id,
           note,
+          changes: {
+            wasAccepted: assignment.status === 'accepted',
+            supersededQuoteIds: sentQuotes.map(({ id }) => id),
+          },
         });
         ctx.notify('request.offer_withdrawn', {
           assignmentId: assignment.id,
           providerUserId: assignment.providerUserId,
           requestCode: ctx.snap.number,
-          service: '',
-          district: '',
+          service: request.service,
+          district: ctx.snap.districtName ?? '',
+          skill: dispatchRequest.skill ?? request.service,
         });
       },
     );
@@ -572,7 +506,7 @@ export class DispatchService {
     ref: string,
     assignmentId: string,
     dto: { note: string; workStarted?: boolean },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -586,6 +520,7 @@ export class DispatchService {
       dto,
       key,
       async (ctx) => {
+        // The runner guard checked the status rules of 04 §5.2 #21 (including the `blocked` rule); the path id needs the row.
         const assignment = await ctx.tx.assignment.findFirst({
           where: {
             id: assignmentId,
@@ -595,25 +530,12 @@ export class DispatchService {
         });
         if (!assignment)
           throw conflict('This provider is no longer assigned to the request.');
-        if (
-          !(await ctx.tx.quote.findFirst({
-            where: { requestId: ctx.snap.id, status: 'accepted' },
-          }))
-        )
-          throw conflict(
-            'Create or accept a quote before replacing this provider.',
-          );
-        if (ctx.snap.hold || ctx.snap.openIssues.length)
-          throw conflict(
-            'Resolve the current hold or issue before replacing the provider.',
-          );
+        const request = await ctx.tx.serviceRequest.findUnique({
+          where: { id: ctx.snap.id },
+        });
+        if (!request) throw requestNotFound();
         const note = dto.note.trim();
-        if (!note)
-          throw new AppError(
-            422,
-            'VALIDATION_ERROR',
-            'Add a note explaining why this provider is being replaced.',
-          );
+        const workStarted = dto.workStarted ?? assignment.workStarted;
         await ctx.tx.assignment.update({
           where: { id: assignment.id },
           data: {
@@ -621,7 +543,7 @@ export class DispatchService {
             endReason: 'replaced',
             endedAt: ctx.now,
             endedBy: userId,
-            workStarted: dto.workStarted ?? assignment.workStarted,
+            workStarted,
           },
         });
         await ctx.tx.quote.updateMany({
@@ -631,35 +553,53 @@ export class DispatchService {
           },
           data: { providerChangedAt: ctx.now },
         });
-        await ctx.tx.schedule.updateMany({
-          where: {
-            requestId: ctx.snap.id,
-            status: { in: ['proposed', 'changes_requested'] },
-          },
-          data: { status: 'cancelled' },
-        });
-        await ctx.tx.payout.updateMany({
+        await this.cancelOpenSchedules(ctx);
+        // FD-7: the old provider's primary payout never pays out; the new provider's is created at completion.
+        const payouts = await ctx.tx.payout.findMany({
           where: {
             assignmentId: assignment.id,
-            status: {
-              in: ['pending_approval', 'awaiting_second_approval', 'approved'],
-            },
+            kind: 'primary',
+            status: { notIn: ['paid', 'processing', 'cancelled', 'reversed'] },
           },
-          data: {
-            status: 'on_hold',
-            holdReason: 'Provider replaced on this request.',
-            holdSource: userId,
-          },
+          select: { id: true },
         });
+        if (payouts.length)
+          await ctx.tx.payout.updateMany({
+            where: { id: { in: payouts.map(({ id }) => id) } },
+            data: {
+              status: 'cancelled',
+              holdReason: 'Provider replaced on this request.',
+            },
+          });
         await ctx.tx.serviceRequest.update({
           where: { id: ctx.snap.id },
           data: { status: 'under_review', needsAssignmentReason: 'replaced' },
+        });
+        ctx.timers.stop(['T7.reminder24h', 'T7.stall48h'], assignment.id);
+        const dispatchRequest = buildDispatchRequest(request, {
+          districtName: ctx.snap.districtName,
+          cityName: ctx.snap.cityName,
         });
         ctx.audit('Assignment replaced', {
           resourceType: 'assignment',
           resourceId: assignment.id,
           note,
-          changes: { workStarted: dto.workStarted ?? assignment.workStarted },
+          changes: {
+            oldAssignmentId: assignment.id,
+            workStarted,
+            cancelledPayoutIds: payouts.map(({ id }) => id),
+          },
+        });
+        ctx.notify('assignment.replaced_customer', {
+          requestCode: ctx.snap.number,
+        });
+        ctx.notify('assignment.replaced_provider', {
+          assignmentId: assignment.id,
+          providerUserId: assignment.providerUserId,
+          requestCode: ctx.snap.number,
+          service: request.service,
+          district: ctx.snap.districtName ?? '',
+          skill: dispatchRequest.skill ?? request.service,
         });
       },
     );
@@ -669,7 +609,7 @@ export class DispatchService {
     userId: string,
     ref: string,
     dto: { attachmentIds?: string[]; fields?: string[]; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -692,42 +632,26 @@ export class DispatchService {
             'Confirm a provider assignment before sharing job details.',
           );
         const fields = [...new Set(dto.fields ?? [])];
-        if (
-          fields.some((field) => field === 'address' || field === 'access') &&
-          !dto.note?.trim()
-        )
-          throw new AppError(
-            422,
-            'VALIDATION_ERROR',
-            'Add a note explaining why the provider needs the site details before the date is confirmed.',
-          );
+        const attachmentIds = [...new Set(dto.attachmentIds ?? [])];
+        await this.requireOwnAttachments(ctx, attachmentIds);
         const existing = object(assignment.sharedDetails);
         const nextFields = [
-          ...new Set([
-            ...(Array.isArray(existing.fields)
-              ? existing.fields.filter(
-                  (item): item is string => typeof item === 'string',
-                )
-              : []),
-            ...fields,
-          ]),
+          ...new Set([...stringList(existing.fields), ...fields]),
         ];
         const nextAttachments = [
-          ...new Set([
-            ...(Array.isArray(existing.attachmentIds)
-              ? existing.attachmentIds.filter(
-                  (item): item is string => typeof item === 'string',
-                )
-              : []),
-            ...(dto.attachmentIds ?? []),
-          ]),
+          ...new Set([...stringList(existing.attachmentIds), ...attachmentIds]),
         ];
+        // Merge: the description flag the confirmation released stays (04 §4.5 `sharedDetails`).
         await ctx.tx.assignment.update({
           where: { id: assignment.id },
           data: {
             sharedDetails: {
-              fields: nextFields,
+              ...existing,
+              description: existing.description === true,
               attachmentIds: nextAttachments,
+              fields: nextFields,
+              at: ctx.now.toISOString(),
+              by: userId,
             },
           },
         });
@@ -740,7 +664,7 @@ export class DispatchService {
           resourceType: 'assignment',
           resourceId: assignment.id,
           note: dto.note,
-          changes: { fields, attachmentIds: dto.attachmentIds ?? [] },
+          changes: { fields, attachmentIds },
         });
       },
     );
@@ -750,7 +674,7 @@ export class DispatchService {
     userId: string,
     ref: string,
     dto: { mode: 'auto' | 'manual'; note: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -765,12 +689,6 @@ export class DispatchService {
       key,
       async (ctx) => {
         const note = dto.note.trim();
-        if (note.length < 5)
-          throw new AppError(
-            422,
-            'VALIDATION_ERROR',
-            'Add a note explaining the change.',
-          );
         await ctx.tx.serviceRequest.update({
           where: { id: ctx.snap.id },
           data: { dispatchMode: dto.mode },
@@ -790,10 +708,9 @@ export class DispatchService {
       providerId: string;
       rankingRunId: string;
       note?: string;
-      overrideRules?: string[];
       overrideNote?: string;
     },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -807,6 +724,7 @@ export class DispatchService {
       dto,
       key,
       async (ctx) => {
+        // 04 §6.6 manual offer table; the staleness check needs the stored run.
         const run = await ctx.tx.dispatchRun.findFirst({
           where: {
             id: dto.rankingRunId,
@@ -818,72 +736,63 @@ export class DispatchService {
           ctx.settings['assignment.rankingRunMaxAgeMinutes'] ?? 15,
         );
         if (!run || ctx.now.getTime() - run.at.getTime() > maxAge * 60_000)
-          throw conflict('Refresh the ranked list.');
-        const provider = await this.providers
-          .list(ctx.now, ctx.snap.id)
-          .then((rows) => rows.find((item) => item.id === dto.providerId));
-        if (!provider)
-          throw conflict(
-            'The provider is no longer available. Refresh the ranked list.',
-          );
-        const profile = await ctx.tx.$queryRaw<Array<{ id: string }>>(
-          Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${dto.providerId} FOR UPDATE`,
-        );
-        if (!profile.length)
-          throw conflict(
-            'The provider is no longer available. Refresh the ranked list.',
-          );
+          throw conflict(OFFER_STALE_MESSAGE);
         const request = await ctx.tx.serviceRequest.findUnique({
           where: { id: ctx.snap.id },
         });
         if (!request) throw requestNotFound();
-        const eligibility = evaluateEligibility(
+        // Capacity locking (REQ-13a): lock the provider, then recount and re-run the rules from fresh data.
+        const locked = await ctx.tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${dto.providerId} FOR UPDATE`,
+        );
+        const provider = locked.length
+          ? await this.providers.one(
+              dto.providerId,
+              ctx.now,
+              ctx.snap.id,
+              ctx.tx,
+            )
+          : null;
+        if (!provider)
+          throw new AppError(
+            422,
+            'VALIDATION_ERROR',
+            OFFER_NOT_APPROVED_MESSAGE,
+          );
+        const failures = evaluateAll(
           provider,
-          this.toDispatchRequest(request),
+          buildDispatchRequest(request, {
+            districtName: ctx.snap.districtName,
+            cityName: ctx.snap.cityName,
+          }),
           {
             requireVerifiedBank:
               ctx.settings['assignment.requireVerifiedBank'] !== false,
           },
         );
-        const overridden = eligibility.eligible ? [] : [eligibility.rule];
-        if (
-          !eligibility.eligible &&
-          !OVERRIDABLE_RULES.includes(eligibility.rule)
-        )
+        const ranked = run.eligible as Array<{
+          providerId: string;
+          total: number;
+          factors: Record<string, number>;
+        }>;
+        const matched = ranked.find((item) => item.providerId === provider.id);
+        if (matched && failures.length)
           throw conflict(
-            `${provider.name} can no longer take this job (${eligibility.reason}). Refresh the ranked list.`,
+            noLongerAvailableMessage(provider.name, failures[0].reason),
           );
-        if (
-          !eligibility.eligible &&
-          (!dto.overrideRules?.includes(eligibility.rule) ||
-            !dto.overrideNote?.trim())
-        )
+        const topSuggestionId = ranked[0]?.providerId ?? null;
+        const assessment = assessManualOffer({
+          failures,
+          providerId: provider.id,
+          topSuggestionId,
+          overrideNote: dto.overrideNote,
+        });
+        if (!assessment.ok)
           throw new AppError(
-            422,
-            'VALIDATION_ERROR',
-            `Select ${eligibility.rule} and add an override note to continue: ${eligibility.reason}.`,
+            assessment.status,
+            assessment.code,
+            assessment.message,
           );
-        if (
-          dto.overrideRules?.some(
-            (rule) =>
-              !OVERRIDABLE_RULES.includes(
-                rule as (typeof OVERRIDABLE_RULES)[number],
-              ),
-          )
-        )
-          throw new AppError(
-            422,
-            'VALIDATION_ERROR',
-            'Only area, day, skill, capacity, previous and bank rules can be overridden.',
-          );
-        const matched = (
-          run.eligible as Array<{
-            providerId: string;
-            total: number;
-            factors: Record<string, number>;
-          }>
-        ).find((item) => item.providerId === provider.id);
-        const rankingScore = matched ?? { total: 0, factors: {} };
         const expiry = offerExpiry(
           ctx.now,
           Number(ctx.settings['assignment.offerExpiryHours'] ?? 24),
@@ -898,11 +807,13 @@ export class DispatchService {
             providerUserId: provider.userId,
             status: 'offered',
             source: 'manual',
-            attempt: request.autoAttempts + 1,
+            attempt: null,
             rankingRunId: run.id,
-            score: { total: rankingScore.total, factors: rankingScore.factors },
+            score: matched
+              ? { total: matched.total, factors: matched.factors }
+              : Prisma.JsonNull,
             overrideNote: dto.overrideNote?.trim() || null,
-            overriddenRules: overridden,
+            overriddenRules: assessment.overriddenRules,
             note: dto.note?.trim() || null,
             offeredAt: ctx.now,
             expiresAt: expiry,
@@ -930,12 +841,16 @@ export class DispatchService {
           note: dto.note,
           changes: { providerId: provider.id, source: 'manual' },
         });
-        if (overridden.length)
+        if (assessment.noteRequired)
           ctx.audit('Dispatch suggestion overridden', {
             resourceType: 'assignment',
             resourceId: assignment.id,
             note: dto.overrideNote,
-            changes: { rules: overridden },
+            changes: {
+              rules: assessment.overriddenRules,
+              topSuggestionId,
+              providerId: provider.id,
+            },
           });
         ctx.notify('assignment.offered', {
           assignmentId: assignment.id,
@@ -943,7 +858,11 @@ export class DispatchService {
           requestCode: ctx.snap.number,
           service: request.service,
           district: ctx.snap.districtName ?? '',
-          skill: this.toDispatchRequest(request).skill ?? request.service,
+          skill:
+            buildDispatchRequest(request, {
+              districtName: ctx.snap.districtName,
+              cityName: ctx.snap.cityName,
+            }).skill ?? request.service,
         });
       },
     );
@@ -954,7 +873,7 @@ export class DispatchService {
     ref: string,
     assignmentId: string,
     dto: { accept: boolean; note?: string; crewSize?: number },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -976,18 +895,11 @@ export class DispatchService {
             providerUserId: userId,
           },
         });
+        // The runner guard checked the current offer, expiry and the decline reason; the path id needs the row (04 §6.8 row 1).
         if (!assignment || assignment.status !== 'offered')
           throw conflict('This offer is no longer awaiting your response.');
-        if (ctx.now >= assignment.expiresAt)
-          throw conflict('This offer has expired.');
         if (!dto.accept) {
           const note = dto.note?.trim() ?? '';
-          if (note.length < 3)
-            throw new AppError(
-              422,
-              'VALIDATION_ERROR',
-              'Add a reason for declining.',
-            );
           await ctx.tx.assignment.update({
             where: { id: assignment.id },
             data: {
@@ -1029,11 +941,16 @@ export class DispatchService {
           where: { id: assignment.providerId },
           include: { user: { select: { status: true } } },
         });
+        // 04 §6.8 row 3; E2 also refuses a restricted provider (FD-6).
         if (
           !profile ||
           profile.verification !== 'approved' ||
           !profile.available ||
-          profile.user.status !== 'active'
+          providerBlocked({
+            userStatus: profile.user.status,
+            verification: profile.verification,
+            reliabilityStatus: profile.reliabilityStatus,
+          }).blocked
         )
           throw new AppError(
             422,
@@ -1070,9 +987,14 @@ export class DispatchService {
         if (changed.count !== 1)
           throw conflict('This offer is no longer awaiting your response.');
         ctx.timers.stop(['T1.reminder', 'T1.expire'], assignment.id);
+        // T3 is 4 working hours (Q16).
         ctx.timers.start(
           'T3.review',
-          new Date(ctx.now.getTime() + 4 * 60 * 60 * 1000),
+          addWorkingMinutes(
+            ctx.now,
+            REVIEW_WORKING_MINUTES,
+            (ctx.settings['calendar.holidays'] as string[] | undefined) ?? [],
+          ),
           assignment.id,
         );
         ctx.audit('Provider accepted assignment', {
@@ -1100,43 +1022,67 @@ export class DispatchService {
     if (!row) throw requestNotFound();
     return row;
   }
-  private toDispatchRequest(row: {
-    id: string;
-    ownerId: string;
-    service: string;
-    districtId: string;
-    cityId: string;
-    districtName?: string | null;
-    startDate: string | null;
-    details: unknown;
-  }): DispatchRequest {
-    const details = object(row.details);
-    const skillField = (
-      intakeFields[row.service as (typeof serviceLines)[number]] ?? []
-    ).find((field) => field.isSkill);
-    const skillValue = skillField ? details[skillField.key] : null;
-    const skill =
-      typeof skillValue === 'string' || typeof skillValue === 'number'
-        ? String(skillValue) || null
-        : null;
+  /** `sharedDetails` released when staff approve: the explicit `share`, else the request's `shareOnConfirm` (04 §6.9). */
+  private async releasedOnConfirm(
+    ctx: CommandContext,
+    shareOnConfirm: unknown,
+    share: { description: boolean; attachmentIds: string[] } | undefined,
+    userId: string,
+  ): Promise<Prisma.InputJsonValue> {
+    const defaults = object(shareOnConfirm);
+    const attachmentIds = [
+      ...new Set(share?.attachmentIds ?? stringList(defaults.attachmentIds)),
+    ];
+    await this.requireOwnAttachments(ctx, attachmentIds);
     return {
-      id: row.id,
-      ownerId: row.ownerId,
-      service: row.service,
-      skill,
-      districtId: row.districtId,
-      districtName: row.districtName ?? row.districtId,
-      cityId: row.cityId,
-      effectiveStartDate: row.startDate,
-      effectiveEndDate:
-        typeof details.endDate === 'string' ? details.endDate : null,
+      description: share ? share.description : defaults.description !== false,
+      attachmentIds,
+      fields: [],
+      at: ctx.now.toISOString(),
+      by: userId,
     };
   }
+
+  private async requireOwnAttachments(
+    ctx: CommandContext,
+    attachmentIds: readonly string[],
+  ): Promise<void> {
+    if (!attachmentIds.length) return;
+    const owned = await ctx.tx.requestAttachment.count({
+      where: { requestId: ctx.snap.id, uploadId: { in: [...attachmentIds] } },
+    });
+    // Same message as intake approval (04 §6.4): only files attached to this request can be released.
+    if (owned !== attachmentIds.length)
+      throw new AppError(
+        422,
+        'VALIDATION_ERROR',
+        'Choose only files attached to this request to share with the provider.',
+      );
+  }
+
+  /** Withdraw and replace cancel every unconfirmed or confirmed schedule and stop its timers (04 §5.6). */
+  private async cancelOpenSchedules(ctx: CommandContext): Promise<string[]> {
+    const open = await ctx.tx.schedule.findMany({
+      where: {
+        requestId: ctx.snap.id,
+        status: { in: ['proposed', 'changes_requested', 'confirmed'] },
+      },
+      select: { id: true },
+    });
+    if (!open.length) return [];
+    await ctx.tx.schedule.updateMany({
+      where: { id: { in: open.map(({ id }) => id) } },
+      data: { status: 'cancelled' },
+    });
+    for (const schedule of open) ctx.timers.stop(SCHEDULE_TIMERS, schedule.id);
+    return open.map(({ id }) => id);
+  }
+
   private run(
     actor: ActorContext,
     command: string,
     ref: string,
-    version: number,
+    version: number | undefined,
     url: string,
     body: unknown,
     key: string | undefined,
@@ -1148,6 +1094,7 @@ export class DispatchService {
         actor,
         requestRef: ref,
         expectedVersion: version,
+        input: body,
         ...(key
           ? {
               idempotencyKey: key,
