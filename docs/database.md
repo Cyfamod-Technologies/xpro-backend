@@ -98,6 +98,17 @@ reintroduces SQL injection.
 - Never edit files inside an already-applied migration directory.
 - Migration file names follow the pattern `YYYYMMDDHHMMSS_description`.
 - In production use `npx prisma migrate deploy` (no interactive prompt, no drift check).
+- CI lints every migration a PR adds with [Squawk](https://squawkhq.com) (rules in
+  `.squawk.toml`). It fails the PR on statements that can break against a table
+  that already has rows: a `NOT NULL` column, a `UNIQUE` constraint, or a
+  foreign key added to an existing table. Make the change safe (nullable first,
+  backfill, then constrain), or, once you have confirmed the existing rows
+  satisfy it, accept it on purpose with a comment on the line above:
+
+  ```sql
+  -- squawk-ignore constraint-missing-not-valid,adding-foreign-key-constraint
+  ALTER TABLE "payments" ADD CONSTRAINT "payments_request_id_fkey" ...
+  ```
 
 The template ships a single `00000000000000_init` migration. If you make schema
 changes before your first deploy, it is cleaner to delete it and regenerate one

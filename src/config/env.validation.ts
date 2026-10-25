@@ -28,6 +28,8 @@ const PRODUCTION_SMTP_VARS = [
   'SMTP_PASSWORD',
 ];
 
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1'];
+
 const STORAGE_DRIVERS = ['none', 'r2'] as const;
 type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 
@@ -59,6 +61,20 @@ export function validateEnv(
   if (config['NODE_ENV'] === 'production') {
     if (String(config['ENABLE_DEV_TOOLS']).toLowerCase() === 'true') {
       throw new Error('ENABLE_DEV_TOOLS must not be enabled in production');
+    }
+
+    // In a container, loopback is the app's own container. ioredis retries an
+    // unreachable host forever, so a loopback REDIS_HOST hangs boot silently
+    // instead of failing — reject it here so the failure is loud.
+    if (isLoopbackHost(String(config['REDIS_HOST']))) {
+      throw new Error(
+        'REDIS_HOST must not be a loopback address in production — use the Redis service name',
+      );
+    }
+    if (isLoopbackHost(urlHostname(String(config['DATABASE_URL'])))) {
+      throw new Error(
+        'DATABASE_URL must not point at a loopback address in production — use the Postgres service name',
+      );
     }
 
     const missingSmtpVariables = PRODUCTION_SMTP_VARS.filter(
@@ -154,6 +170,23 @@ function validateStorage(config: Record<string, unknown>): void {
     throw new Error(
       `STORAGE_DRIVER=${driver} requires: ${missingStorage.join(', ')}`,
     );
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.includes(
+    host
+      .trim()
+      .toLowerCase()
+      .replace(/^\[|\]$/g, ''),
+  );
+}
+
+function urlHostname(value: string): string {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return '';
   }
 }
 

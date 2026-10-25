@@ -12,6 +12,24 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: xpro
+          POSTGRES_PASSWORD: xpro
+          POSTGRES_DB: xpro_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xpro"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 25
+
+    env:
+      DATABASE_URL: postgresql://xpro:xpro@localhost:5432/xpro_ci
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,14 +46,43 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
+      - name: Apply migrations (fails the PR if a migration is broken)
+        run: npx prisma migrate deploy
+
       - name: Security Audit
         run: npm audit --audit-level=critical
 
       - name: Run ESLint
-        run: npm run lint
+        run: npx eslint "{src,apps,libs,test}/**/*.ts"
 
       - name: Run Tests
         run: npm test
 
       - name: Run Build
         run: npm run build
+
+  migration-lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Lints only migrations this PR adds or changes. Existing migrations are
+      # immutable, so re-flagging them would only add noise. Rules live in
+      # .squawk.toml.
+      - name: Lint new migrations with Squawk
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          mapfile -t CHANGED < <(git diff --name-only --diff-filter=AM \
+            "origin/${BASE_REF}...HEAD" -- 'prisma/migrations/*/migration.sql')
+          if [ "${#CHANGED[@]}" -eq 0 ]; then
+            echo "No migration changes in this PR."
+            exit 0
+          fi
+          printf 'Linting %s\n' "${CHANGED[@]}"
+          npx --yes squawk-cli@2.68.0 "${CHANGED[@]}"
