@@ -410,6 +410,7 @@ model ProviderProfile {
   cityLocation Location?     @relation("ProviderCity", fields: [cityId], references: [id], onDelete: SetNull)
   bankAccounts ProviderBankAccount[]
   reviews    ProviderReview[]
+  payouts    Payout[]
 
   @@index([verification, available])
   @@map("provider_profiles")
@@ -1029,6 +1030,9 @@ model ServiceRequest {
   cancellations Cancellation[]
   noShows       NoShow[]
   messages      RequestMessage[]
+  payments      Payment[]
+  refunds       Refund[]
+  payouts       Payout[]
 
   @@index([ownerId, status])
   @@index([status, intakeState])
@@ -1191,6 +1195,8 @@ model Payment {
   lateRefundOpened     Boolean       @default(false) @map("late_refund_opened")
   createdAt            DateTime      @default(now()) @map("created_at")
   updatedAt            DateTime      @updatedAt @map("updated_at")
+  request              ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  refunds              Refund[]
   @@index([requestId, status])
   @@map("payments")
 }
@@ -1214,6 +1220,9 @@ model Refund {
   completedAt        DateTime?    @map("completed_at")
   createdAt          DateTime     @default(now()) @map("created_at")
   updatedAt          DateTime     @updatedAt @map("updated_at")
+  payment            Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  request            ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  cancellation       Cancellation? @relation(fields: [cancellationId], references: [id], onDelete: Restrict)
   @@index([requestId, status])
   @@map("refunds")
 }
@@ -1238,6 +1247,8 @@ model Payout {
   paidAt              DateTime?    @map("paid_at")
   createdAt           DateTime     @default(now()) @map("created_at")
   updatedAt           DateTime     @updatedAt @map("updated_at")
+  request             ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  provider            ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Restrict)
   approvals           PayoutApproval[]
   transferAttempts    TransferAttempt[]
   @@index([requestId, kind])
@@ -1295,10 +1306,14 @@ model ApprovalDeadline {
   itemId      String    @map("item_id")
   requestId   String?   @map("request_id")
   openedAt    DateTime  @map("opened_at")
+  startedAt              DateTime? @map("started_at")
+  deadlineWorkingMinutes Int?      @map("deadline_working_minutes")
+  remindAt               DateTime? @map("remind_at")
   dueAt       DateTime  @map("due_at")
   remindedAt  DateTime? @map("reminded_at")
   escalatedAt DateTime? @map("escalated_at")
   closedAt    DateTime? @map("closed_at")
+  closedReason           String?   @map("closed_reason")
   openedBy    String?   @map("opened_by")
   createdAt   DateTime  @default(now()) @map("created_at")
 
@@ -1411,6 +1426,7 @@ model Cancellation {
   compensationCandidateIds String[]              @default([]) @map("compensation_candidate_ids")
   createdAt                DateTime              @default(now()) @map("created_at")
   request                  ServiceRequest        @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  refunds                  Refund[]
 
   @@index([requestId, status])
   @@map("cancellations")
