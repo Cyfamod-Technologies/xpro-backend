@@ -28,7 +28,7 @@ const base = (overrides: Record<string, unknown>) => ({
   intakeState: 'approved',
   contactInBrief: false,
   holdKind: null,
-    holdPreviousStatus: null,
+  holdPreviousStatus: null,
   defectsWindowEndsAt: null,
   reportApprovedAt: null,
   createdAt: at(1),
