@@ -6,24 +6,28 @@ export type NoticeTone = 'neutral' | 'success' | 'warning' | 'destructive';
 
 export function renderLogo(context: EmailRenderContext): string {
   return `
-    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
       <tr>
-        <td width="40" height="40" align="center" valign="middle" bgcolor="${EMAIL_COLORS.primary}" style="width:40px;height:40px;border-radius:12px;background-color:${EMAIL_COLORS.primary};color:#FFFFFF;font-family:${EMAIL_FONT_STACK};font-size:12px;line-height:40px;font-weight:800;letter-spacing:-0.4px;">
-          ${escapeHtml(context.logoMark)}
-        </td>
-        <td valign="middle" style="padding-left:12px;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:17px;line-height:22px;font-weight:700;letter-spacing:-0.2px;">
-          ${escapeHtml(context.appName)}
+        <td align="center" valign="middle">
+          <img src="${escapeHtml(context.logoUrl)}" width="220" alt="${escapeHtml(context.appName)}" style="display:block;width:220px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;" />
         </td>
       </tr>
     </table>`;
 }
 
-export function renderHeading(title: string): string {
-  return `<h1 class="email-heading" style="margin:0;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:28px;line-height:36px;font-weight:700;letter-spacing:-0.5px;">${escapeHtml(title)}</h1>`;
+export function renderHeading(
+  title: string,
+  align: 'left' | 'center' = 'left',
+): string {
+  return `<h1 class="email-heading" style="margin:0;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:28px;line-height:36px;font-weight:700;letter-spacing:-0.5px;text-align:${align};">${escapeHtml(title)}</h1>`;
 }
 
-export function renderParagraph(content: string, marginTop = 16): string {
-  return `<p style="margin:${marginTop}px 0 0;color:${EMAIL_COLORS.mutedForeground};font-family:${EMAIL_FONT_STACK};font-size:15px;line-height:24px;font-weight:400;">${escapeHtml(content).replace(/\n/g, '<br />')}</p>`;
+export function renderParagraph(
+  content: string,
+  marginTop = 16,
+  align: 'left' | 'center' = 'left',
+): string {
+  return `<p style="margin:${marginTop}px 0 0;color:${EMAIL_COLORS.mutedForeground};font-family:${EMAIL_FONT_STACK};font-size:15px;line-height:24px;font-weight:400;text-align:${align};">${escapeHtml(content).replace(/\n/g, '<br />')}</p>`;
 }
 
 export function renderRichParagraph(content: string, marginTop = 16): string {

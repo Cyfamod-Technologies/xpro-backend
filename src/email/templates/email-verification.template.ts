@@ -3,10 +3,12 @@ import type {
   EmailVerificationPayload,
   RenderedEmail,
 } from '../email.types';
+import { buildFrontendUrl } from '../email-template.utils';
 import { renderBaseEmail } from './base-email.template';
 import {
   renderHeading,
   renderButton,
+  renderFallbackUrl,
   renderNoticePanel,
   renderParagraph,
   renderTextFooter,
@@ -17,27 +19,30 @@ export function renderEmailVerification(
   context: EmailRenderContext,
 ): RenderedEmail {
   const subject = `Verify your ${context.appName} email`;
-  const verificationUrl = `${context.frontendUrl}/auth/verify-email?token=${encodeURIComponent(payload.token)}`;
+  const verificationUrl = buildFrontendUrl(context, '/auth/verify-email', {
+    token: payload.token,
+  });
   const preheader = 'Confirm your email address to activate your account.';
   const footerReason = `You received this email because a ${context.appName} account was created with this address.`;
   const greeting = payload.firstName ? `Hi ${payload.firstName}, ` : '';
   const content = [
-    renderHeading('Verify your email'),
+    renderHeading('Check your inbox', 'center'),
     renderParagraph(
-      `${greeting}confirm this email address to finish setting up your ${context.appName} account.`,
+      `${greeting}we've sent a verification link to confirm your ${context.appName} account email address.`,
+      18,
+      'center',
     ),
     renderButton('Verify email address', verificationUrl),
-    renderParagraph(
-      'Open the verification link to verify your email address.',
-      20,
-    ),
+    renderFallbackUrl(verificationUrl),
+    renderParagraph('Keep this verification link private.', 18, 'center'),
     renderNoticePanel(
-      'Keep this link private',
-      `It expires in 24 hours. ${context.appName} will never ask you to share it by email or chat.`,
+      'Link expiry',
+      'This verification link expires in 24 hours.',
     ),
     renderParagraph(
       "If you didn't create this account, you can safely ignore this email.",
       20,
+      'center',
     ),
   ].join('');
   const text = [

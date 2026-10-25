@@ -58,9 +58,12 @@ describe('EmailRendererService', () => {
     },
   );
 
-  it('takes the brand name from APP_NAME and derives a logo monogram', () => {
+  it('uses the Xpro logo asset and takes the brand name from APP_NAME', () => {
     const branded = new EmailRendererService(
-      new ConfigService({ APP_NAME: 'Northwind Labs' }),
+      new ConfigService({
+        APP_NAME: 'Northwind Labs',
+        FRONTEND_URL: 'https://app.example.com',
+      }),
     );
     const result = branded.render({
       recipientEmail: 'ada@example.com',
@@ -69,8 +72,22 @@ describe('EmailRendererService', () => {
     });
 
     expect(result.subject).toContain('Northwind Labs');
-    expect(result.html).toContain('NL');
+    expect(result.html).toContain(
+      'https://app.example.com/images/xpro-logo-transparent.png',
+    );
+    expect(result.html).toContain('alt="Northwind Labs"');
     expect(result.html).not.toContain('Xpro');
+  });
+
+  it('uses the dashboard primary color in branded buttons', () => {
+    const result = renderer.render({
+      recipientEmail: 'ada@example.com',
+      templateKey: 'welcome',
+      payload: fixtures.welcome,
+    });
+
+    expect(result.html).toContain('#4AA7DF');
+    expect(result.html).toContain('#102A3A');
   });
 
   it('escapes untrusted names', () => {

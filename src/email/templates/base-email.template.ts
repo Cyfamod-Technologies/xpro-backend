@@ -38,17 +38,15 @@ export function renderBaseEmail(input: BaseEmailInput): string {
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.canvas}">
       <tr>
         <td class="email-outer" align="center" style="padding:32px 16px;">
-          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:560px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:600px;">
             <tr>
-              <td style="padding:0 4px 18px;">${renderLogo(input.context)}</td>
-            </tr>
-            <tr>
-              <td class="email-card" bgcolor="${EMAIL_COLORS.card}" style="padding:36px;border:1px solid ${EMAIL_COLORS.border};border-top:3px solid ${EMAIL_COLORS.primary};border-radius:20px;box-shadow:0 16px 44px rgba(27,30,46,0.07);">
+              <td class="email-card" bgcolor="${EMAIL_COLORS.card}" style="padding:36px;border:1px solid ${EMAIL_COLORS.border};border-radius:16px;">
+                <div style="padding:0 0 32px;">${renderLogo(input.context)}</div>
                 ${input.content}
+                <div style="margin-top:32px;border-top:1px solid ${EMAIL_COLORS.border};padding-top:18px;">
+                  ${renderFooter(input.context, input.footerReason)}
+                </div>
               </td>
-            </tr>
-            <tr>
-              <td>${renderFooter(input.context, input.footerReason)}</td>
             </tr>
           </table>
         </td>

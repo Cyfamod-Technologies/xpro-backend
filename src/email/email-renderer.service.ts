@@ -24,16 +24,6 @@ import { renderWelcomeEmail } from './templates/welcome.template';
 import { renderRequestUpdate } from './templates/request-update.template';
 import { renderStaffInvite } from './templates/staff-invite.template';
 
-/** Derives a short monogram from the app name, e.g. "Xpro Labs" -> "XL". */
-function monogram(appName: string): string {
-  const initials = appName
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((word) => word.charAt(0).toUpperCase())
-    .join('');
-  return initials.slice(0, 3) || 'A';
-}
-
 /**
  * Maps a template key plus an untyped payload onto a rendered subject/html/text
  * triple. Payloads arrive from the queue as plain JSON, so every field is
@@ -87,7 +77,7 @@ export class EmailRendererService {
     return {
       recipientEmail,
       appName,
-      logoMark: this.config.get<string>('EMAIL_LOGO_MARK') || monogram(appName),
+      logoUrl: `${frontendUrl}/images/xpro-logo-transparent.png`,
       frontendUrl,
       assetBaseUrl,
       supportEmail:

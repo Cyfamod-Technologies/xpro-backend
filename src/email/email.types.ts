@@ -61,8 +61,8 @@ export interface EmailRenderContext {
   recipientEmail: string;
   /** Product name shown in the logo lockup, subjects and footers. */
   appName: string;
-  /** 1-3 character monogram rendered in the logo tile. */
-  logoMark: string;
+  /** Publicly hosted Xpro logo image. */
+  logoUrl: string;
   frontendUrl: string;
   assetBaseUrl: string;
   supportEmail?: string;

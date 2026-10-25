@@ -6,21 +6,21 @@
  * EmailRenderContext, so it can differ per environment.
  */
 export const EMAIL_COLORS = {
-  canvas: '#F4F5F7',
+  canvas: '#102A3A',
   card: '#FFFFFF',
-  foreground: '#18181B',
-  primary: '#2563EB',
-  secondary: '#4F46E5',
-  muted: '#FAFAFA',
-  mutedForeground: '#64748B',
-  border: '#E4E4E7',
-  success: '#059669',
-  successSoft: '#ECFDF5',
-  warning: '#D97706',
-  warningSoft: '#FFFBEB',
-  destructive: '#DC2626',
-  destructiveSoft: '#FEF2F2',
+  foreground: '#102A3A',
+  primary: '#4AA7DF',
+  secondary: '#526A82',
+  muted: '#F2F7FB',
+  mutedForeground: '#526A82',
+  border: '#DCE7EF',
+  success: '#2E8B68',
+  successSoft: '#EAF6F1',
+  warning: '#E68F3C',
+  warningSoft: '#FFF5E9',
+  destructive: '#E64449',
+  destructiveSoft: '#FFF0F0',
 } as const;
 
 export const EMAIL_FONT_STACK =
-  '-apple-system, BlinkMacSystemFont, "Segoe UI", Arial, Helvetica, sans-serif';
+  "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, Helvetica, sans-serif";
