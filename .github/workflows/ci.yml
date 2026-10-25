@@ -12,6 +12,24 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: xpro
+          POSTGRES_PASSWORD: xpro
+          POSTGRES_DB: xpro_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U xpro"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 25
+
+    env:
+      DATABASE_URL: postgresql://xpro:xpro@localhost:5432/xpro_ci
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,6 +45,9 @@ jobs:
 
       - name: Generate Prisma Client
         run: npx prisma generate
+
+      - name: Apply migrations (fails the PR if a migration is broken)
+        run: npx prisma migrate deploy
 
       - name: Security Audit
         run: npm audit --audit-level=critical
