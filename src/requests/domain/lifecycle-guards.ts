@@ -63,9 +63,19 @@ const pendingPaymentWithinWindow = (snap: RequestSnapshot, now: Date) =>
   snap.payment.pendingPaymentAt !== null &&
   now.getTime() - snap.payment.pendingPaymentAt.getTime() < PAYMENT_WINDOW_MS;
 
+/** 04 §6.13: a hold that started before work (`previousStatus = scheduled`) still lets staff move the date. */
+const heldBeforeWork = (snap: RequestSnapshot) =>
+  snap.status === 'blocked' &&
+  !!snap.hold &&
+  snap.hold.previousStatus === 'scheduled';
+
+const acceptsSchedules = (snap: RequestSnapshot) =>
+  snap.status === 'ready_to_schedule' ||
+  snap.status === 'scheduled' ||
+  heldBeforeWork(snap);
+
 const scheduleStatusFailure = (snap: RequestSnapshot): GuardResult => {
-  if (snap.status === 'ready_to_schedule' || snap.status === 'scheduled')
-    return ok;
+  if (acceptsSchedules(snap)) return ok;
   if (snap.status === 'awaiting_payment')
     return conflict(
       "The customer hasn't paid yet. Schedule once payment is received.",
@@ -77,6 +87,8 @@ const scheduleStatusFailure = (snap: RequestSnapshot): GuardResult => {
   );
 };
 
+// 04 §6.13 propose table, in order. The date, hours and overlap rows need the
+// provider's calendar, so SchedulesService runs them (checkScheduleInterval).
 const schedulePropose: DomainGuard<unknown> = (snap, actor) => {
   if (!isStaffWith(actor, 'schedule.manage')) return staffDenied();
   return firstFailure(
@@ -93,18 +105,24 @@ const schedulePropose: DomainGuard<unknown> = (snap, actor) => {
   );
 };
 
-const scheduleRespond: DomainGuard<unknown> = (snap, actor) => {
+// 04 §6.13 respond table, in order. The second-confirmation re-check needs the
+// provider's calendar and standing, so SchedulesService runs it.
+const scheduleRespond: DomainGuard<unknown> = (snap, actor, input) => {
   const party = scheduleParty(snap, actor);
   if (!party) return accountDenied();
   const schedule = snap.currentSchedule;
+  const body = objectInput<{ accept?: unknown; note?: unknown }>(input);
   return firstFailure(
     assertOpen(snap),
-    schedule?.status === 'proposed'
+    schedule?.status === 'proposed' && acceptsSchedules(snap)
       ? null
       : conflict('This schedule is no longer awaiting confirmation.'),
     schedule?.[party] === 'pending'
       ? null
       : conflict('Your response has already been recorded.'),
+    body && body.accept === false && !trimmed(body.note)
+      ? invalid('Explain your requested schedule change.')
+      : null,
   );
 };
 

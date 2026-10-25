@@ -3,6 +3,12 @@ import {
   type TimeOff,
   type WorkingHours,
 } from '../../platform/calendar/provider-calendar';
+import { watParts } from '../../platform/calendar/wat';
+import { formatRequestId } from './statuses';
+
+/** 04 §6.13 respond table, second-confirmation row. */
+export const SECOND_CONFIRMATION_MESSAGE =
+  'This date no longer works for the provider. XPro will propose a new one.';
 
 export type ScheduleProviderCalendar = {
   workingHours: WorkingHours;
@@ -10,12 +16,27 @@ export type ScheduleProviderCalendar = {
   displayName: string;
 };
 
+export type ScheduleInterval = { startAt: Date; endAt: Date };
+
+/** `HH:mm` on the WAT clock. */
+function watClock(instant: Date): string {
+  const minutes = Math.floor(watParts(instant).minutes);
+  const hh = String(Math.floor(minutes / 60)).padStart(2, '0');
+  const mm = String(minutes % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/**
+ * The 04 §6.13 propose table below the status and standing rows, in order.
+ * `overlap` is the interval of the conflicting appointment, if any; the
+ * message quotes that appointment, not the proposed one.
+ */
 export function checkScheduleInterval(input: {
   startAt: Date;
   endAt: Date;
   now: Date;
   provider: ScheduleProviderCalendar;
-  overlaps: boolean;
+  overlap: ScheduleInterval | null;
 }): string | null {
   if (input.startAt <= input.now) return 'Choose a future date and time.';
   if (input.endAt <= input.startAt)
@@ -30,7 +51,15 @@ export function checkScheduleInterval(input: {
     input.provider.displayName,
   );
   if (calendarProblem) return calendarProblem.message;
-  if (input.overlaps)
-    return `This provider already has an appointment between ${input.startAt.toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })} and ${input.endAt.toLocaleString('en-NG', { timeZone: 'Africa/Lagos' })}. Choose another time.`;
+  if (input.overlap)
+    return `This provider already has an appointment between ${watClock(input.overlap.startAt)} and ${watClock(input.overlap.endAt)}. Choose another time.`;
   return null;
+}
+
+/** 04 §6.13 "Provider hours or time off changed": the refusal for a confirmed job. The date is the WAT date. */
+export function confirmedJobConflictMessage(
+  startAt: Date,
+  requestNumber: number,
+): string {
+  return `You have a confirmed job on ${watParts(startAt).date} (${formatRequestId(requestNumber)}). Ask XPro to move it before changing these hours.`;
 }

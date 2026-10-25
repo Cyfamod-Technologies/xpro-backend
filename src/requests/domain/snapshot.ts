@@ -140,6 +140,8 @@ export type RequestSnapshot = {
   flag?: string | null;
   hold?: {
     kind: 'staff' | 'no_show' | 'provider_suspended' | 'customer_suspended';
+    /** The status the job returns to on release; `scheduled` means the hold began before work. */
+    previousStatus?: RequestStatus | null;
   } | null;
   defectsWindowEndsAt?: Date | null;
   completionReportApprovedAt?: Date | null;
