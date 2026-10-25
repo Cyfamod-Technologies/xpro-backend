@@ -11,7 +11,19 @@ import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { RequestCommandRunner } from '../command-runner';
-import { checkScheduleInterval } from '../domain/schedule-checks';
+import {
+  appendChangeRequest,
+  hasOpenChangeRequest,
+  markChangeRequestsHandled,
+  readChangeRequests,
+} from '../domain/change-requests';
+import { noShowCheckDueAt } from '../domain/execution-timers';
+import { providerBlocked } from '../domain/provider-standing';
+import {
+  checkScheduleInterval,
+  SECOND_CONFIRMATION_MESSAGE,
+} from '../domain/schedule-checks';
+import { mapOverlapViolation } from './overlap-violation';
 import type {
   WorkingHours,
   TimeOff,
@@ -19,8 +31,6 @@ import type {
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
-const fail = (message: string) =>
-  new AppError(422, 'VALIDATION_ERROR', message);
 
 @Injectable()
 export class SchedulesService {
@@ -55,19 +65,7 @@ export class SchedulesService {
           : {}),
       },
       async (ctx) => {
-        if (!['ready_to_schedule', 'scheduled'].includes(ctx.snap.status)) {
-          if (ctx.snap.status === 'awaiting_payment')
-            throw conflict(
-              "The customer hasn't paid yet. Schedule once payment is received.",
-            );
-          throw conflict(
-            'An accepted quote and provider assignment are required for scheduling.',
-          );
-        }
-        if (ctx.snap.providerStanding !== 'active')
-          throw conflict(
-            'This provider is suspended. Replace them or wait for reactivation.',
-          );
+        // Status, replacement payout and standing rows of 04 §6.13 are the runner guard.
         const assignment = await ctx.tx.assignment.findFirst({
           where: { requestId: ctx.snap.id, status: 'accepted' },
           orderBy: { createdAt: 'desc' },
@@ -93,10 +91,20 @@ export class SchedulesService {
           select: {
             workingHours: true,
             timeOff: true,
+            verification: true,
             reliabilityStatus: true,
+            user: { select: { status: true } },
           },
         });
-        if (!profile || profile.reliabilityStatus === 'suspended')
+        // Re-read under the provider lock, after the payout row (04 §6.13 order).
+        if (
+          !profile ||
+          providerBlocked({
+            userStatus: profile.user.status,
+            verification: profile.verification,
+            reliabilityStatus: profile.reliabilityStatus,
+          }).blocked
+        )
           throw conflict(
             'This provider is suspended. Replace them or wait for reactivation.',
           );
@@ -110,7 +118,8 @@ export class SchedulesService {
             endAt: { gt: startAt },
             requestId: { not: ctx.snap.id },
           },
-          select: { id: true },
+          select: { startAt: true, endAt: true },
+          orderBy: { startAt: 'asc' },
         });
         const providerName =
           ctx.snap.providerCard?.businessName ||
@@ -125,7 +134,7 @@ export class SchedulesService {
             timeOff: profile.timeOff as unknown as TimeOff[],
             displayName: providerName,
           },
-          overlaps: Boolean(overlap),
+          overlap,
         });
         if (problem) throw conflict(problem);
         const current = await ctx.tx.schedule.findFirst({
@@ -139,7 +148,16 @@ export class SchedulesService {
           },
           data: { status: 'cancelled' },
         });
-        const changeRequests = current?.changeRequests ?? [];
+        if (current && readChangeRequests(current.changeRequests).length)
+          await ctx.tx.schedule.update({
+            where: { id: current.id },
+            data: {
+              changeRequests: markChangeRequestsHandled(
+                current.changeRequests,
+                ctx.now,
+              ) as unknown as Prisma.InputJsonValue,
+            },
+          });
         const schedule = await ctx.tx.schedule.create({
           data: {
             requestId: ctx.snap.id,
@@ -155,7 +173,7 @@ export class SchedulesService {
             proposedBy: userId,
             proposedAt: ctx.now,
             replacesScheduleId: current?.id ?? null,
-            changeRequests,
+            changeRequests: [],
           },
         });
         ctx.timers.start(
@@ -205,8 +223,6 @@ export class SchedulesService {
         'FORBIDDEN',
         'This action is not available for your account type.',
       );
-    if (!dto.accept && !dto.note?.trim())
-      throw fail('Explain your requested schedule change.');
     return this.runner.run(
       {
         command: 'schedule.respond',
@@ -225,30 +241,10 @@ export class SchedulesService {
         const schedule = await ctx.tx.schedule.findFirst({
           where: { id: scheduleId, requestId: ctx.snap.id },
         });
-        if (
-          !schedule ||
-          schedule.status !== 'proposed' ||
-          ctx.snap.currentSchedule?.status !== 'proposed'
-        )
+        // Guard: the current schedule is `proposed`, this party is `pending` (04 §6.13 respond rows 1-3).
+        if (!schedule || schedule.status !== 'proposed')
           throw conflict('This schedule is no longer awaiting confirmation.');
         const party = actor.kind === 'customer' ? 'customer' : 'provider';
-        if (party === 'customer' && ctx.actor.userId !== ctx.snap.ownerId)
-          throw new AppError(
-            404,
-            'NOT_FOUND',
-            'This request is no longer available to your account.',
-          );
-        if (
-          party === 'provider' &&
-          ctx.actor.userId !== ctx.snap.currentProviderUserId
-        )
-          throw new AppError(
-            404,
-            'NOT_FOUND',
-            'This request is no longer available to your account.',
-          );
-        if (schedule[party] !== 'pending')
-          throw conflict('Your response has already been recorded.');
         const update = {
           [party]: dto.accept
             ? ('accepted' as const)
@@ -276,9 +272,19 @@ export class SchedulesService {
             requestCode: ctx.snap.number,
           });
         } else if (other === 'accepted') {
+          // Serialises with every other confirmation for this provider (D-04).
+          await ctx.tx.$queryRaw(
+            Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${schedule.providerId} FOR UPDATE`,
+          );
           const profile = await ctx.tx.providerProfile.findUnique({
             where: { id: schedule.providerId },
-            select: { workingHours: true, timeOff: true },
+            select: {
+              workingHours: true,
+              timeOff: true,
+              verification: true,
+              reliabilityStatus: true,
+              user: { select: { status: true } },
+            },
           });
           const excludedIds = [
             scheduleId,
@@ -294,63 +300,74 @@ export class SchedulesService {
               startAt: { lt: schedule.endAt },
               endAt: { gt: schedule.startAt },
             },
-            select: { id: true },
+            select: { startAt: true, endAt: true },
+            orderBy: { startAt: 'asc' },
           });
           const providerName =
             ctx.snap.providerCard?.businessName ||
             ctx.snap.providerCard?.firstName ||
             'This provider';
-          const problem = profile
-            ? checkScheduleInterval({
-                startAt: schedule.startAt,
-                endAt: schedule.endAt,
-                now: new Date(ctx.now.getTime() - 1),
-                provider: {
-                  workingHours: profile.workingHours as WorkingHours,
-                  timeOff: profile.timeOff as unknown as TimeOff[],
-                  displayName: providerName,
-                },
-                overlaps: Boolean(overlap),
-              })
-            : 'This provider is suspended. Replace them or wait for reactivation.';
-          if (problem)
-            throw conflict(
-              'This date no longer works for the provider. XPro will propose a new one.',
-            );
-          if (schedule.replacesScheduleId)
-            await ctx.tx.schedule.updateMany({
-              where: { id: schedule.replacesScheduleId, status: 'confirmed' },
-              data: { status: 'superseded' },
-            });
-          await ctx.tx.schedule.update({
-            where: { id: scheduleId },
-            data: {
-              ...update,
-              status: 'confirmed',
-              confirmedAt: ctx.now,
-              responses: {
-                push: `${party === 'customer' ? 'Customer' : 'Provider'}: Confirmed`,
-              },
+          if (
+            !profile ||
+            providerBlocked({
+              userStatus: profile.user.status,
+              verification: profile.verification,
+              reliabilityStatus: profile.reliabilityStatus,
+            }).blocked
+          )
+            throw conflict(SECOND_CONFIRMATION_MESSAGE);
+          const problem = checkScheduleInterval({
+            startAt: schedule.startAt,
+            endAt: schedule.endAt,
+            now: new Date(ctx.now.getTime() - 1),
+            provider: {
+              workingHours: profile.workingHours as WorkingHours,
+              timeOff: profile.timeOff as unknown as TimeOff[],
+              displayName: providerName,
             },
+            overlap,
           });
-          await ctx.tx.serviceRequest.update({
-            where: { id: ctx.snap.id },
-            data: { status: 'scheduled' },
-          });
+          if (problem) throw conflict(SECOND_CONFIRMATION_MESSAGE);
+          try {
+            if (schedule.replacesScheduleId)
+              await ctx.tx.schedule.updateMany({
+                where: { id: schedule.replacesScheduleId, status: 'confirmed' },
+                data: { status: 'superseded' },
+              });
+            await ctx.tx.schedule.update({
+              where: { id: scheduleId },
+              data: {
+                ...update,
+                status: 'confirmed',
+                confirmedAt: ctx.now,
+                responses: {
+                  push: `${party === 'customer' ? 'Customer' : 'Provider'}: Confirmed`,
+                },
+              },
+            });
+          } catch (error) {
+            // Backstop for a race the provider lock did not cover: schedules_no_confirmed_overlap (23P01).
+            throw mapOverlapViolation(error);
+          }
+          // Only `ready_to_schedule` becomes `scheduled`. A reschedule confirmed
+          // while `scheduled` or held before work leaves the status (and hold) alone.
+          if (ctx.snap.status === 'ready_to_schedule')
+            await ctx.tx.serviceRequest.update({
+              where: { id: ctx.snap.id },
+              data: { status: 'scheduled' },
+            });
           ctx.timers.stop(['T11.reminder24h', 'T11.staff48h'], scheduleId);
-          ctx.timers.start(
-            'T12.reminder24h',
-            new Date(schedule.startAt.getTime() - 24 * 60 * 60_000),
-            scheduleId,
-          );
-          ctx.timers.start(
-            'T12.reminder2h',
-            new Date(schedule.startAt.getTime() - 2 * 60 * 60_000),
-            scheduleId,
-          );
+          const reminders = [
+            ['T12.reminder24h', 24 * 60 * 60_000],
+            ['T12.reminder2h', 2 * 60 * 60_000],
+          ] as const;
+          for (const [kind, lead] of reminders) {
+            const dueAt = new Date(schedule.startAt.getTime() - lead);
+            if (dueAt > ctx.now) ctx.timers.start(kind, dueAt, scheduleId);
+          }
           ctx.timers.start(
             'T13.noShowCheck',
-            new Date(schedule.startAt.getTime() + 2 * 60 * 60_000),
+            noShowCheckDueAt(schedule.startAt, ctx.settings),
             scheduleId,
           );
           ctx.audit('Schedule confirmed', {
@@ -424,36 +441,17 @@ export class SchedulesService {
           },
         });
         if (!schedule) throw conflict('This schedule is no longer confirmed.');
-        const party = actor.kind;
-        if (
-          (party === 'customer' && user.id !== ctx.snap.ownerId) ||
-          (party === 'provider' && user.id !== ctx.snap.currentProviderUserId)
-        )
-          throw new AppError(
-            404,
-            'NOT_FOUND',
-            'This request is no longer available to your account.',
-          );
-        const requests = Array.isArray(schedule.changeRequests)
-          ? (schedule.changeRequests as Array<Record<string, unknown>>)
-          : [];
-        if (requests.some((item) => item.party === party && !item.handledAt))
+        const party = actor.kind === 'customer' ? 'customer' : 'provider';
+        if (hasOpenChangeRequest(schedule.changeRequests, party))
           throw conflict('Your date change request is already with XPro.');
         await ctx.tx.schedule.update({
           where: { id: schedule.id },
           data: {
-            changeRequests: [
-              ...requests,
-              {
-                party,
-                note: dto.note.trim(),
-                createdAt: ctx.now.toISOString(),
-                urgent:
-                  schedule.startAt.getTime() - ctx.now.getTime() <=
-                  48 * 60 * 60_000,
-                handledAt: null,
-              },
-            ] as unknown as Prisma.InputJsonValue,
+            changeRequests: appendChangeRequest(schedule.changeRequests, {
+              by: party,
+              note: dto.note.trim(),
+              at: ctx.now,
+            }) as unknown as Prisma.InputJsonValue,
           },
         });
         ctx.audit('Reschedule requested', {
