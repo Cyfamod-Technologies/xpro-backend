@@ -1113,3 +1113,154 @@ describe('PaymentsService.getRequestPayments', () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 });
+
+describe('PaymentsService.openForCancellation (C-39)', () => {
+  const settledPayment = (overrides: Record<string, unknown> = {}) => ({
+    id: 'payment-1',
+    requestId: 'request-1',
+    amount: 500_000n,
+    status: 'paid',
+    ...overrides,
+  });
+  const setup = (
+    payments: Array<Record<string, unknown>>,
+    refunds: Array<{ amount: bigint; status: string }> = [],
+  ) => {
+    const order: string[] = [];
+    const refundTx = {
+      findMany: jest.fn((_args: unknown) => {
+        order.push('refunds');
+        return Promise.resolve(refunds);
+      }),
+      create: jest.fn((args: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'refund-1', ...args.data }),
+      ),
+    };
+    const harness = build({
+      tx: {
+        $queryRaw: jest.fn(() => {
+          order.push('lock');
+          return Promise.resolve([]);
+        }),
+        payment: {
+          findMany: jest
+            .fn()
+            .mockResolvedValue(payments.map(({ id }) => ({ id }))),
+          findUniqueOrThrow: jest.fn((args: { where: { id: string } }) =>
+            Promise.resolve(
+              payments.find((payment) => payment.id === args.where.id),
+            ),
+          ),
+        },
+        refund: refundTx,
+      },
+    });
+    return { ...harness, order, refundTx };
+  };
+  const input = {
+    cancellationId: 'cancellation-1',
+    requestedBy: 'admin-1',
+    workStarted: false,
+  };
+
+  it('looks at paid and partially refunded payments only', async () => {
+    const h = setup([settledPayment()]);
+
+    await h.service.openForCancellation(h.ctx, input);
+
+    expect(h.tx.payment.findMany).toHaveBeenCalledWith({
+      where: {
+        requestId: 'request-1',
+        status: { in: ['paid', 'partially_refunded'] },
+      },
+      orderBy: { paidAt: 'desc' },
+      select: { id: true },
+    });
+  });
+
+  it('refunds what is left after completed refunds, not the whole payment', async () => {
+    const h = setup(
+      [settledPayment({ status: 'partially_refunded' })],
+      [
+        { amount: 200_000n, status: 'completed' },
+        { amount: 100_000n, status: 'rejected' },
+      ],
+    );
+
+    await h.service.openForCancellation(h.ctx, input);
+
+    expect(h.refundTx.create.mock.calls[0][0]).toMatchObject({
+      data: {
+        paymentId: 'payment-1',
+        cancellationId: 'cancellation-1',
+        amount: 300_000n,
+        status: 'pending_approval',
+        requestedBy: 'admin-1',
+      },
+    });
+  });
+
+  it('locks the payment before it reads the refunds that hold its balance', async () => {
+    const h = setup([settledPayment()]);
+
+    await h.service.openForCancellation(h.ctx, input);
+
+    expect(h.order).toEqual(['lock', 'refunds']);
+  });
+
+  it('opens the refund approval item and tells Finance', async () => {
+    const h = setup([settledPayment()]);
+
+    await h.service.openForCancellation(h.ctx, input);
+
+    expect(h.effects.approvalOpens).toEqual([
+      { kind: 'refund', itemId: 'refund-1' },
+    ]);
+    expect(h.effects.notify).toEqual([
+      {
+        event: 'refund.requested',
+        params: { requestCode: 'XPR-00042', amount: 500_000 },
+      },
+    ]);
+    expect(h.effects.audit[0]).toMatchObject({
+      action: 'Refund opened for cancellation',
+    });
+  });
+
+  it('opens one refund per settled payment with a balance and skips a drained one', async () => {
+    const h = setup([
+      settledPayment({ id: 'payment-1' }),
+      settledPayment({ id: 'payment-2', amount: 100_000n }),
+    ]);
+    h.refundTx.findMany
+      .mockResolvedValueOnce([{ amount: 500_000n, status: 'processing' }])
+      .mockResolvedValueOnce([]);
+
+    const opened = await h.service.openForCancellation(h.ctx, input);
+
+    expect(opened).toEqual([{ id: 'refund-1', amount: 100_000n }]);
+  });
+
+  it('refuses a request with no settled payment', async () => {
+    const h = setup([]);
+
+    await expect(
+      h.service.openForCancellation(h.ctx, input),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(h.refundTx.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses when nothing is left to refund', async () => {
+    const h = setup(
+      [settledPayment()],
+      [{ amount: 500_000n, status: 'completed' }],
+    );
+
+    await expect(
+      h.service.openForCancellation(h.ctx, input),
+    ).rejects.toMatchObject({
+      status: 409,
+      message: 'There is nothing left to refund on this payment.',
+    });
+  });
+});

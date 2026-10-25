@@ -23,6 +23,7 @@ import { AppError } from '../platform/errors/app-error';
 import { PaymentsService } from './payments.service';
 import { PaystackEventsService } from './paystack-events.service';
 import { FinanceService } from './finance.service';
+import { RefundsService } from './refunds.service';
 import {
   FinanceNoteDto,
   InitiatePaymentDto,
@@ -34,6 +35,7 @@ import {
   PayoutSecondApprovalDto,
   PayoutTransferDto,
   RefundDecisionDto,
+  RefundRequestDto,
   RejectPaymentDto,
 } from './payments.dto';
 
@@ -71,7 +73,10 @@ export class RequestPaymentsController {
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
 export class AdminPaymentsController {
-  constructor(private readonly payments: PaymentsService) {}
+  constructor(
+    private readonly payments: PaymentsService,
+    private readonly refunds: RefundsService,
+  ) {}
   @Post('requests/:id/payments/offline')
   @HttpCode(HttpStatus.CREATED)
   record(
@@ -120,6 +125,22 @@ export class AdminPaymentsController {
   ) {
     return this.payments.rejectOffline(user.id, id, dto.reason);
   }
+  @Post('payments/:id/refunds')
+  @HttpCode(HttpStatus.CREATED)
+  requestRefund(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    dto: RefundRequestDto,
+  ) {
+    return this.refunds.request(user.id, id, dto);
+  }
 }
 
 @ApiTags('Paystack webhooks')
@@ -142,12 +163,15 @@ export class PaystackWebhookController {
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
 export class AdminFinanceController {
-  constructor(private readonly finance: FinanceService) {}
+  constructor(
+    private readonly finance: FinanceService,
+    private readonly refundCommands: RefundsService,
+  ) {}
   @Get('refunds') refunds(
     @CurrentUser() user: RequestUser,
     @Query('page') page?: string,
   ) {
-    return this.finance.refunds(user.id, Math.max(1, Number(page) || 1));
+    return this.refundCommands.list(user.id, Math.max(1, Number(page) || 1));
   }
   @Post('refunds/:id/decide') decideRefund(
     @CurrentUser() user: RequestUser,
@@ -161,7 +185,7 @@ export class AdminFinanceController {
     )
     dto: RefundDecisionDto,
   ) {
-    return this.finance.decideRefund(user.id, id, dto);
+    return this.refundCommands.decide(user.id, id, dto);
   }
   @Post('refunds/:id/second-approve') secondApproveRefund(
     @CurrentUser() user: RequestUser,
@@ -175,7 +199,7 @@ export class AdminFinanceController {
     )
     dto: RefundDecisionDto,
   ) {
-    return this.finance.secondApproveRefund(user.id, id, dto);
+    return this.refundCommands.secondApprove(user.id, id, dto);
   }
   @Post('refunds/:id/transfer') transferRefund(
     @CurrentUser() user: RequestUser,
@@ -189,7 +213,7 @@ export class AdminFinanceController {
     )
     dto: OfflineTransferDto,
   ) {
-    return this.finance.recordRefundTransfer(user.id, id, dto);
+    return this.refundCommands.recordTransfer(user.id, id, dto);
   }
   @Post('refunds/:id/reconcile') reconcileRefund(
     @CurrentUser() user: RequestUser,
@@ -203,7 +227,12 @@ export class AdminFinanceController {
     )
     dto: FinanceNoteDto,
   ) {
-    return this.finance.reconcileRefund(user.id, id, dto.note);
+    return this.refundCommands.reconcile(user.id, id, dto.note);
+  }
+  @Post('refunds/:id/retry')
+  @HttpCode(HttpStatus.OK)
+  retryRefund(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.refundCommands.retry(user.id, id);
   }
   @Get('payouts') payouts(
     @CurrentUser() user: RequestUser,

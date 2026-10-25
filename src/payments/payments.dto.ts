@@ -31,10 +31,16 @@ export class PaymentNoteDto {
 export class RejectPaymentDto {
   @IsString() @MaxLength(1000) reason!: string;
 }
+// The refund rules give a blank reason its message (05 §6.4), so there is no MinLength here.
 export class RefundDecisionDto {
   @IsBoolean() approve!: boolean;
   @IsOptional() @IsInt() @Min(0) @Max(Number.MAX_SAFE_INTEGER) amount?: number;
-  @IsString() @MinLength(3) @MaxLength(1000) reason!: string;
+  @IsString() @MaxLength(1000) reason!: string;
+}
+// Kobo. Leaving the amount out asks for the whole refundable balance.
+export class RefundRequestDto {
+  @IsOptional() @IsInt() @Min(0) @Max(Number.MAX_SAFE_INTEGER) amount?: number;
+  @IsString() @MaxLength(1000) reason!: string;
 }
 export class PayoutDecisionDto {
   @IsOptional() @IsString() @MaxLength(1000) note?: string;

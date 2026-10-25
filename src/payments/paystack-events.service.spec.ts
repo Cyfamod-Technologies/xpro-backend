@@ -63,6 +63,9 @@ function build() {
     settleCharge: jest.fn().mockResolvedValue({ claimed: true }),
     quarantine: jest.fn().mockResolvedValue(undefined),
   };
+  const refunds = {
+    settleFromGateway: jest.fn().mockResolvedValue({ applied: true }),
+  };
   const registry = new TimerRegistry();
   const service = new PaystackEventsService(
     prisma as never,
@@ -70,10 +73,19 @@ function build() {
     gateway as never,
     inbox as never,
     payments as never,
-    {} as never,
+    refunds as never,
     registry,
   );
-  return { service, prisma, gateway, inbox, payments, registry, received };
+  return {
+    service,
+    prisma,
+    gateway,
+    inbox,
+    payments,
+    refunds,
+    registry,
+    received,
+  };
 }
 
 describe('PaystackEventsService.handleWebhook', () => {
@@ -250,6 +262,174 @@ describe('PaystackEventsService.handleWebhook', () => {
     await expect(
       service.handleWebhook(rawBody, signature),
     ).resolves.toMatchObject({ status: 'ignored' });
+  });
+});
+
+describe('PaystackEventsService refund events', () => {
+  const refund = {
+    id: 'refund-1',
+    amount: 500_000n,
+    status: 'processing',
+    gatewayRefundId: '77',
+  };
+  const refundEvent = (event: string, data: Record<string, unknown> = {}) =>
+    signed({ event, data: { id: 77, ...data } });
+  const withRefund = () => {
+    const harness = build();
+    harness.prisma.refund.findFirst.mockResolvedValue(refund);
+    return harness;
+  };
+
+  it('refund.processed: verifies with Paystack, then settles in one transaction with the inbox row', async () => {
+    const { service, gateway, refunds, inbox } = withRefund();
+    gateway.verifyRefund.mockResolvedValue({
+      id: '77',
+      status: 'processed',
+      amount: 500_000,
+    });
+    const { rawBody, signature } = refundEvent('refund.processed');
+
+    const result = await service.handleWebhook(rawBody, signature);
+
+    expect(result).toMatchObject({ status: 'processed', duplicate: false });
+    expect(gateway.verifyRefund).toHaveBeenCalledWith('77');
+    const [id, verified, options] = refunds.settleFromGateway.mock.calls[0] as [
+      string,
+      { id: string; status: string },
+      { actor: null; onSettled: (tx: unknown) => Promise<void> },
+    ];
+    expect(id).toBe('refund-1');
+    expect(verified).toMatchObject({ id: '77', status: 'processed' });
+    expect(options.actor).toBeNull();
+    const tx = {};
+    await options.onSettled(tx);
+    expect(inbox.markDone).toHaveBeenCalledWith(tx, expect.any(String), {
+      status: 'processed',
+    });
+  });
+
+  it('acknowledges a repeated refund.processed as a duplicate', async () => {
+    const { service, gateway, refunds } = withRefund();
+    gateway.verifyRefund.mockResolvedValue({
+      id: '77',
+      status: 'processed',
+      amount: 500_000,
+    });
+    refunds.settleFromGateway.mockResolvedValue({ applied: false });
+    const { rawBody, signature } = refundEvent('refund.processed');
+
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'processed', duplicate: true });
+  });
+
+  it.each([
+    ['refund.failed', 'failed'],
+    ['refund.needs-attention', 'needs-attention'],
+  ])(
+    '%s: verifies the failure and settles it as failed (C-11)',
+    async (event, gatewayStatus) => {
+      const { service, gateway, refunds } = withRefund();
+      gateway.verifyRefund.mockResolvedValue({
+        id: '77',
+        status: gatewayStatus,
+        amount: 500_000,
+      });
+      const { rawBody, signature } = refundEvent(event);
+
+      await expect(
+        service.handleWebhook(rawBody, signature),
+      ).resolves.toMatchObject({ status: 'processed' });
+      expect(refunds.settleFromGateway).toHaveBeenCalledWith(
+        'refund-1',
+        expect.objectContaining({ id: '77', status: gatewayStatus }),
+        expect.objectContaining({ actor: null }),
+      );
+    },
+  );
+
+  it('ignores an event whose state Paystack does not confirm', async () => {
+    const { service, gateway, refunds } = withRefund();
+    gateway.verifyRefund.mockResolvedValue({
+      id: '77',
+      status: 'processed',
+      amount: 500_000,
+    });
+    const { rawBody, signature } = refundEvent('refund.failed');
+
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'ignored' });
+    expect(refunds.settleFromGateway).not.toHaveBeenCalled();
+  });
+
+  it('ignores a refund whose verified amount differs', async () => {
+    const { service, gateway, refunds } = withRefund();
+    gateway.verifyRefund.mockResolvedValue({
+      id: '77',
+      status: 'processed',
+      amount: 1,
+    });
+    const { rawBody, signature } = refundEvent('refund.processed');
+
+    await expect(
+      service.handleWebhook(rawBody, signature),
+    ).resolves.toMatchObject({ status: 'ignored' });
+    expect(refunds.settleFromGateway).not.toHaveBeenCalled();
+  });
+
+  it('finds an in-flight refund whose gateway id was never recorded by the transaction reference', async () => {
+    const { service, prisma, gateway, refunds } = build();
+    prisma.refund.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ ...refund, gatewayRefundId: null });
+    gateway.verifyRefund.mockResolvedValue({
+      id: '77',
+      status: 'processed',
+      amount: 500_000,
+    });
+    const { rawBody, signature } = refundEvent('refund.processed', {
+      transaction_reference: 'xpro_1',
+    });
+
+    await service.handleWebhook(rawBody, signature);
+
+    expect(prisma.refund.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        status: 'processing',
+        gatewayRefundId: null,
+        payment: { reference: 'xpro_1' },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(refunds.settleFromGateway).toHaveBeenCalled();
+  });
+
+  it('does not touch the gateway for pending or processing refund events', async () => {
+    const { service, gateway, refunds } = withRefund();
+    for (const event of ['refund.pending', 'refund.processing']) {
+      const { rawBody, signature } = refundEvent(event);
+      await expect(
+        service.handleWebhook(rawBody, signature),
+      ).resolves.toMatchObject({ status: 'ignored' });
+    }
+    expect(gateway.verifyRefund).not.toHaveBeenCalled();
+    expect(refunds.settleFromGateway).not.toHaveBeenCalled();
+  });
+
+  it('lets a settlement error bubble up so the inbox retries the event', async () => {
+    const { service, gateway, refunds } = withRefund();
+    gateway.verifyRefund.mockResolvedValue({
+      id: '77',
+      status: 'processed',
+      amount: 500_000,
+    });
+    refunds.settleFromGateway.mockRejectedValue(new Error('deadlock'));
+    const { rawBody, signature } = refundEvent('refund.processed');
+
+    await expect(service.handleWebhook(rawBody, signature)).rejects.toThrow(
+      'deadlock',
+    );
   });
 });
 

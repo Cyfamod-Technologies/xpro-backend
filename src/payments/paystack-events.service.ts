@@ -9,7 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { TimerRegistry } from '../platform/timers/timer-registry';
 import { PrismaService } from '../prisma/prisma.service';
-import { RequestEventsService } from '../requests/events/request-events.service';
+import { classifyGatewayRefund } from './domain/refund-rules';
 import { verifyPaystackSignature } from './domain/webhook-signature';
 import {
   GatewayInboxService,
@@ -18,12 +18,19 @@ import {
 } from './gateway-inbox.service';
 import type { PaymentGateway } from './payment-gateway';
 import { PAYMENT_GATEWAY, PaymentsService } from './payments.service';
-import { refreshPaymentRefundStatus } from './refund-status';
+import { RefundsService } from './refunds.service';
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+
+/** Refund events that carry a final state. `refund.pending` and `refund.processing` change nothing here. */
+const REFUND_EVENTS = {
+  'refund.processed': 'processed',
+  'refund.failed': 'failed',
+  'refund.needs-attention': 'failed',
+} as const;
 
 const TRANSFER_EVENTS = [
   'transfer.success',
@@ -40,7 +47,7 @@ export class PaystackEventsService implements OnModuleInit {
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
     private readonly inbox: GatewayInboxService,
     private readonly payments: PaymentsService,
-    private readonly requestEvents: RequestEventsService,
+    private readonly refunds: RefundsService,
     private readonly registry: TimerRegistry,
   ) {}
 
@@ -77,7 +84,13 @@ export class PaystackEventsService implements OnModuleInit {
         fingerprint: digest,
         rawBodyDigest: digest,
         event: typeof payload.event === 'string' ? payload.event : 'unknown',
-        reference: typeof data.reference === 'string' ? data.reference : null,
+        // A refund event names the charged transaction as `transaction_reference`.
+        reference:
+          typeof data.reference === 'string'
+            ? data.reference
+            : typeof data.transaction_reference === 'string'
+              ? data.transaction_reference
+              : null,
         subjectId:
           typeof data.id === 'string' || typeof data.id === 'number'
             ? String(data.id)
@@ -89,7 +102,11 @@ export class PaystackEventsService implements OnModuleInit {
 
   /** Does the work for one stored event. Throws when it should be retried. */
   async process(event: InboundEvent): Promise<EventOutcome> {
-    if (event.event === 'refund.processed') return this.refundProcessed(event);
+    if (Object.hasOwn(REFUND_EVENTS, event.event))
+      return this.refundSettled(
+        event,
+        REFUND_EVENTS[event.event as keyof typeof REFUND_EVENTS],
+      );
     if (TRANSFER_EVENTS.includes(event.event) && event.reference)
       return this.transferSettled(event, event.reference);
     if (event.event === 'charge.success' && event.reference)
@@ -147,18 +164,23 @@ export class PaystackEventsService implements OnModuleInit {
     return { status: 'processed', duplicate: !result.claimed };
   }
 
-  private async refundProcessed(event: InboundEvent): Promise<EventOutcome> {
+  /**
+   * `refund.processed`, `refund.failed` and `refund.needs-attention` (05 §6.4,
+   * §8). The event only says which refund to look at: its state is verified
+   * with Paystack, and the refund, payment status, cancellation resolution and
+   * inbox row then change in one transaction (see `RefundsService`).
+   */
+  private async refundSettled(
+    event: InboundEvent,
+    expected: 'processed' | 'failed',
+  ): Promise<EventOutcome> {
     const refundId = event.subjectId ?? '';
-    const refund = refundId
-      ? await this.prisma.refund.findFirst({
-          where: { gatewayRefundId: refundId },
-        })
-      : null;
+    const refund = refundId ? await this.findRefund(refundId, event) : null;
     const verified = refund ? await this.gateway.verifyRefund(refundId) : null;
     if (
       !refund ||
       !verified ||
-      verified.status.toLowerCase() !== 'processed' ||
+      classifyGatewayRefund(verified.status) !== expected ||
       (verified.amount != null && verified.amount !== Number(refund.amount))
     )
       return {
@@ -166,20 +188,32 @@ export class PaystackEventsService implements OnModuleInit {
         reason:
           'Refund status could not be verified against an approved refund.',
       };
-    const resolved = await this.prisma.$transaction(async (tx) => {
-      await tx.refund.update({
-        where: { id: refund.id },
-        data: { status: 'completed', completedAt: new Date() },
-      });
-      await this.inbox.markDone(tx, event.fingerprint, {
-        status: 'processed',
-      });
-      await refreshPaymentRefundStatus(tx, refund.paymentId);
-      if (!refund.cancellationId) return null;
-      return this.requestEvents.onRefundsResolved(tx, refund.cancellationId);
+    const { applied } = await this.refunds.settleFromGateway(
+      refund.id,
+      { ...verified, id: refundId },
+      {
+        actor: null,
+        onSettled: (tx) =>
+          this.inbox.markDone(tx, event.fingerprint, { status: 'processed' }),
+      },
+    );
+    return { status: 'processed', duplicate: !applied };
+  }
+
+  /** The refund Paystack means: the one holding its gateway id or, if our record of the submission was lost, the unclaimed in-flight refund on that transaction. */
+  private async findRefund(refundId: string, event: InboundEvent) {
+    const byId = await this.prisma.refund.findFirst({
+      where: { gatewayRefundId: refundId },
     });
-    await resolved?.afterCommit();
-    return { status: 'processed' };
+    if (byId || !event.reference) return byId;
+    return this.prisma.refund.findFirst({
+      where: {
+        status: 'processing',
+        gatewayRefundId: null,
+        payment: { reference: event.reference },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
   private async transferSettled(

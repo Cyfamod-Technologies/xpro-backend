@@ -18,6 +18,7 @@ import { PaymentsFileAccess } from './payments-file-access';
 import { PAYMENT_GATEWAY, PaymentsService } from './payments.service';
 import { PaystackEventsService } from './paystack-events.service';
 import { FinanceService } from './finance.service';
+import { RefundsService } from './refunds.service';
 import { PaystackGateway } from './paystack.gateway';
 import { TestPaymentGateway } from './test-payment.gateway';
 
@@ -57,7 +58,8 @@ import { TestPaymentGateway } from './test-payment.gateway';
     PaystackEventsService,
     PaymentsFileAccess,
     FinanceService,
+    RefundsService,
   ],
-  exports: [PaymentsService, FinanceService],
+  exports: [PaymentsService, FinanceService, RefundsService],
 })
 export class PaymentsModule {}

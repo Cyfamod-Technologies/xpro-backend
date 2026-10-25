@@ -1,6 +1,10 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { PaymentGateway, VerifiedTransaction } from './payment-gateway';
+import {
+  GatewayRejectedError,
+  type PaymentGateway,
+  type VerifiedTransaction,
+} from './payment-gateway';
 
 type PaystackResponse<T> = { status: boolean; message: string; data: T };
 
@@ -44,6 +48,20 @@ export class PaystackGateway implements PaymentGateway {
       status: data.status,
       amount: data.amount,
     }));
+  }
+  // Unverified against the live API: Phase 12 checks that `reference` filters refunds by transaction.
+  listRefunds(transactionReference: string) {
+    return this.request<
+      Array<{ id: number | string; status: string; amount?: number }>
+    >(`/refund?reference=${encodeURIComponent(transactionReference)}`, {
+      method: 'GET',
+    }).then((rows) =>
+      rows.map((data) => ({
+        id: String(data.id),
+        status: data.status,
+        amount: data.amount,
+      })),
+    );
   }
   verifyTransfer(reference: string) {
     return this.request<{
@@ -123,10 +141,14 @@ export class PaystackGateway implements PaymentGateway {
       );
     }
     const payload = (await response.json()) as PaystackResponse<T>;
-    if (!response.ok || !payload.status)
-      throw new ServiceUnavailableException(
-        payload.message || 'Paystack could not process the request.',
-      );
+    if (!response.ok || !payload.status) {
+      const message =
+        payload.message || 'Paystack could not process the request.';
+      // A 4xx means Paystack refused the request; a 5xx leaves the outcome unknown.
+      if (response.status >= 400 && response.status < 500)
+        throw new GatewayRejectedError(message);
+      throw new ServiceUnavailableException(message);
+    }
     return payload.data;
   }
 }

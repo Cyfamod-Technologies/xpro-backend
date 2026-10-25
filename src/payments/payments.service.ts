@@ -10,7 +10,10 @@ import {
   IdempotencyService,
   hashRequest,
 } from '../platform/idempotency/idempotency.service';
-import { RequestCommandRunner } from '../requests/command-runner';
+import {
+  RequestCommandRunner,
+  type CommandContext,
+} from '../requests/command-runner';
 import { RequestEventsService } from '../requests/events/request-events.service';
 import { formatRequestId } from '../requests/domain/statuses';
 import { resolveRequestId } from '../requests/request-ref';
@@ -22,6 +25,7 @@ import {
   PENDING_ATTEMPT_WINDOW_MS,
   pendingCheckDueAt,
 } from './domain/pending-attempt';
+import { REFUND_MESSAGES, refundableBalance } from './domain/refund-rules';
 import { compareTransaction } from './domain/transaction-match';
 import type { PaymentGateway, VerifiedTransaction } from './payment-gateway';
 import { toPaymentDto } from './payment.projection';
@@ -88,35 +92,77 @@ export class PaymentsService {
     private readonly dispatcher: NotificationDispatcher,
   ) {}
 
+  /**
+   * 05 §6.4: opens the pending refund for the full refundable balance of every
+   * settled payment (`paid` or `partially_refunded`) on a request whose
+   * cancellation was approved. Each payment row is locked, so a concurrent
+   * refund cannot also take the balance. The `refund` approval item opens and
+   * Finance is told, in the caller's transaction (plan C.4, C.5).
+   */
   async openForCancellation(
-    tx: Prisma.TransactionClient,
+    ctx: CommandContext,
     input: {
-      requestId: string;
       cancellationId: string;
       requestedBy: string;
       workStarted: boolean;
-      now: Date;
     },
   ) {
-    const payment = await tx.payment.findFirst({
-      where: { requestId: input.requestId, status: 'paid' },
-      orderBy: { paidAt: 'desc' },
-    });
-    if (!payment)
-      throw conflict('A settled payment is required before opening a refund.');
-    return tx.refund.create({
-      data: {
-        paymentId: payment.id,
-        requestId: input.requestId,
-        cancellationId: input.cancellationId,
-        amount: payment.amount,
-        status: 'pending_approval',
-        reason: input.workStarted
-          ? 'Cancellation after work started; refund amount requires review.'
-          : 'Cancellation refund review.',
-        requestedBy: input.requestedBy,
+    const settled = await ctx.tx.payment.findMany({
+      where: {
+        requestId: ctx.snap.id,
+        status: { in: ['paid', 'partially_refunded'] },
       },
+      orderBy: { paidAt: 'desc' },
+      select: { id: true },
     });
+    if (!settled.length)
+      throw conflict('A settled payment is required before opening a refund.');
+    const opened: Array<{ id: string; amount: bigint }> = [];
+    for (const { id } of settled) {
+      await ctx.tx.$queryRaw(
+        Prisma.sql`SELECT id FROM payments WHERE id = ${id} FOR UPDATE`,
+      );
+      const payment = await ctx.tx.payment.findUniqueOrThrow({ where: { id } });
+      const balance = refundableBalance(
+        payment.amount,
+        await ctx.tx.refund.findMany({
+          where: { paymentId: id },
+          select: { amount: true, status: true },
+        }),
+      );
+      if (balance <= 0n) continue;
+      const refund = await ctx.tx.refund.create({
+        data: {
+          paymentId: id,
+          requestId: ctx.snap.id,
+          cancellationId: input.cancellationId,
+          amount: balance,
+          status: 'pending_approval',
+          reason: input.workStarted
+            ? 'Cancellation after work started; refund amount requires review.'
+            : 'Cancellation refund review.',
+          requestedBy: input.requestedBy,
+        },
+      });
+      ctx.audit('Refund opened for cancellation', {
+        resourceType: 'refund',
+        resourceId: refund.id,
+        changes: {
+          paymentId: id,
+          cancellationId: input.cancellationId,
+          amount: Number(balance),
+          workStarted: input.workStarted,
+        },
+      });
+      ctx.approvals.open('refund', refund.id);
+      ctx.notify('refund.requested', {
+        requestCode: ctx.snap.number,
+        amount: Number(balance),
+      });
+      opened.push({ id: refund.id, amount: balance });
+    }
+    if (!opened.length) throw conflict(REFUND_MESSAGES.nothingLeft);
+    return opened;
   }
 
   async getRequestPayments(user: RequestUser, ref: string) {
