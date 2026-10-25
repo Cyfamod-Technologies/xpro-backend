@@ -108,6 +108,8 @@ describe('validateEnv payment gateway', () => {
   const productionEnv = {
     ...baseEnv,
     NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://xpro:secret@postgres:5432/xpro',
+    REDIS_HOST: 'redis',
     SMTP_HOST: 'smtp.hostinger.com',
     SMTP_PORT: '465',
     SMTP_USER: 'noreply@xpro.example',
