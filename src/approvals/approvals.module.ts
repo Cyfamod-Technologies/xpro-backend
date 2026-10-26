@@ -6,13 +6,19 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { EscalationsController } from './escalations.controller';
 import { EscalationsService } from './escalations.service';
 import { RequestsModule } from '../requests/requests.module';
-import { ApprovalsHooks } from '../requests/approvals.hooks';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { SettingsModule } from '../platform/settings/settings.module';
 
 @Module({
-  imports: [PlatformModule, PrismaModule, RequestsModule, SettingsModule],
+  imports: [
+    PlatformModule,
+    PrismaModule,
+    RequestsModule,
+    NotificationsModule,
+    SettingsModule,
+  ],
   controllers: [ApprovalsController, EscalationsController],
-  providers: [ApprovalsService, EscalationsService, ApprovalsHooks],
+  providers: [ApprovalsService, EscalationsService],
   exports: [ApprovalsService],
 })
 export class ApprovalsModule {}
