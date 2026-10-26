@@ -15,7 +15,8 @@ export type StaffRoutingRule =
   | 'informational'
   | 'unclaimed'
   | 'pricing'
-  | 'customer_message';
+  | 'customer_message'
+  | 'super_admins';
 
 export type StaffRoutingInput = {
   requestId?: string | null;
@@ -84,6 +85,12 @@ export class StaffRoutingService {
           ...(owner ? [owner.userId] : []),
           ...(await this.holders('quote.manage', input.actorId)),
         ];
+      case 'super_admins':
+        return (
+          await this.queryMembers({
+            roles: { some: { role: { in: [StaffRole.super_admin] } } },
+          })
+        ).map((member) => member.userId);
       case 'customer_message': {
         const holders = await this.activeMembers('message.customer');
         return [
@@ -98,6 +105,13 @@ export class StaffRoutingService {
         ];
       }
     }
+  }
+
+  /** Every active member who holds the permission (super admins included), without any routing rule applied. */
+  async holderIds(permission: StaffPermission): Promise<string[]> {
+    return (await this.activeMembers(permission)).map(
+      (member) => member.userId,
+    );
   }
 
   /**

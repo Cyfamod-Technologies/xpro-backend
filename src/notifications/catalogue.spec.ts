@@ -125,6 +125,13 @@ describe('notification catalogue', () => {
       title: 'Refund needs attention',
     });
     expect(
+      renderNotification('cancellation.staff_cancelled', code),
+    ).toMatchObject({
+      audience: { kind: 'customer' },
+      mandatory: true,
+      title: 'Request cancelled by XPro',
+    });
+    expect(
       renderNotification('cancellation.completed_customer', code),
     ).toMatchObject({
       audience: { kind: 'customer' },

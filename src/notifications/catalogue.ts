@@ -10,6 +10,8 @@ export type NotificationAudience =
   | { kind: 'staff:pricing' }
   | { kind: 'staff:recipient' }
   | { kind: 'staff:holders'; permission: StaffPermission }
+  /** Every active super admin (02 §6.10: an escalation `to: super_admin`). */
+  | { kind: 'staff:super_admins' }
   /** Every active holder of the permission, super admins included, for mandatory money alerts (05 §9). */
   | { kind: 'staff:all_holders'; permission: StaffPermission }
   | { kind: 'message:participants' };
@@ -31,6 +33,13 @@ function entry<P>(definition: CatalogueEntry<P>): CatalogueEntry<P> {
 type RequestParams = { requestCode: string };
 type RequestUpdateParams = { requestCode: string; fields?: string[] };
 type RequestReasonParams = { requestCode: string; reason: string };
+type EscalationParams = RequestParams & { title: string; note: string };
+type ApprovalNoticeParams = {
+  label: string;
+  code: string;
+  title: string;
+  link: string;
+};
 type OwnershipNoticeParams = {
   recipientId: string;
   requestCode: string;
@@ -117,6 +126,53 @@ export const NOTIFICATION_CATALOGUE = {
     // new message: the spec supplies the title and note, but not a body template.
     message: ({ requestCode, note }) => `${requestCode}: ${note}`,
     link: () => '/admin/requests',
+  }),
+  'escalation.raised': entry<EscalationParams>({
+    key: 'escalation.raised',
+    audience: { kind: 'staff:gated', permission: 'request.escalation.resolve' },
+    mandatory: false,
+    title: () => 'Escalation raised',
+    // new message: the spec supplies the title and the body pattern.
+    message: ({ requestCode, title, note }) =>
+      `${requestCode} · ${title}: ${note}`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  'escalation.raised_super_admin': entry<EscalationParams>({
+    key: 'escalation.raised_super_admin',
+    audience: { kind: 'staff:super_admins' },
+    mandatory: false,
+    title: () => 'Escalation raised',
+    // new message: the spec supplies the title and the body pattern.
+    message: ({ requestCode, title, note }) =>
+      `${requestCode} · ${title}: ${note}`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  'escalation.resolved': entry<OwnershipNoticeParams>({
+    key: 'escalation.resolved',
+    audience: { kind: 'staff:recipient' },
+    mandatory: false,
+    title: () => 'Escalation resolved',
+    // new message: the spec supplies the title and says the note is included.
+    message: ({ requestCode, note }) => `${requestCode}: ${note}`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  'approval.reminder': entry<ApprovalNoticeParams & { due: string }>({
+    key: 'approval.reminder',
+    audience: { kind: 'staff:recipient' },
+    mandatory: false,
+    title: ({ label, due }) => `Reminder: ${label} due in ${due}`,
+    // new message: the spec supplies the title only.
+    message: ({ code, title }) => `${code} · ${title}`,
+    link: ({ link }) => link,
+  }),
+  'approval.overdue': entry<ApprovalNoticeParams>({
+    key: 'approval.overdue',
+    audience: { kind: 'staff:recipient' },
+    mandatory: false,
+    title: ({ label, code, title }) => `Overdue: ${label} · ${code} · ${title}`,
+    // new message: the spec supplies the title only.
+    message: ({ code, title }) => `${code} · ${title}`,
+    link: ({ link }) => link,
   }),
   'request.submitted': entry<RequestParams>({
     key: 'request.submitted',
@@ -1004,6 +1060,16 @@ export const NOTIFICATION_CATALOGUE = {
     title: () => 'Cancellation approved',
     message: ({ requestCode }) =>
       `${requestCode}: your cancellation was approved.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (04 §2.1 gives staff a direct cancel but no customer copy)
+  'cancellation.staff_cancelled': entry<RequestParams>({
+    key: 'cancellation.staff_cancelled',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Request cancelled by XPro',
+    message: ({ requestCode }) =>
+      `${requestCode}: XPro cancelled this request. Open it to see the reason.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
   // new message: not in spec (05 §9 names "Refund requested" for Finance, not its body)

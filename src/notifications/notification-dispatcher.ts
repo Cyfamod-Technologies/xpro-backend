@@ -132,6 +132,39 @@ export class NotificationDispatcher {
     );
   }
 
+  /**
+   * Notices the approvals sweeper sends to a computed audience (02 §6.11
+   * reminders and overdue escalations). They run outside any request command,
+   * and provider items belong to no request, so `requestId` may be null.
+   */
+  async dispatchDirect(
+    tx: DispatchDb,
+    event: string,
+    params: Record<string, unknown>,
+    recipientIds: readonly string[],
+    requestId: string | null,
+  ): Promise<void> {
+    if (!(event in NOTIFICATION_CATALOGUE)) {
+      throw new Error(`Unknown notification event: ${event}`);
+    }
+    const rendered = renderNotification(
+      event as NotificationEvent,
+      params as never,
+    );
+    await this.inbox.createMany(
+      tx,
+      [...new Set(recipientIds)].map((recipientId) => ({
+        recipientId,
+        event: rendered.event,
+        title: rendered.title,
+        message: rendered.message,
+        requestId,
+        link: rendered.link,
+        mandatory: rendered.mandatory,
+      })),
+    );
+  }
+
   private async recipients(
     tx: DispatchDb,
     audience: (typeof NOTIFICATION_CATALOGUE)[NotificationEvent]['audience'],
@@ -215,6 +248,18 @@ export class NotificationDispatcher {
             ownerId: context.staffOwnerId,
             actorId: context.actorId,
             permission: audience.permission,
+          })
+        ).map((recipientId) => ({
+          recipientId,
+          requestId: context.requestId,
+          link,
+        }));
+      case 'staff:super_admins':
+        return (
+          await this.staffRouting.audience('super_admins', {
+            requestId: context.requestId,
+            ownerId: context.staffOwnerId,
+            actorId: context.actorId,
           })
         ).map((recipientId) => ({
           recipientId,

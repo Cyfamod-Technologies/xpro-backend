@@ -58,6 +58,29 @@ function setup(members: Member[]) {
       mandatory?: boolean;
     }>;
   };
+  const direct = async (
+    event: string,
+    params: Record<string, unknown>,
+    recipientIds: string[],
+    requestId: string | null,
+  ) => {
+    inbox.createMany.mockClear();
+    await dispatcher.dispatchDirect(
+      {} as never,
+      event,
+      params,
+      recipientIds,
+      requestId,
+    );
+    return (inbox.createMany.mock.calls[0]?.[1] ?? []) as Array<{
+      recipientId: string;
+      event: string;
+      title: string;
+      message: string;
+      requestId: string | null;
+      link: string | null;
+    }>;
+  };
   const send = async (
     event: string,
     staffOwnerId: string | null,
@@ -73,7 +96,7 @@ function setup(members: Member[]) {
     const rows = inbox.createMany.mock.calls[0]?.[1] ?? [];
     return rows.map((row) => row.recipientId).sort();
   };
-  return { send, alert };
+  return { send, alert, direct };
 }
 
 const roster: Member[] = [
@@ -191,5 +214,109 @@ describe('NotificationDispatcher money alerts (05 §7, §8)', () => {
       'ops-1',
       'ops-2',
     ]);
+  });
+});
+
+describe('NotificationDispatcher escalations and approval notices (02 §6.10, §6.11)', () => {
+  const withAdmins: Member[] = [
+    ...roster,
+    { userId: 'admin-1', roles: [StaffRole.super_admin] },
+    { userId: 'admin-2', roles: [StaffRole.super_admin] },
+  ];
+  const escalation = {
+    requestCode: 'XPR-00042',
+    title: 'Roof repair',
+    note: 'Customer is unreachable.',
+  };
+
+  it('sends an escalation to operations to the owner when they hold request.escalation.resolve', async () => {
+    const { send } = setup(withAdmins);
+    expect(await send('escalation.raised', 'owner-ops', escalation)).toEqual([
+      'owner-ops',
+    ]);
+  });
+
+  it('sends it to every holder, super admins left out unless nobody else holds it, when unclaimed', async () => {
+    const { send } = setup(withAdmins);
+    expect(await send('escalation.raised', null, escalation)).toEqual(
+      ['owner-ops', 'ops-1', 'ops-2'].sort(),
+    );
+  });
+
+  it('sends an escalation to super_admin to every active super admin', async () => {
+    const { send } = setup(withAdmins);
+    expect(
+      await send('escalation.raised_super_admin', 'owner-ops', escalation),
+    ).toEqual(['admin-1', 'admin-2']);
+  });
+
+  it('tells the raiser when it is resolved, with the note', async () => {
+    const { send } = setup(withAdmins);
+    expect(
+      await send('escalation.resolved', null, {
+        recipientId: 'ops-1',
+        requestCode: 'XPR-00042',
+        note: 'Customer reached.',
+      }),
+    ).toEqual(['ops-1']);
+  });
+
+  it('renders the 02 §6.10 title and body', async () => {
+    const { direct } = setup(withAdmins);
+    const [row] = await direct(
+      'escalation.raised',
+      escalation,
+      ['ops-1'],
+      REQUEST_ID,
+    );
+    expect(row).toMatchObject({
+      title: 'Escalation raised',
+      message: 'XPR-00042 · Roof repair: Customer is unreachable.',
+    });
+  });
+
+  it('delivers reminder and overdue notices to a computed audience, once each', async () => {
+    const { direct } = setup(withAdmins);
+    const reminder = await direct(
+      'approval.reminder',
+      {
+        label: 'Intake review',
+        due: '2 h',
+        code: 'XPR-00042',
+        title: 'Roof repair',
+        link: '/requests/XPR-00042',
+      },
+      ['ops-1', 'ops-1', 'ops-2'],
+      REQUEST_ID,
+    );
+    expect(reminder.map((row) => row.recipientId)).toEqual(['ops-1', 'ops-2']);
+    expect(reminder[0]).toMatchObject({
+      title: 'Reminder: Intake review due in 2 h',
+      message: 'XPR-00042 · Roof repair',
+      link: '/requests/XPR-00042',
+      requestId: REQUEST_ID,
+    });
+    const overdue = await direct(
+      'approval.overdue',
+      {
+        label: 'Reliability review',
+        code: 'provider-1',
+        title: 'Pat Pro',
+        link: '/admin/approvals',
+      },
+      ['admin-1'],
+      null,
+    );
+    expect(overdue[0]).toMatchObject({
+      title: 'Overdue: Reliability review · provider-1 · Pat Pro',
+      requestId: null,
+    });
+  });
+
+  it('refuses an event that is not in the catalogue', async () => {
+    const { direct } = setup(withAdmins);
+    await expect(direct('nope', {}, ['ops-1'], null)).rejects.toThrow(
+      'Unknown notification event: nope',
+    );
   });
 });
