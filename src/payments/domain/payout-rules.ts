@@ -361,7 +361,11 @@ export function closureStateOf(rows: readonly PayoutRow[]): ClosureState {
     (row) => row.kind === 'primary' && row.status !== 'cancelled',
   );
   if (!primary.length)
-    return { state: 'blocked', reason: 'No provider payout has been created.' };
+    return {
+      state: 'blocked',
+      // new message: not in spec
+      reason: 'No provider payout has been created.',
+    };
   const unfinished = primary.filter((row) => row.status !== 'paid');
   if (!unfinished.length) return { state: 'paid' };
   const unreasoned = unfinished.find(
@@ -370,6 +374,7 @@ export function closureStateOf(rows: readonly PayoutRow[]): ClosureState {
   if (unreasoned)
     return {
       state: 'blocked',
+      // new message: not in spec (both texts)
       reason:
         unreasoned.status === 'on_hold'
           ? 'A provider payout hold needs a recorded reason.'

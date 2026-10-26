@@ -6,10 +6,14 @@ import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import { TimerKinds } from '../../platform/timers/timer-kinds';
 import type { RequestUser } from '../../common/types/request-user';
 import { FinanceService } from '../../payments/finance.service';
+import { closeEndedRequestApprovals } from '../approval-effects';
 import { RequestCommandRunner } from '../command-runner';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
+// new message: not in spec (04 §6.17 says only that financial guard errors come from 05)
+const PAYOUT_BLOCKS_CLOSURE =
+  'A provider payout must be paid or held with a reason before closure.';
 
 @Injectable()
 export class ClosureService {
@@ -47,9 +51,7 @@ export class ClosureService {
         // 04 §5.2 #36 payout rule: payout rows are not in the snapshot. Only the primary payout counts (C-18).
         const payout = await this.finance.closureState(ctx.tx, ctx.snap.id);
         if (payout.state === 'blocked')
-          throw conflict(
-            'A provider payout must be paid or held with a reason before closure.',
-          );
+          throw conflict(payout.reason ?? PAYOUT_BLOCKS_CLOSURE);
         await ctx.tx.serviceRequest.update({
           where: { id: ctx.snap.id },
           data: { status: 'closed', closedAt: ctx.now, closedBy: user.id },

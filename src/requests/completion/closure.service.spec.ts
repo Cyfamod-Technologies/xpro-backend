@@ -17,6 +17,7 @@ function setup(state: { state: string; reason?: string }) {
   const tx = {
     serviceRequest: { update: jest.fn() },
     assignment: { updateMany: jest.fn() },
+    approvalDeadline: { findMany: jest.fn().mockResolvedValue([]) },
   };
   const kit = systemCommandKit({
     tx,
@@ -59,17 +60,53 @@ describe('ClosureService.close payout guard (04 §6.17, C-18)', () => {
     expect(effects.audit[0].action).toBe('Job closed');
   });
 
-  it('refuses to close while the payout is blocked, with the 05 guard message', async () => {
-    const { service, tx } = setup({
-      state: 'blocked',
-      reason: 'No provider payout has been created.',
-    });
+  it.each([
+    ['No provider payout has been created.'],
+    ['A provider payout hold needs a recorded reason.'],
+    ['A provider payout is still pending.'],
+  ])(
+    'refuses to close while the payout is blocked, surfacing "%s"',
+    async (reason) => {
+      const { service, tx } = setup({ state: 'blocked', reason });
+
+      await expect(close(service)).rejects.toMatchObject({
+        status: 409,
+        message: reason,
+      });
+      expect(tx.serviceRequest.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('falls back to the generic closure message when no reason is given', async () => {
+    const { service } = setup({ state: 'blocked' });
 
     await expect(close(service)).rejects.toMatchObject({
       status: 409,
       message:
         'A provider payout must be paid or held with a reason before closure.',
     });
-    expect(tx.serviceRequest.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('ClosureService.close approvals (02 §6.11, plan C.5)', () => {
+  it('closes every open item for the request except the money items Finance still decides', async () => {
+    const { service, tx, effects } = setup({ state: 'paid' });
+    tx.approvalDeadline.findMany.mockResolvedValue([
+      { kind: 'ready_to_close', itemId: 'request-1' },
+      { kind: 'completion_issue', itemId: 'issue-1' },
+      { kind: 'payout', itemId: 'payout-1' },
+      { kind: 'refund', itemId: 'refund-1' },
+    ]);
+
+    await close(service);
+
+    expect(tx.approvalDeadline.findMany).toHaveBeenCalledWith({
+      where: { requestId: 'request-1', closedAt: null },
+      select: { kind: true, itemId: true },
+    });
+    expect(effects.approvalCloses).toEqual([
+      { kind: 'ready_to_close', itemId: 'request-1', reason: 'request_closed' },
+      { kind: 'completion_issue', itemId: 'issue-1', reason: 'request_closed' },
+    ]);
   });
 });
