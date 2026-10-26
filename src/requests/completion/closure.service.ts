@@ -61,6 +61,8 @@ export class ClosureService {
           data: { status: 'completed' },
         });
         ctx.timers.stop(Object.values(TimerKinds));
+        // Closing keeps only the money items Finance still has to decide (02 §6.11, plan C.5).
+        await closeEndedRequestApprovals(ctx, 'request_closed');
         ctx.audit('Job closed', { note: dto.note });
         ctx.notify('request.closed', { requestCode: ctx.snap.number });
       },

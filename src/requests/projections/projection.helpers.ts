@@ -1,6 +1,7 @@
 import type { ActorContext } from '../../platform/actor/actor.types';
 import { toActorView } from '../actor-view';
 import { allowedActions } from '../domain/allowed-actions';
+import { customerRefundStatus } from '../domain/cancellation-rules';
 import { statusLabel, type LabelValues } from '../domain/labels';
 import {
   deriveStage,

@@ -10,6 +10,7 @@ import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { RequestUser } from '../../common/types/request-user';
+import { closeOpenApprovals } from '../approval-effects';
 import { RequestCommandRunner } from '../command-runner';
 import {
   appendChangeRequest,
@@ -187,6 +188,7 @@ export class SchedulesService {
           schedule.id,
         );
         ctx.approvals.close('schedule_needed', ctx.snap.id, 'proposed');
+        await closeOpenApprovals(ctx, ['schedule_change'], 'proposed');
         ctx.audit('Schedule proposed', {
           resourceType: 'schedule',
           resourceId: schedule.id,
@@ -263,6 +265,8 @@ export class SchedulesService {
               },
             },
           });
+          // 02 §6.11: a declined slot asks schedule.manage for a new one.
+          ctx.approvals.open('schedule_change', scheduleId);
           ctx.audit('Schedule change requested', {
             resourceType: 'schedule',
             resourceId: scheduleId,
@@ -357,6 +361,7 @@ export class SchedulesService {
               data: { status: 'scheduled' },
             });
           ctx.timers.stop(['T11.reminder24h', 'T11.staff48h'], scheduleId);
+          await closeOpenApprovals(ctx, ['schedule_change'], 'confirmed');
           const reminders = [
             ['T12.reminder24h', 24 * 60 * 60_000],
             ['T12.reminder2h', 2 * 60 * 60_000],
@@ -454,6 +459,7 @@ export class SchedulesService {
             }),
           },
         });
+        ctx.approvals.open('schedule_change', schedule.id);
         ctx.audit('Reschedule requested', {
           resourceType: 'schedule',
           resourceId: schedule.id,

@@ -121,10 +121,12 @@ export class DispatchTimerHandlers {
           district: '',
         });
         if (auto) ctx.enqueueCascade('cascade');
-        else
+        else {
+          ctx.approvals.open('needs_assignment', ctx.snap.id);
           ctx.notify('request.needs_manual_assignment', {
             requestCode: ctx.snap.number,
           });
+        }
       },
     );
   }
@@ -186,6 +188,7 @@ export class DispatchTimerHandlers {
               where: { id: request.id },
               data: { needsAssignmentReason: reason },
             });
+          ctx.approvals.open('needs_assignment', request.id);
           ctx.audit('Automatic assignment needs staff', {
             changes: { reason },
           });

@@ -166,7 +166,6 @@ describe('request intake command flows', () => {
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('payload-hash') } as never,
       {} as never,
-      {} as never,
     );
     const user: RequestUser = {
       id: ownerId,
@@ -195,6 +194,8 @@ describe('request intake command flows', () => {
       'request-42',
       'clarification_answered',
     );
+    // 02 §6.11: the intake item runs again from the customer's answer.
+    expect(approvals.open).toHaveBeenCalledWith('intake', 'request-42');
     expect(notify).toHaveBeenCalledWith('request.clarification_answered', {
       requestCode: 'XPR-00042',
     });
@@ -261,7 +262,6 @@ describe('request intake command flows', () => {
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('hash') } as never,
       {} as never,
-      { close: jest.fn(), open: jest.fn() } as never,
     );
     const user: RequestUser = {
       id: 'staff-1',
@@ -381,7 +381,6 @@ describe('request intake command flows', () => {
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('hash') } as never,
       {} as never,
-      { close: jest.fn(), open: jest.fn() } as never,
     );
     const user: RequestUser = {
       id: 'staff-1',
@@ -444,6 +443,7 @@ describe('request intake command flows', () => {
     ) {
       const now = new Date('2026-10-23T10:00:00.000Z');
       const tx = {
+        approvalDeadline: { findMany: jest.fn().mockResolvedValue([]) },
         requestMessage: { create: jest.fn() },
         serviceRequest: {
           update: jest.fn(),
@@ -520,7 +520,6 @@ describe('request intake command flows', () => {
         runner as never,
         { hashRequest: jest.fn().mockReturnValue('hash') } as never,
         {} as never,
-        {} as never,
       );
       return { service, context, tx, runner };
     }
@@ -579,6 +578,83 @@ describe('request intake command flows', () => {
         ['intake', 'request-42', 'rejected'],
         ['clarification_overdue', 'request-42', 'rejected'],
         ['unclaimed', 'request-42', 'rejected'],
+      ]);
+    });
+
+    it('opens needs_assignment when intake is approved in manual mode, and nothing in auto mode (A-20)', async () => {
+      const review = (mode: 'auto' | 'manual') => {
+        const kit = build(staffActor(['request.review']), {
+          settings: { 'assignment.modeByService': { Construction: mode } },
+        });
+        return kit.service
+          .review(
+            staffUser,
+            'XPR-00042',
+            { offerBrief: 'A concise brief for verified providers.' },
+            1,
+            '/requests/XPR-00042/review',
+          )
+          .then(() => kit.context);
+      };
+
+      const manual = await review('manual');
+      expect(manual.approvals.open).toHaveBeenCalledWith(
+        'needs_assignment',
+        'request-42',
+      );
+      expect(manual.enqueueCascade).not.toHaveBeenCalled();
+
+      const auto = await review('auto');
+      expect(auto.approvals.open).not.toHaveBeenCalled();
+      expect(auto.enqueueCascade).toHaveBeenCalledWith('intake_approved');
+    });
+
+    it('opens the intake and unclaimed items when a request is submitted (A-20)', async () => {
+      const context = {
+        snap: { id: 'request-42', number: 'XPR-00042' },
+        tx: {},
+        now: new Date('2026-10-23T10:00:00.000Z'),
+        approvals: { open: jest.fn(), close: jest.fn() },
+        notify: jest.fn(),
+        audit: jest.fn(),
+      };
+      const runner = {
+        create: jest.fn(
+          async (
+            _options: unknown,
+            _createRow: unknown,
+            command: (ctx: unknown) => Promise<unknown>,
+          ) => {
+            await command(context);
+            return { status: 201, body: {} as never, etag: 'W/"1"' };
+          },
+        ),
+      };
+      const service = new IntakeService(
+        {
+          resolve: jest.fn().mockResolvedValue({
+            userId: 'customer-1',
+            kind: 'customer',
+            displayName: 'Customer',
+            platformRoles: ['customer'],
+            accountActive: true,
+          }),
+        } as never,
+        runner as never,
+        { hashRequest: jest.fn().mockReturnValue('hash') } as never,
+        {} as never,
+      );
+
+      await service.create(
+        { ...staffUser, id: 'customer-1' },
+        {} as never,
+        'key-1',
+        '/requests',
+      );
+
+      expect(context.approvals.open.mock.calls).toEqual([
+        ['intake', 'request-42'],
+        ['unclaimed', 'request-42'],
       ]);
     });
 

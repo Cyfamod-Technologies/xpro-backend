@@ -31,7 +31,7 @@ import type {
 } from './dto/request-intake.dto';
 import { effectiveDates, jsonObject } from './projections/projection.helpers';
 import { REQUEST_INCLUDE, type LoadedRequest } from './snapshot.loader';
-import { ApprovalsHooks } from './approvals.hooks';
+import { closeEndedRequestApprovals } from './approval-effects';
 import { REQUEST_ENTITY } from '../uploads/entity-types';
 import type {
   RequestClarifyDto,
@@ -74,7 +74,6 @@ export class IntakeService {
     private readonly runner: RequestCommandRunner,
     private readonly idempotency: IdempotencyService,
     private readonly uploads: UploadsService,
-    private readonly approvals: ApprovalsHooks,
   ) {}
 
   async create(
@@ -143,7 +142,7 @@ export class IntakeService {
 
         return row.id;
       },
-      async (context) => {
+      (context) => {
         context.audit('Request submitted', {
           flags: warning ? ['possible_duplicate'] : [],
           changes: duplicateRef
@@ -153,13 +152,13 @@ export class IntakeService {
         const requestCode = context.snap.number;
         context.notify('request.received', { requestCode });
         context.notify('request.submitted', { requestCode });
-        // The 02 approval queue owns these deadlines. WP-9 installs the hook that creates them.
-        await this.approvals.onSubmitted(
-          context.tx,
-          context.snap.id,
-          context.now,
-        );
-        return { status: 201, ...(warning ? { warning } : {}) };
+        // 02 §6.11: the intake review and the unclaimed deadline both start at submission.
+        context.approvals.open('intake', context.snap.id);
+        context.approvals.open('unclaimed', context.snap.id);
+        return Promise.resolve({
+          status: 201,
+          ...(warning ? { warning } : {}),
+        });
       },
     );
     return result;
@@ -373,6 +372,8 @@ export class IntakeService {
             where: { id: row.id },
             data: { needsAssignmentReason: 'edited' },
           });
+        if (rerun && settingsMode === 'manual')
+          context.approvals.open('needs_assignment', row.id);
 
         if (
           changedFields.length === 0 &&
@@ -419,6 +420,8 @@ export class IntakeService {
             row.id,
             'clarification_answered',
           );
+          // 02 §6.11: the intake item runs again from the customer's answer.
+          context.approvals.open('intake', row.id);
           context.audit('Clarification answered');
           context.notify('request.clarification_answered', {
             requestCode: context.snap.number,
@@ -629,10 +632,12 @@ export class IntakeService {
         context.approvals.close('clarification_overdue', row.id, 'approved');
         context.timers.stop(T6_TIMERS);
         if (mode === 'auto') context.enqueueCascade('intake_approved');
-        else
+        else {
+          context.approvals.open('needs_assignment', row.id);
           context.notify('request.needs_manual_assignment', {
             requestCode: context.snap.number,
           });
+        }
         context.audit('Intake approved', { note: offerBrief });
         context.notify('request.approved', {
           requestCode: context.snap.number,
@@ -746,6 +751,7 @@ export class IntakeService {
         context.timers.stop(T6_TIMERS);
         for (const kind of INTAKE_APPROVAL_KINDS)
           context.approvals.close(kind, context.snap.id, 'cancelled');
+        await closeEndedRequestApprovals(context, 'cancelled');
         context.audit('Request cancelled', {
           note,
           changes: { reasonCode: 'customer_changed_mind' },

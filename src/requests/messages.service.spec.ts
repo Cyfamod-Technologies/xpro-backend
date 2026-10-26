@@ -181,12 +181,15 @@ describe('MessagesService.send', () => {
     platformRoles: ['provider', 'customer'],
   };
 
-  function build(uploads: Array<{ id: string; size: number }>) {
+  function build(
+    uploads: Array<{ id: string; size: number }>,
+    intakeState = 'pending',
+  ) {
     const tx = {
       serviceRequest: {
         findUnique: jest.fn().mockResolvedValue({
           ownerId: 'customer-1',
-          intakeState: 'pending',
+          intakeState,
           number: 42,
           assignments: [],
         }),
@@ -207,7 +210,7 @@ describe('MessagesService.send', () => {
       audit: jest.fn(),
       notify: jest.fn(),
       timers: { stop: jest.fn() },
-      approvals: { close: jest.fn() },
+      approvals: { open: jest.fn(), close: jest.fn() },
     };
     const runner = {
       run: jest.fn(
@@ -226,7 +229,7 @@ describe('MessagesService.send', () => {
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('hash') } as never,
     );
-    return { service, tx, runner };
+    return { service, tx, runner, context };
   }
   const user = { id: 'customer-1' } as never;
 
@@ -305,5 +308,36 @@ describe('MessagesService.send', () => {
     );
 
     expect(runner.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('reopens the intake item when the customer answers a clarification by message (02 §6.11)', async () => {
+    const { service, context } = build([], 'clarification');
+
+    await service.send(
+      user,
+      'XPR-00042',
+      { channel: 'customer', text: 'The access code is 4421.' },
+      '/requests/XPR-00042/messages',
+    );
+
+    expect(context.approvals.close).toHaveBeenCalledWith(
+      'clarification_overdue',
+      'request-1',
+      'clarification_answered',
+    );
+    expect(context.approvals.open).toHaveBeenCalledWith('intake', 'request-1');
+  });
+
+  it('opens nothing for an ordinary message', async () => {
+    const { service, context } = build([]);
+
+    await service.send(
+      user,
+      'XPR-00042',
+      { channel: 'customer', text: 'Thanks.' },
+      '/requests/XPR-00042/messages',
+    );
+
+    expect(context.approvals.open).not.toHaveBeenCalled();
   });
 });

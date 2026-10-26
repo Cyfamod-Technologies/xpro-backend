@@ -13,6 +13,7 @@ import { TimerKinds } from '../../platform/timers/timer-kinds';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { StaffPermission } from '../../staff/staff-permissions';
 import type { RequestUser } from '../../common/types/request-user';
+import { closeOpenApprovals } from '../approval-effects';
 import { RequestCommandRunner, type CommandContext } from '../command-runner';
 import { confirmedAssignmentIds } from '../domain/quote-access';
 import { quoteItemsTotal } from '../domain/quote-items';
@@ -156,6 +157,12 @@ export class PricingService {
           },
         });
         ctx.timers.stop(['T7.reminder24h', 'T7.stall48h'], assignment.id);
+        // 02 §6.11: Pricing builds the quote until one is published.
+        if (
+          !ctx.snap.latestSentQuote &&
+          !ctx.snap.quotes.some((quote) => quote.status === 'accepted')
+        )
+          ctx.approvals.open('quote_build', ctx.snap.id);
         ctx.audit('Provider pricing submitted', {
           resourceType: 'contribution',
           note: dto.note,
@@ -301,12 +308,14 @@ export class PricingService {
             },
           });
         }
-        if (clearedApproval)
+        if (clearedApproval) {
+          ctx.approvals.close('quote_approval', row.id, 'edited');
           ctx.audit('Quote approval request cleared after edit', {
             resourceType: 'quote',
             resourceId: row.id,
             changes: { version: row.version, revision: row.revision },
           });
+        }
         ctx.audit('Quote draft saved', {
           resourceType: 'quote',
           resourceId: row.id,
@@ -449,6 +458,8 @@ export class PricingService {
             returnedNote: dto.note.trim(),
           },
         });
+        ctx.approvals.close('quote_approval', quoteId, 'returned');
+        ctx.approvals.open('quote_build', ctx.snap.id);
         ctx.audit('Quote returned', {
           resourceType: 'quote',
           resourceId: quoteId,
@@ -564,6 +575,7 @@ export class PricingService {
             data: { status: 'matched' },
           });
           stopValidityTimers();
+          ctx.approvals.open('quote_followup', quote.id);
           ctx.audit('Quote revision requested', {
             resourceType: 'quote',
             resourceId: quote.id,
@@ -607,6 +619,7 @@ export class PricingService {
             new Date(ctx.now.getTime() + 48 * 60 * 60_000),
             cancellation.id,
           );
+          ctx.approvals.open('cancellation', cancellation.id);
           ctx.audit('Quote declined', {
             resourceType: 'quote',
             resourceId: quote.id,
@@ -771,6 +784,8 @@ export class PricingService {
           customerNote: dto.customerNote?.trim() || null,
         },
       });
+      ctx.approvals.close('quote_build', ctx.snap.id, 'approval_requested');
+      ctx.approvals.open('quote_approval', quote.id);
       ctx.audit('Quote approval requested', {
         resourceType: 'quote',
         resourceId: quote.id,
@@ -824,6 +839,18 @@ export class PricingService {
       quote.id,
     );
     ctx.timers.start('T8.expire', validUntil, quote.id);
+    ctx.approvals.close('quote_build', ctx.snap.id, 'published');
+    ctx.approvals.close(
+      'quote_approval',
+      quote.id,
+      approved ? 'approved' : 'published',
+    );
+    // A published quote answers the customer's revision, the expiry and the lapsed payment (02 §6.11).
+    await closeOpenApprovals(
+      ctx,
+      ['quote_followup', 'quote_expired', 'payment_lapsed'],
+      'quote_reissued',
+    );
     ctx.notify('quote.ready', {
       requestCode: ctx.snap.number,
       note: dto.customerNote,

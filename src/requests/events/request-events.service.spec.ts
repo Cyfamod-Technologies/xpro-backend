@@ -491,6 +491,9 @@ describe('RequestEventsService provider events', () => {
     expect(effects.notify.map((entry) => entry.event)).toEqual([
       'request.needs_manual_assignment',
     ]);
+    expect(effects.approvalOpens).toEqual([
+      { kind: 'needs_assignment', itemId: 'request-1' },
+    ]);
     expect(effects.cascades).toEqual([]);
   });
 

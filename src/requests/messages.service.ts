@@ -348,6 +348,8 @@ export class MessagesService {
             context.snap.id,
             'clarification_answered',
           );
+          // 02 §6.11: the intake item runs again from the customer's answer.
+          context.approvals.open('intake', context.snap.id);
           context.audit('Clarification answered');
           context.notify('request.clarification_answered', {
             requestCode: context.snap.number,

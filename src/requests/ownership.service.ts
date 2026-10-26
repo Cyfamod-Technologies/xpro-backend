@@ -76,6 +76,7 @@ export class OwnershipService {
           },
         });
         if (result.count !== 1) throw ownerChanged();
+        ctx.approvals.close('unclaimed', row.id, 'claimed');
         ctx.audit('request.claimed', {
           changes: {
             before: { staffOwnerId: null },
@@ -112,6 +113,8 @@ export class OwnershipService {
         const row = await requestRow(ctx.tx, ctx.snap.id);
         const beforeOwnerId = row.staffOwnerId;
         await this.changeOwner(ctx.tx, row, null, ctx.now);
+        // 02 §6.6: the unclaimed deadline starts again at release.
+        ctx.approvals.open('unclaimed', row.id);
         await internalNote(ctx.tx, row.id, user.id, `Released: ${note}`);
         ctx.audit('request.released', {
           note,
@@ -208,6 +211,7 @@ export class OwnershipService {
         const target = await eligibleTarget(ctx.tx, dto.staffId);
         const previousOwnerId = row.staffOwnerId;
         await this.changeOwner(ctx.tx, row, target.userId, ctx.now);
+        ctx.approvals.close('unclaimed', row.id, 'reassigned');
         await internalNote(
           ctx.tx,
           row.id,

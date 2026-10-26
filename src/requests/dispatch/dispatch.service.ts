@@ -233,6 +233,7 @@ export class DispatchService {
             },
           });
           ctx.timers.stop('T3.review', assignment.id);
+          ctx.approvals.close('assignment', assignment.id, 'rejected');
           ctx.audit('Assignment rejected', {
             resourceType: 'assignment',
             resourceId: assignment.id,
@@ -249,10 +250,12 @@ export class DispatchService {
             ctx.snap.status === 'under_review'
           )
             ctx.enqueueCascade('cascade');
-          else
+          else {
+            ctx.approvals.open('needs_assignment', ctx.snap.id);
             ctx.notify('request.needs_manual_assignment', {
               requestCode: ctx.snap.number,
             });
+          }
           return;
         }
         const requestRow = await ctx.tx.serviceRequest.findUnique({
@@ -325,6 +328,11 @@ export class DispatchService {
           data: { status: nextStatus, needsAssignmentReason: null },
         });
         ctx.timers.stop('T3.review', assignment.id);
+        ctx.approvals.close('assignment', assignment.id, 'approved');
+        ctx.approvals.close('needs_assignment', ctx.snap.id, 'assigned');
+        // 02 §6.11: a paid request waits for a schedule as soon as the new provider is confirmed.
+        if (nextStatus === 'ready_to_schedule')
+          ctx.approvals.open('schedule_needed', ctx.snap.id);
         if (!acceptedQuote) {
           const hour = 60 * 60 * 1000;
           ctx.timers.start(
@@ -813,6 +821,7 @@ export class DispatchService {
           assignment.id,
         );
         ctx.timers.start('T1.expire', expiry, assignment.id);
+        ctx.approvals.close('needs_assignment', ctx.snap.id, 'offered');
         ctx.audit('Assignment offered', {
           resourceType: 'assignment',
           resourceId: assignment.id,
@@ -975,6 +984,8 @@ export class DispatchService {
           ),
           assignment.id,
         );
+        // 02 §6.11: the provider-acceptance item runs from the provider's reply.
+        ctx.approvals.open('assignment', assignment.id);
         ctx.audit('Provider accepted assignment', {
           resourceType: 'assignment',
           resourceId: assignment.id,

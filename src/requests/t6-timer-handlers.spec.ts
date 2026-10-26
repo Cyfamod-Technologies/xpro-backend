@@ -86,6 +86,7 @@ describe('T6 clarification timer handlers', () => {
     expect(effects.approvalCloses.map(({ kind }) => kind)).toEqual([
       'intake',
       'clarification_overdue',
+      'unclaimed',
     ]);
   });
 

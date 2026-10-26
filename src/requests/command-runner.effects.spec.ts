@@ -576,3 +576,67 @@ describe('RequestCommandRunner guard enforcement', () => {
     expect(command).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('RequestCommandRunner auto-claim (02 §6.5)', () => {
+  const operations: ActorContext = {
+    userId: 'staff-1',
+    kind: 'staff',
+    displayName: 'Ops',
+    platformRoles: ['staff'],
+    accountActive: true,
+    staff: {
+      status: 'active',
+      roles: ['operations'],
+      permissions: new Set(['request.cancel'] as const),
+      canOwn: true,
+      isSuperAdmin: false,
+      permVersion: 1,
+    },
+  };
+
+  function withClaim() {
+    const kit = setup();
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    Object.assign(kit.tx.serviceRequest, { updateMany });
+    Object.assign(kit.tx.auditLog, { create: jest.fn() });
+    return { ...kit, updateMany };
+  }
+
+  it('claims for the actor and closes the unclaimed item', async () => {
+    const { run, calls, updateMany } = withClaim();
+
+    await run(() => Promise.resolve(), {
+      actor: operations,
+      command: 'request.review',
+      autoClaim: true,
+    } as never);
+
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ staffOwnerId: 'staff-1' }) as unknown,
+      }),
+    );
+    expect(calls).toContain('close:unclaimed:request-1');
+  });
+
+  it('claims on a cancellation rejection but not on an approval', async () => {
+    const reject = withClaim();
+    await reject.run(() => Promise.resolve(), {
+      actor: operations,
+      command: 'cancellation.decide',
+      input: { approve: false, note: 'Work has started.' },
+      autoClaim: true,
+    } as never);
+    expect(reject.updateMany).toHaveBeenCalledTimes(1);
+
+    const approve = withClaim();
+    await approve.run(() => Promise.resolve(), {
+      actor: operations,
+      command: 'cancellation.decide',
+      input: { approve: true },
+      autoClaim: true,
+    } as never);
+    expect(approve.updateMany).not.toHaveBeenCalled();
+    expect(approve.calls).not.toContain('close:unclaimed:request-1');
+  });
+});

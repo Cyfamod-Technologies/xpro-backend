@@ -110,6 +110,7 @@ export class T6TimerHandlers {
         ctx.timers.stop(T6_TIMERS);
         ctx.approvals.close('intake', ctx.snap.id, 'cancelled');
         ctx.approvals.close('clarification_overdue', ctx.snap.id, 'cancelled');
+        ctx.approvals.close('unclaimed', ctx.snap.id, 'cancelled');
       },
     );
   }

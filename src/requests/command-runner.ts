@@ -550,6 +550,7 @@ export class RequestCommandRunner {
         options.command,
         loaded.row.staffOwnerId === null,
         isOpenRequestStatus(loaded.row.status),
+        options.input,
       )
     ) {
       await this.autoClaim(tx, loaded.row, actor, now, options.command);
@@ -736,6 +737,13 @@ export class RequestCommandRunner {
       },
     });
     if (claimed.count !== 1) return;
+    await this.approvalsHooks.close(
+      tx,
+      'unclaimed',
+      row.id,
+      now,
+      'auto_claimed',
+    );
 
     await tx.auditLog.create({
       data: {

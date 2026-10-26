@@ -144,6 +144,9 @@ describe('T1 and T3 dispatch timer handlers', () => {
         'assignment.expired',
         'request.needs_manual_assignment',
       ]);
+      expect(effects.approvalOpens).toEqual([
+        { kind: 'needs_assignment', itemId: 'request-1' },
+      ]);
       expect(effects.cascades).toEqual([]);
     });
 
@@ -346,7 +349,7 @@ describe('dispatch.cascade handler', () => {
 
   it('sets limit_reached in auto mode once the attempts are used', async () => {
     const tx = cascadeTx({ autoAttempts: 3 });
-    const { fire } = setup({
+    const { fire, effects } = setup({
       tx,
       settings: { 'assignment.maxAutoAttempts': 3 },
     });
@@ -357,6 +360,9 @@ describe('dispatch.cascade handler', () => {
       where: { id: 'request-1' },
       data: { needsAssignmentReason: 'limit_reached' },
     });
+    expect(effects.approvalOpens).toEqual([
+      { kind: 'needs_assignment', itemId: 'request-1' },
+    ]);
   });
 });
 

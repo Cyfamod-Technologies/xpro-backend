@@ -61,6 +61,12 @@ function harness(options: {
     notify: [] as Array<{ event: string; params: Record<string, unknown> }>,
     timerStarts: [] as Array<{ kind: string; dueAt: Date; refId?: string }>,
     timerStops: [] as Array<{ kind: unknown; refId?: string }>,
+    approvalOpens: [] as Array<{ kind: string; itemId: string }>,
+    approvalCloses: [] as Array<{
+      kind: string;
+      itemId: string;
+      reason?: string;
+    }>,
   };
   const tx: Tx = {
     quote: {
@@ -75,6 +81,7 @@ function harness(options: {
     assignment: { findFirst: jest.fn().mockResolvedValue({ id: 'assign-1' }) },
     contribution: { findFirst: jest.fn().mockResolvedValue({ id: 'cost-1' }) },
     staffMember: { findMany: jest.fn().mockResolvedValue([]) },
+    approvalDeadline: { findMany: jest.fn().mockResolvedValue([]) },
     ...options.tx,
   };
   const ctx = {
@@ -99,7 +106,12 @@ function harness(options: {
       stop: (kind: unknown, refId?: string) =>
         effects.timerStops.push({ kind, refId }),
     },
-    approvals: { open: jest.fn(), close: jest.fn() },
+    approvals: {
+      open: (kind: string, itemId: string) =>
+        effects.approvalOpens.push({ kind, itemId }),
+      close: (kind: string, itemId: string, reason?: string) =>
+        effects.approvalCloses.push({ kind, itemId, reason }),
+    },
   } as unknown as CommandContext;
   const runner = {
     run: jest.fn(
@@ -264,6 +276,10 @@ describe('quote.respond', () => {
         'quote.changes_requested_provider',
       ]);
       expect(tx.cancellation.create).not.toHaveBeenCalled();
+      // 02 §6.11: Pricing revises the quote from the customer's response.
+      expect(effects.approvalOpens).toEqual([
+        { kind: 'quote_followup', itemId: 'quote-1' },
+      ]);
     });
   });
 
@@ -308,6 +324,9 @@ describe('quote.respond', () => {
       expect(effects.audit.map(({ action }) => action)).toEqual([
         'Quote declined',
         'Cancellation requested',
+      ]);
+      expect(effects.approvalOpens).toEqual([
+        { kind: 'cancellation', itemId: 'cancellation-1' },
       ]);
     });
   });
@@ -416,6 +435,16 @@ describe('sign-off (B-15, B-16, B-17, B-43)', () => {
       expect(effects.notify.map(({ event }) => event)).toEqual([
         'quote.approval_needed',
       ]);
+      expect(effects.approvalOpens).toEqual([
+        { kind: 'quote_approval', itemId: row.id },
+      ]);
+      expect(effects.approvalCloses).toEqual([
+        {
+          kind: 'quote_build',
+          itemId: 'request-1',
+          reason: 'approval_requested',
+        },
+      ]);
     });
 
     it('holds a quote the approver edited last (B-16)', async () => {
@@ -445,6 +474,51 @@ describe('sign-off (B-15, B-16, B-17, B-43)', () => {
       expect(effects.audit.map(({ action }) => action)).toEqual([
         'Quote published',
       ]);
+      expect(effects.approvalCloses).toEqual([
+        { kind: 'quote_build', itemId: 'request-1', reason: 'published' },
+        {
+          kind: 'quote_approval',
+          itemId: expect.any(String) as string,
+          reason: 'published',
+        },
+      ]);
+    });
+
+    it('closes the revision, expiry and lapsed-payment items of the quotes it replaces', async () => {
+      const found = jest.fn().mockResolvedValue([
+        { kind: 'quote_followup', itemId: 'q-old' },
+        { kind: 'payment_lapsed', itemId: 'q-older' },
+      ]);
+      const tx = Object.assign(quoteTx(draft()), {
+        approvalDeadline: { findMany: found },
+      });
+      const { service, effects } = harness({
+        actor: actor('staff', {
+          userId: 'staff-2',
+          permissions: ['quote.manage'],
+        }),
+        tx,
+      });
+
+      await publish(service, 'staff-2');
+
+      expect(found).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            kind: { in: ['quote_followup', 'quote_expired', 'payment_lapsed'] },
+          }) as unknown,
+        }),
+      );
+      expect(effects.approvalCloses).toEqual(
+        expect.arrayContaining([
+          { kind: 'quote_followup', itemId: 'q-old', reason: 'quote_reissued' },
+          {
+            kind: 'payment_lapsed',
+            itemId: 'q-older',
+            reason: 'quote_reissued',
+          },
+        ]),
+      );
     });
 
     it('publishes directly below the threshold or with the rule off', async () => {
@@ -668,6 +742,9 @@ describe('sign-off (B-15, B-16, B-17, B-43)', () => {
       expect(effects.audit.map(({ action }) => action)).toEqual([
         'Quote approval request cleared after edit',
         'Quote draft saved',
+      ]);
+      expect(effects.approvalCloses).toEqual([
+        { kind: 'quote_approval', itemId: row.id, reason: 'edited' },
       ]);
     });
 

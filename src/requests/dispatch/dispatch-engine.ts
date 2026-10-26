@@ -125,6 +125,7 @@ export async function runAutoDispatch(
       autoAttempts: input.attemptsBefore,
     },
   });
+  ctx.approvals.open('needs_assignment', request.id);
   ctx.audit('Automatic assignment needs staff', {
     note: input.note,
     changes: { reason: 'no_eligible', runId: run.id },
@@ -182,6 +183,7 @@ async function makeOffer(
     assignment.id,
   );
   ctx.timers.start('T1.expire', expiry, assignment.id);
+  ctx.approvals.close('needs_assignment', input.request.id, 'offered');
   ctx.audit('Assignment offered', {
     resourceType: 'assignment',
     resourceId: assignment.id,

@@ -173,6 +173,9 @@ describe('DispatchService.offer (04 §6.6 manual offer)', () => {
     expect(effects.audit.map(({ action }) => action)).toEqual([
       'Assignment offered',
     ]);
+    expect(effects.approvalCloses).toEqual([
+      { kind: 'needs_assignment', itemId: 'request-1', reason: 'offered' },
+    ]);
     expect(effects.notify[0]).toMatchObject({
       event: 'assignment.offered',
       params: {
@@ -464,6 +467,9 @@ describe('DispatchService.autoAssign (staff)', () => {
       },
     });
     expect(effects.audit[0].action).toBe('Automatic assignment needs staff');
+    expect(effects.approvalOpens).toEqual([
+      { kind: 'needs_assignment', itemId: 'request-1' },
+    ]);
   });
 });
 
@@ -584,6 +590,10 @@ describe('DispatchService.review (04 §6.9)', () => {
         },
       });
       expect(effects.timerStops).toEqual([{ kind: 'T3.review', refId: 'a1' }]);
+      // The provider-acceptance item closes; the cascade or staff notice decides the next item.
+      expect(effects.approvalCloses).toEqual([
+        { kind: 'assignment', itemId: 'a1', reason: 'rejected' },
+      ]);
     });
   });
 
@@ -820,6 +830,11 @@ describe('DispatchService.review (04 §6.9)', () => {
         action: 'Assignment approved',
         data: { note: 'Looks right.' },
       });
+      expect(effects.approvalCloses).toEqual([
+        { kind: 'assignment', itemId: 'a1', reason: 'approved' },
+        { kind: 'needs_assignment', itemId: 'request-1', reason: 'assigned' },
+      ]);
+      expect(effects.approvalOpens).toEqual([]);
     });
 
     it('falls back to the registry defaults for T7', async () => {
@@ -884,6 +899,20 @@ describe('DispatchService.respond', () => {
       'VALIDATION_ERROR',
       'Your profile must be approved and available to accept work.',
     );
+  });
+
+  it('opens the provider-acceptance item from the provider’s reply', async () => {
+    const { service, effects } = build({
+      actor: providerActor,
+      tx: respondTx({}),
+      settings: { 'calendar.holidays': [] },
+    });
+
+    await accept(service);
+
+    expect(effects.approvalOpens).toEqual([
+      { kind: 'assignment', itemId: 'a1' },
+    ]);
   });
 
   it('starts T3 four working hours after the response, not four calendar hours', async () => {

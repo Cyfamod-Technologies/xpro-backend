@@ -480,10 +480,12 @@ export class RequestEventsService {
               });
               // DispatchTrigger has no provider_standing_changed value, so the run records a plain cascade.
               if (auto) ctx.enqueueCascade('cascade');
-              else
+              else {
+                ctx.approvals.open('needs_assignment', ctx.snap.id);
                 ctx.notify('request.needs_manual_assignment', {
                   requestCode: ctx.snap.number,
                 });
+              }
             }
             ctx.audit(auditAction, { changes: { providerId, reason } });
           },
