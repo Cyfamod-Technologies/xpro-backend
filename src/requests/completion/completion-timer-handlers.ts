@@ -40,10 +40,12 @@ export class CompletionTimerHandlers {
       'timer.T17.autoConfirm',
       timer.requestId,
       async (ctx) => {
+        // 04 §7: only while the report still awaits the customer, with no open issue, hold or pending cancellation.
         if (
           ctx.snap.status !== 'completion_pending' ||
           ctx.snap.hold ||
-          ctx.snap.openIssues.length
+          ctx.snap.openIssues.length ||
+          ctx.snap.pendingCancellation
         )
           return { changed: false };
         const request = await ctx.tx.serviceRequest.findUnique({
@@ -94,7 +96,8 @@ export class CompletionTimerHandlers {
           'T17.reminder48h',
           'T17.autoConfirm',
         ]);
-        ctx.approvals.open('ready_to_close', ctx.snap.id);
+        // T21 opens ready_to_close when the defects window ends, not at confirmation.
+        ctx.timers.start('T21.defectsEnd', endsAt);
         ctx.audit('Completion auto-confirmed', {
           changes: { assignmentId: assignment.id, defectsWindowEndsAt: endsAt },
         });

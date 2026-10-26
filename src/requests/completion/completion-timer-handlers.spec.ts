@@ -126,6 +126,15 @@ describe('T17 completion timers', () => {
         'T17.reminder48h',
         'T17.autoConfirm',
       ]);
+      expect(effects.timerStarts).toEqual([
+        {
+          kind: 'T21.defectsEnd',
+          dueAt: new Date(now.getTime() + 7 * day),
+          refId: undefined,
+          payload: undefined,
+        },
+      ]);
+      expect(effects.approvalOpens).toEqual([]);
       expect(effects.audit[0].action).toBe('Completion auto-confirmed');
       expect(effects.notify[0].event).toBe('completion.auto_confirmed');
     });
@@ -147,6 +156,16 @@ describe('T17 completion timers', () => {
         'the deadline has not passed',
         { status: 'completion_pending' },
         { ...due, confirmDueAt: new Date(now.getTime() + day) },
+        'a-1',
+      ],
+      [
+        'a cancellation request is pending',
+        {
+          status: 'completion_pending',
+          pendingCancellation: true,
+          pendingCancellationInfo: { id: 'c-1', status: 'pending' },
+        },
+        due,
         'a-1',
       ],
       [
@@ -178,6 +197,8 @@ describe('T17 completion timers', () => {
       expect(finance.createPrimary).not.toHaveBeenCalled();
       expect(effects.notify).toEqual([]);
       expect(effects.timerStops).toEqual([]);
+      expect(effects.timerStarts).toEqual([]);
+      expect(effects.approvalOpens).toEqual([]);
     });
   });
 
