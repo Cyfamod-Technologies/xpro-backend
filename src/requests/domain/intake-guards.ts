@@ -96,5 +96,4 @@ export const INTAKE_GUARDS = {
   'request.clarify': canClarify,
   'request.review': canReview,
   'request.reject': canReject,
-  'request.cancel': canFreeCancel,
 } satisfies Record<string, DomainGuard<unknown>>;

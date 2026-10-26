@@ -644,4 +644,41 @@ describe('request role projections', () => {
         expect(masked.quote).not.toHaveProperty(key);
     });
   });
+  describe('FX-3.11 cancellations[].refundStatus', () => {
+    const cancellation = (id: string, refunds: string[]) =>
+      ({
+        id,
+        status: 'approved',
+        reasonCode: 'duplicate',
+        note: 'Duplicate request',
+        createdAt: now,
+        refunds: refunds.map((status) => ({ status })),
+      }) as never;
+
+    it('is null for a cancellation without refunds', () => {
+      const view = customerProjection(
+        context('customer', { cancellations: [cancellation('c-1', [])] }),
+      );
+      expect(view.cancellations).toEqual([
+        expect.objectContaining({ id: 'c-1', refundStatus: null }),
+      ]);
+    });
+
+    it.each([
+      [['pending_approval'], 'pending'],
+      [['approved'], 'processing'],
+      [['failed'], 'processing'],
+      [['completed'], 'completed'],
+      [['waived'], 'waived'],
+    ])('shows the customer-safe status of %j as %s', (refunds, expected) => {
+      const rows = { cancellations: [cancellation('c-1', refunds)] };
+      for (const view of [
+        customerProjection(context('customer', rows)),
+        staffProjection(context('staff', rows)),
+      ])
+        expect(view.cancellations).toEqual([
+          expect.objectContaining({ id: 'c-1', refundStatus: expected }),
+        ]);
+    });
+  });
 });

@@ -1,4 +1,6 @@
 import type { GuardRegistry } from './allowed-actions';
+import { CANCELLATION_REASON_CODES, workStartedOn } from './cancellation-rules';
+import { canFreeCancel } from './intake-guards';
 import {
   accountDenied,
   assertOpen,
@@ -25,6 +27,19 @@ const PAUSED_MESSAGE =
 const NOT_OPEN_FOR_UPDATES = 'This job is not open for execution updates.';
 const ACKNOWLEDGEMENT_REQUIRED =
   'Customer acknowledgement is required before final closure.';
+// new message: not in spec
+const EARLY_CLOSE_REASON =
+  'Add a reason to close this request before the defects window ends.';
+// new message: not in spec
+const CANCEL_NOTE_REQUIRED = 'Add a reason for cancelling this request.';
+// new message: not in spec
+const CANCEL_REASON_REQUIRED = 'Choose a reason for cancelling this request.';
+// new message: not in spec
+const CANCEL_DECIDE_FIRST =
+  'A cancellation request is waiting. Decide it instead.';
+// new message: not in spec
+const REJECT_CANCELLATION_REASON =
+  'Add a reason for rejecting this cancellation request.';
 const CANNOT_BE_CANCELLED = 'This request can no longer be cancelled.';
 const NOT_AWAITING_DECISION =
   'This cancellation request is no longer awaiting a decision.';
@@ -296,21 +311,78 @@ const requestClose: DomainGuard<unknown> = (snap, actor, input, now) => {
       snap.defectsWindowEndsAt &&
       snap.defectsWindowEndsAt > now &&
       !trimmed(body.note)
-      ? conflict(
-          'Add a reason to close this request before the defects window ends.',
-        )
+      ? conflict(EARLY_CLOSE_REASON)
       : null,
   );
 };
 
-const cancellationRequest: DomainGuard<unknown> = (snap, actor) => {
+/** Transition #6 lets staff cancel a `submitted` request too; the customer's own request path starts at #12. */
+const STAFF_CANCELLABLE: ReadonlySet<string> = new Set([
+  'submitted',
+  ...CANCELLABLE_STATUSES,
+]);
+
+const cancelNoteLength = (value: unknown) => trimmed(value).length;
+
+/** `request.cancel` for staff (04 §2.1, §5.2 #6, #12, #24): `request.cancel.active` once the job is paid or work started. */
+const staffCancel: DomainGuard<unknown> = (snap, actor, input, now) => {
+  if (!isStaffWith(actor, 'request.cancel')) return staffDenied();
+  const body = objectInput<{ note?: unknown; reasonCode?: unknown }>(input);
+  const started = snap.payment.paid || workStartedOn(snap);
+  return firstFailure(
+    STAFF_CANCELLABLE.has(snap.status) ? null : conflict(CANNOT_BE_CANCELLED),
+    started && !isStaffWith(actor, 'request.cancel.active')
+      ? staffDenied()
+      : null,
+    snap.pendingCancellation ? conflict(CANCEL_DECIDE_FIRST) : null,
+    body &&
+      !CANCELLATION_REASON_CODES.includes(
+        body.reasonCode as (typeof CANCELLATION_REASON_CODES)[number],
+      )
+      ? invalid(CANCEL_REASON_REQUIRED)
+      : null,
+    body &&
+      (cancelNoteLength(body.note) < 5 || cancelNoteLength(body.note) > 1000)
+      ? invalid(CANCEL_NOTE_REQUIRED)
+      : null,
+    body && !snap.payment.paid && pendingPaymentWithinWindow(snap, now)
+      ? paymentInProgress('A payment is still processing. Try again shortly.')
+      : null,
+  );
+};
+
+/**
+ * One `request.cancel` key for both callers of `POST /requests/:id/cancel`:
+ * the owner's free cancel, or a staff member's direct cancel. A customer who can
+ * no longer cancel for free uses `cancellation.request` instead.
+ */
+const requestCancel: DomainGuard<unknown> = (
+  snap,
+  actor,
+  input,
+  now,
+  settings,
+) => {
+  if (isOwner(snap, actor))
+    return canFreeCancel(snap, actor, input, now, settings);
+  if (actor.kind === 'staff')
+    return staffCancel(snap, actor, input, now, settings);
+  return accountDenied();
+};
+
+const cancellationRequest: DomainGuard<unknown> = (snap, actor, input) => {
   if (!isOwner(snap, actor)) return accountDenied();
+  const body = objectInput<{ note?: unknown; reasonCode?: unknown }>(input);
   return firstFailure(
     CANCELLABLE_STATUSES.has(snap.status)
       ? null
       : conflict(CANNOT_BE_CANCELLED),
     snap.pendingCancellation
       ? conflict('Your cancellation request is already awaiting XPro.')
+      : null,
+    body &&
+      (cancelNoteLength(body.note) < 5 || cancelNoteLength(body.note) > 1000)
+      ? invalid(CANCEL_NOTE_REQUIRED)
       : null,
   );
 };
@@ -323,12 +395,19 @@ const cancellationWithdraw: DomainGuard<unknown> = (snap, actor) => {
     : conflict(NOT_AWAITING_DECISION);
 };
 
+/**
+ * Approve is limited to #12 and #24. Reject is also allowed in `acknowledged` so
+ * staff can clear a cancellation that was pending when the customer confirmed;
+ * 04 §6.17 and §7 don't refuse the confirmation itself (only T17 refuses).
+ */
 const cancellationDecide: DomainGuard<unknown> = (snap, actor, input, now) => {
   if (!isStaffWith(actor, 'request.cancel')) return staffDenied();
   const info = snap.pendingCancellationInfo;
   const body = objectInput<{ approve?: unknown; note?: unknown }>(input);
+  const rejectOnly = snap.status === 'acknowledged';
   return firstFailure(
-    CANCELLABLE_STATUSES.has(snap.status)
+    CANCELLABLE_STATUSES.has(snap.status) ||
+      (rejectOnly && body?.approve !== true)
       ? null
       : conflict(CANNOT_BE_CANCELLED),
     snap.pendingCancellation ? null : conflict(NOT_AWAITING_DECISION),
@@ -337,7 +416,7 @@ const cancellationDecide: DomainGuard<unknown> = (snap, actor, input, now) => {
       ? staffDenied()
       : null,
     body && body.approve === false && !trimmed(body.note)
-      ? invalid('Add a reason for rejecting this cancellation request.')
+      ? invalid(REJECT_CANCELLATION_REASON)
       : null,
     body && body.approve === true && pendingPaymentWithinWindow(snap, now)
       ? paymentInProgress('A payment is still processing. Try again shortly.')
@@ -365,6 +444,7 @@ export const LIFECYCLE_GUARDS: GuardRegistry = {
   'issue.accept': issueAccept,
   'issue.escalate': issueOpen,
   'request.close': requestClose,
+  'request.cancel': requestCancel,
   'cancellation.request': cancellationRequest,
   'cancellation.withdraw': cancellationWithdraw,
   'cancellation.decide': cancellationDecide,

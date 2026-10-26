@@ -18,7 +18,6 @@ import { IdempotencyKey } from '../../platform/idempotency/idempotency-key.decor
 import { CancellationService } from './cancellation.service';
 import {
   DecideCancellationDto,
-  RequestCancellationDto,
   WithdrawCancellationDto,
 } from './cancellation.dto';
 
@@ -28,39 +27,11 @@ import {
 @UseGuards(JwtAuthGuard)
 export class CancellationController {
   constructor(private readonly cancellations: CancellationService) {}
-  @Post('cancellations')
-  async request(
-    @CurrentUser() user: RequestUser,
-    @Param('id') id: string,
-    @Body(
-      new ValidationPipe({
-        transform: true,
-        whitelist: true,
-        forbidNonWhitelisted: true,
-      }),
-    )
-    dto: RequestCancellationDto,
-    @IfMatch() version: number | undefined,
-    @IdempotencyKey() key: string | undefined,
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const result = await this.cancellations.request(
-      user,
-      id,
-      dto,
-      version,
-      req.originalUrl,
-      key,
-    );
-    res.setHeader('ETag', result.etag);
-    return result.body;
-  }
-  @Post('cancellations/:cid/withdraw')
+
+  @Post('cancellation/withdraw')
   async withdraw(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
-    @Param('cid') cid: string,
     @Body(
       new ValidationPipe({
         transform: true,
@@ -77,7 +48,6 @@ export class CancellationController {
     const result = await this.cancellations.withdraw(
       user,
       id,
-      cid,
       dto,
       version,
       req.originalUrl,

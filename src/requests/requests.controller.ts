@@ -28,13 +28,14 @@ import { IdempotencyKey } from '../platform/idempotency/idempotency-key.decorato
 import { IntakeService } from './intake.service';
 import {
   RequestClarifyDto,
-  RequestFreeCancelDto,
   RequestIntakeDto,
   RequestRejectDto,
   RequestReviewDto,
   RequestUpdateDto,
 } from './dto/request-intake.dto';
 import { OwnershipService } from './ownership.service';
+import { CancellationService } from './cancellation/cancellation.service';
+import { CancelRequestDto } from './cancellation/cancellation.dto';
 import {
   RequestHandoffDto,
   RequestReassignDto,
@@ -56,6 +57,7 @@ export class RequestsController {
     private readonly intake: IntakeService,
     private readonly ownership: OwnershipService,
     private readonly messages: MessagesService,
+    private readonly cancellation: CancellationService,
   ) {}
 
   @Post()
@@ -211,7 +213,10 @@ export class RequestsController {
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cancel a request before intake approval or offer' })
+  @ApiOperation({
+    summary:
+      'Cancel a request: free cancel, a cancellation request, or a staff cancel',
+  })
   async cancel(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -222,13 +227,13 @@ export class RequestsController {
         forbidNonWhitelisted: true,
       }),
     )
-    dto: RequestFreeCancelDto,
+    dto: CancelRequestDto,
     @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const result = await this.intake.freeCancel(
+    const result = await this.cancellation.cancel(
       user,
       id,
       dto,

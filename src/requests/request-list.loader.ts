@@ -95,6 +95,7 @@ export class RequestListLoader {
           status: true,
           attempt: true,
           expiresAt: true,
+          workStarted: true,
         },
       }),
       db.quote.findMany({

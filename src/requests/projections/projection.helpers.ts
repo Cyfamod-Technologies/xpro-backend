@@ -59,7 +59,9 @@ export function cancellationProjection(context: ProjectionContext) {
     status: item.status,
     reasonCode: item.reasonCode,
     note: item.note,
-    refundStatus: null,
+    refundStatus: customerRefundStatus(
+      item.refunds.map(({ status }) => status),
+    ),
     createdAt: item.createdAt,
   }));
 }

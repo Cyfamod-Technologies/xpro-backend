@@ -309,7 +309,6 @@ describe('cancellation guards (04 §5.2 #12, #24)', () => {
 
   it.each([
     'submitted',
-    'acknowledged',
     'cancelling',
     'closed',
     'cancelled',
@@ -326,6 +325,66 @@ describe('cancellation guards (04 §5.2 #12, #24)', () => {
     expect(
       run('cancellation.decide', snapshot({ status, ...pending() }), canceller),
     ).toEqual(expected);
+  });
+
+  describe('acknowledged (FX-3.11 follow-up)', () => {
+    const acknowledged = snapshot({
+      status: 'acknowledged',
+      ...pending({ workStarted: true }),
+    });
+    const active = staff('request.cancel', 'request.cancel.active');
+    const refused = failure(
+      409,
+      'STATE_CONFLICT',
+      'This request can no longer be cancelled.',
+    );
+
+    it('still refuses a new request and an approval', () => {
+      expect(
+        run(
+          'cancellation.request',
+          snapshot({ status: 'acknowledged' }),
+          customer(),
+        ),
+      ).toEqual(refused);
+      expect(
+        run('cancellation.decide', acknowledged, active, { approve: true }),
+      ).toEqual(refused);
+    });
+
+    it('allows a reject decision and lists the action without a body', () => {
+      expect(
+        run('cancellation.decide', acknowledged, active, {
+          approve: false,
+          note: 'The customer confirmed the work.',
+        }),
+      ).toEqual({ ok: true });
+      expect(run('cancellation.decide', acknowledged, active)).toEqual({
+        ok: true,
+      });
+    });
+
+    it('keeps the reason and the active-cancel tier for a reject', () => {
+      expect(
+        run('cancellation.decide', acknowledged, active, { approve: false }),
+      ).toMatchObject({ status: 422 });
+      expect(
+        run('cancellation.decide', acknowledged, canceller, {
+          approve: false,
+          note: 'Work was done.',
+        }),
+      ).toMatchObject({ status: 403 });
+    });
+
+    it('does not offer a decision with nothing pending', () => {
+      expect(
+        run(
+          'cancellation.decide',
+          snapshot({ status: 'acknowledged' }),
+          active,
+        ),
+      ).toMatchObject({ status: 409 });
+    });
   });
 
   it('request: one pending request at a time', () => {
@@ -478,6 +537,149 @@ describe('cancellation guards (04 §5.2 #12, #24)', () => {
         { approve: true },
       ),
     ).toEqual({ ok: true });
+  });
+});
+
+describe('request.cancel (04 §2.1, §5.2 #6, #12, #24)', () => {
+  const cancel = (snap: RequestSnapshot, actor: ActorView, input?: unknown) =>
+    run('request.cancel', snap, actor, input);
+  const body = { note: 'Duplicate of XPR-00001', reasonCode: 'duplicate' };
+  const ops = staff('request.cancel');
+  const active = staff('request.cancel', 'request.cancel.active');
+  const started = (overrides: Partial<RequestSnapshot> = {}) =>
+    snapshot({
+      status: 'in_progress',
+      assignments: [assignment('accepted', { workStarted: true })],
+      ...overrides,
+    });
+  const paidPayment = {
+    paid: true,
+    pendingPaymentAt: null,
+    offlineRecorded: false,
+  };
+
+  it('is the owner free cancel for the customer: submitted, before approval and offers only', () => {
+    expect(cancel(snapshot({ status: 'submitted' }), customer())).toEqual({
+      ok: true,
+    });
+    expect(
+      cancel(snapshot({ status: 'under_review' }), customer()),
+    ).toMatchObject({
+      status: 409,
+      message: 'This request can no longer be cancelled for free.',
+    });
+  });
+
+  it('is the staff direct cancel for staff, in submitted and every cancellable status', () => {
+    for (const status of [
+      'submitted',
+      ...CANCELLABLE_STATUSES,
+    ] as RequestStatus[])
+      expect(cancel(snapshot({ status }), ops, body)).toEqual({ ok: true });
+    for (const status of [
+      'acknowledged',
+      'cancelling',
+      'closed',
+      'cancelled',
+      'rejected',
+    ] as const)
+      expect(cancel(snapshot({ status }), ops, body)).toEqual(
+        failure(
+          409,
+          'STATE_CONFLICT',
+          'This request can no longer be cancelled.',
+        ),
+      );
+  });
+
+  it('refuses other accounts and staff without the permission', () => {
+    expect(cancel(snapshot(), provider())).toMatchObject({ status: 403 });
+    expect(cancel(snapshot(), customer('other'))).toMatchObject({
+      status: 403,
+    });
+    expect(cancel(snapshot(), staff('request.review'), body)).toEqual(
+      failure(403, 'FORBIDDEN', 'Your staff role does not allow this action.'),
+    );
+  });
+
+  it('needs request.cancel.active once the job is paid or work started', () => {
+    const denied = failure(
+      403,
+      'FORBIDDEN',
+      'Your staff role does not allow this action.',
+    );
+    const paid = snapshot({ status: 'scheduled', payment: paidPayment });
+    expect(cancel(paid, ops, body)).toEqual(denied);
+    expect(cancel(started(), ops, body)).toEqual(denied);
+    expect(cancel(paid, active, body)).toEqual({ ok: true });
+    expect(cancel(started(), active, body)).toEqual({ ok: true });
+    expect(cancel(snapshot({ status: 'scheduled' }), ops, body)).toEqual({
+      ok: true,
+    });
+  });
+
+  it('shows staff the action without a body and checks the body when given', () => {
+    const snap = snapshot({ status: 'matched' });
+    expect(cancel(snap, ops)).toEqual({ ok: true });
+    expect(cancel(snap, ops, { note: 'Duplicate of XPR-00001' })).toEqual(
+      failure(
+        422,
+        'VALIDATION_ERROR',
+        'Choose a reason for cancelling this request.',
+      ),
+    );
+    expect(cancel(snap, ops, { note: 'ok', reasonCode: 'duplicate' })).toEqual(
+      failure(
+        422,
+        'VALIDATION_ERROR',
+        'Add a reason for cancelling this request.',
+      ),
+    );
+  });
+
+  it('refuses while a customer cancellation is waiting', () => {
+    expect(
+      cancel(
+        snapshot({
+          status: 'matched',
+          pendingCancellation: true,
+          pendingCancellationInfo: {
+            id: 'c-1',
+            status: 'pending',
+            requestedBy: 'customer',
+            paid: false,
+            workStarted: false,
+          },
+        }),
+        ops,
+        body,
+      ),
+    ).toEqual(
+      failure(
+        409,
+        'STATE_CONFLICT',
+        'A cancellation request is waiting. Decide it instead.',
+      ),
+    );
+  });
+
+  it('blocks an unpaid cancel while a payment is younger than 30 minutes', () => {
+    const recent = snapshot({
+      status: 'awaiting_payment',
+      payment: {
+        paid: false,
+        pendingPaymentAt: new Date(NOW.getTime() - 5 * 60_000),
+        offlineRecorded: false,
+      },
+    });
+    expect(cancel(recent, ops, body)).toEqual(
+      failure(
+        409,
+        'PAYMENT_IN_PROGRESS',
+        'A payment is still processing. Try again shortly.',
+      ),
+    );
+    expect(cancel(recent, ops)).toEqual({ ok: true });
   });
 });
 

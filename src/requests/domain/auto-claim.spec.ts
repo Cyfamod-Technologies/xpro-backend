@@ -90,3 +90,46 @@ describe('mayAutoClaim', () => {
     ).toBe(false);
   });
 });
+
+describe('mayAutoClaim on cancellation.decide (02 §6.5, FD-4)', () => {
+  const operations = staffActor(['operations'], true);
+
+  it('claims an unclaimed request when the decision rejects the cancellation', () => {
+    expect(
+      mayAutoClaim(operations, 'cancellation.decide', true, true, {
+        approve: false,
+        note: 'The job is under way.',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not claim on an approval, which ends the request', () => {
+    expect(
+      mayAutoClaim(operations, 'cancellation.decide', true, true, {
+        approve: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not claim without a body to read the decision from', () => {
+    expect(mayAutoClaim(operations, 'cancellation.decide', true, true)).toBe(
+      false,
+    );
+  });
+
+  it('keeps the other rules: not a super admin, not an owned request', () => {
+    const reject = { approve: false, note: 'No.' };
+    expect(
+      mayAutoClaim(
+        staffActor(['super_admin'], true, true),
+        'cancellation.decide',
+        true,
+        true,
+        reject,
+      ),
+    ).toBe(false);
+    expect(
+      mayAutoClaim(operations, 'cancellation.decide', false, true, reject),
+    ).toBe(false);
+  });
+});

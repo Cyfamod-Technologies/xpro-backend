@@ -18,7 +18,10 @@ export const REQUEST_INCLUDE = {
   schedules: { orderBy: { proposedAt: 'desc' as const } },
   updates: { orderBy: { createdAt: 'desc' as const } },
   issues: { orderBy: { raisedAt: 'desc' as const } },
-  cancellations: { orderBy: { createdAt: 'desc' as const } },
+  cancellations: {
+    orderBy: { createdAt: 'desc' as const },
+    include: { refunds: { select: { status: true } } },
+  },
   noShows: { orderBy: { detectedAt: 'desc' as const } },
   messages: { orderBy: { createdAt: 'asc' as const } },
 } satisfies Prisma.ServiceRequestInclude;
@@ -205,7 +208,12 @@ export type SnapshotSource = Pick<
   assignments: Array<
     Pick<
       LoadedRequest['assignments'][number],
-      'id' | 'providerUserId' | 'status' | 'attempt' | 'expiresAt'
+      | 'id'
+      | 'providerUserId'
+      | 'status'
+      | 'attempt'
+      | 'expiresAt'
+      | 'workStarted'
     >
   >;
   quotes: Array<
@@ -386,8 +394,9 @@ export function buildSnapshot(
           id: pendingCancellationRow.id,
           status: 'pending',
           requestedBy: pendingCancellationRow.requestedBy,
-          paid: pendingCancellationRow.paid,
-          workStarted: pendingCancellationRow.workStarted,
+          // Recomputed on every load so a payment or work start after the request still sets the permission tier (04 §4.7, D-20).
+          paid,
+          workStarted: row.assignments.some((item) => item.workStarted),
         }
       : null,
     refundsOutstanding,
@@ -452,6 +461,7 @@ function assignmentSnapshot(
     status: assignment.status,
     attempt: assignment.attempt,
     expiresAt: assignment.expiresAt,
+    workStarted: assignment.workStarted,
   };
 }
 

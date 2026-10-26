@@ -30,7 +30,9 @@ type Options = {
   payments?: Array<{ status: string; createdAt: Date; quoteId: string }>;
   cancellations?: Array<Record<string, unknown>>;
   refundsOutstanding?: number;
+  escalations?: Array<{ id: string; target: string; raisedBy: string | null }>;
   withAssignment?: boolean;
+  workStarted?: boolean;
   userStatus?: string;
   verification?: string;
   reliabilityStatus?: string;
@@ -60,6 +62,7 @@ function build(options: Options = {}) {
             status: 'accepted',
             attempt: 1,
             expiresAt: at(30),
+            workStarted: options.workStarted ?? false,
             createdAt: at(1),
           },
         ]
@@ -260,6 +263,18 @@ describe('RequestSnapshotLoader provider standing', () => {
 });
 
 describe('RequestSnapshotLoader cancellation and refunds', () => {
+  const pendingRow = (paid: boolean, workStarted: boolean) => ({
+    id: 'c1',
+    status: 'pending',
+    requestedBy: 'staff',
+    paid,
+    workStarted,
+  });
+  const settled = {
+    quotes: [{ id: 'q1', version: 1, status: 'accepted' }],
+    payments: [{ status: 'paid', createdAt: at(2), quoteId: 'q1' }],
+  };
+
   it('exposes the pending cancellation row', async () => {
     const { snapshot } = await load({
       cancellations: [
@@ -270,14 +285,11 @@ describe('RequestSnapshotLoader cancellation and refunds', () => {
           paid: false,
           workStarted: false,
         },
-        {
-          id: 'c1',
-          status: 'pending',
-          requestedBy: 'staff',
-          paid: true,
-          workStarted: true,
-        },
+        pendingRow(true, true),
       ],
+      ...settled,
+      withAssignment: true,
+      workStarted: true,
     });
     expect(snapshot.pendingCancellation).toBe(true);
     expect(snapshot.pendingCancellationInfo).toEqual({
@@ -286,6 +298,24 @@ describe('RequestSnapshotLoader cancellation and refunds', () => {
       requestedBy: 'staff',
       paid: true,
       workStarted: true,
+    });
+  });
+
+  it('recomputes paid and workStarted from the payments and assignments, not the stored row (D-20)', async () => {
+    const live = await load({
+      cancellations: [pendingRow(false, false)],
+      ...settled,
+      withAssignment: true,
+      workStarted: true,
+    });
+    expect(live.snapshot.pendingCancellationInfo).toMatchObject({
+      paid: true,
+      workStarted: true,
+    });
+    const stale = await load({ cancellations: [pendingRow(true, true)] });
+    expect(stale.snapshot.pendingCancellationInfo).toMatchObject({
+      paid: false,
+      workStarted: false,
     });
   });
 

@@ -22,6 +22,8 @@ export type AssignmentSnapshot = {
     | 'completed';
   attempt: number | null;
   expiresAt: Date;
+  /** Work began under this assignment (04 §4.5); read by the cancellation permission tier (04 §4.7). */
+  workStarted?: boolean;
 };
 
 export type QuoteSnapshot = {
