@@ -71,6 +71,7 @@ export function noShowProjection(context: ProjectionContext) {
     id: item.id,
     scheduleId: item.scheduleId,
     status: item.status,
+    version: item.version,
     note: item.note,
     createdAt: item.detectedAt,
   }));

@@ -31,6 +31,8 @@ export interface RequestNoShowView {
   id: string;
   scheduleId: string;
   status: string;
+  /** The no-show row version the decision and correction commands require. */
+  version: number;
   note: string;
   createdAt: Date;
 }

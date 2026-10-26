@@ -163,6 +163,30 @@ describe('request role projections', () => {
     expect(dto).not.toHaveProperty('staffOwnerId');
   });
 
+  it('gives staff the no-show row version the decision commands need (E-08)', () => {
+    const row = {
+      id: 'ns1',
+      scheduleId: 's1',
+      status: 'open',
+      note: 'Nobody came.',
+      detectedAt: now,
+      version: 4,
+    };
+    const dto = staffProjection(
+      context('staff', { noShows: [row] as never }, {}, ['dispatch.manage']),
+    );
+    expect(dto.noShows).toEqual([
+      {
+        id: 'ns1',
+        scheduleId: 's1',
+        status: 'open',
+        version: 4,
+        note: 'Nobody came.',
+        createdAt: now,
+      },
+    ]);
+  });
+
   it('keeps an offered provider response to the offer summary', () => {
     const assigned = {
       id: 'assignment-1',
