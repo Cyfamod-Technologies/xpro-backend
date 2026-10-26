@@ -72,10 +72,11 @@ export class ProvidersService {
       confirmedBy?: string;
       note?: string;
     },
-  ): Promise<void> {
-    try {
-      await tx.providerReliabilityEvent.create({
-        data: {
+  ): Promise<'review_due' | 'cleared' | null> {
+    // createMany + skipDuplicates is ON CONFLICT DO NOTHING; a caught P2002 would abort the caller's interactive transaction.
+    const created = await tx.providerReliabilityEvent.createMany({
+      data: [
+        {
           providerId: input.providerId,
           kind: input.kind,
           sourceId: input.sourceId,
@@ -84,15 +85,14 @@ export class ProvidersService {
           confirmedBy: input.confirmedBy,
           note: input.note,
         },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      )
-        return;
-      throw error;
-    }
+      ],
+      skipDuplicates: true,
+    });
+    if (
+      !created.count ||
+      (input.kind !== 'no_show_confirmed' && input.kind !== 'no_show_voided')
+    )
+      return null;
 
     const since = new Date(
       input.occurredAt.getTime() - 90 * 24 * 60 * 60 * 1000,
@@ -119,7 +119,17 @@ export class ProvidersService {
         where: { id: input.providerId },
         data: { reliabilityStatus: 'review_due' },
       });
+      return 'review_due';
     }
+    if (input.kind === 'no_show_voided') {
+      // 03 §6.3: a void closes a review that is not yet decided once the count drops below the threshold.
+      const cleared = await tx.providerProfile.updateMany({
+        where: { id: input.providerId, reliabilityStatus: 'review_due' },
+        data: { reliabilityStatus: 'normal' },
+      });
+      return cleared.count > 0 ? 'cleared' : null;
+    }
+    return null;
   }
 
   async myProfile(userId: string) {
