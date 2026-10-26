@@ -9,12 +9,14 @@ import { hashRequest } from '../../platform/idempotency/idempotency.service';
 import { FinanceService } from '../../payments/finance.service';
 import type { RequestUser } from '../../common/types/request-user';
 import { RequestCommandRunner } from '../command-runner';
-import { ApprovalsHooks } from '../approvals.hooks';
+import { openEscalation } from '../escalation-effects';
+import { UploadsService } from '../../uploads/uploads.service';
+import { ISSUE_ENTITY } from '../../uploads/entity-types';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
-const invalid = (message: string) =>
-  new AppError(422, 'VALIDATION_ERROR', message);
+// new message: not in spec
+const PAYOUT_NOT_SET = 'Set the provider payout before confirming completion.';
 
 @Injectable()
 export class CompletionService {
@@ -22,13 +24,17 @@ export class CompletionService {
     private readonly actors: ActorService,
     private readonly runner: RequestCommandRunner,
     private readonly finance: FinanceService,
-    private readonly approvals: ApprovalsHooks,
+    private readonly uploads: UploadsService,
   ) {}
 
   async respond(
     user: RequestUser,
     requestId: string,
-    dto: { acknowledge: boolean; note?: string },
+    dto: {
+      acknowledge: boolean;
+      note?: string;
+      attachments?: Array<{ id: string }>;
+    },
     version: number | undefined,
     url: string,
     key?: string,
@@ -50,21 +56,9 @@ export class CompletionService {
           : {}),
       },
       async (ctx) => {
-        if (user.id !== ctx.snap.ownerId)
-          throw new AppError(
-            404,
-            'NOT_FOUND',
-            'This request is no longer available to your account.',
-          );
-        if (
-          ctx.snap.status !== 'completion_pending' ||
-          ctx.snap.openIssues.length
-        )
-          throw conflict(
-            'Customer acknowledgement is required before final closure.',
-          );
+        // The runner guard checked the owner, that the report awaits the customer and the note on an issue response (04 §6.17).
         if (!dto.acknowledge) {
-          if (!dto.note?.trim()) throw invalid('Explain the unresolved issue.');
+          const issueNote = (dto.note ?? '').trim();
           const cycle = await ctx.tx.serviceRequest.update({
             where: { id: ctx.snap.id },
             data: { issueCycles: { increment: 1 }, status: 'blocked' },
@@ -74,13 +68,21 @@ export class CompletionService {
             data: {
               requestId: ctx.snap.id,
               window: 'completion',
-              note: dto.note.trim(),
+              note: issueNote,
               raisedBy: user.id,
               raisedAt: ctx.now,
               cycle: cycle.issueCycles,
               status: 'open',
             },
           });
+          await this.uploads.attach(
+            ctx.tx,
+            (dto.attachments ?? []).map(({ id }) => id),
+            user.id,
+            'progress_evidence',
+            ISSUE_ENTITY,
+            issue.id,
+          );
           if (
             cycle.issueCycles >
             Number(ctx.settings['completion.maxIssueCycles'] ?? 2)
@@ -89,27 +91,19 @@ export class CompletionService {
               where: { id: issue.id },
               data: { status: 'disputed' },
             });
-            const escalation = await ctx.tx.requestEscalation.create({
-              data: {
-                requestId: ctx.snap.id,
-                target: 'super_admin',
-                source: 'system',
-                note: dto.note.trim(),
-                raisedAt: ctx.now,
-              },
+            await openEscalation(ctx, {
+              to: 'super_admin',
+              note: issueNote,
+              source: 'system',
             });
-            await this.approvals.open(
-              ctx.tx,
-              'escalation',
-              escalation.id,
-              ctx.snap.id,
-              ctx.now,
-            );
+          } else {
+            // 02 §6.11: the completion issue waits for issue.resolve from the moment it is raised.
+            ctx.approvals.open('completion_issue', issue.id);
           }
           ctx.audit('Issue raised at completion', {
             resourceType: 'issue',
             resourceId: issue.id,
-            note: dto.note,
+            note: issueNote,
           });
           ctx.notify('issue.raised', { requestCode: ctx.snap.number });
           return;
@@ -139,9 +133,7 @@ export class CompletionService {
           quote?.payoutAmount == null ||
           quote.payoutAssignmentId !== assignment.id
         )
-          throw conflict(
-            'Set the provider payout before confirming completion.',
-          );
+          throw conflict(PAYOUT_NOT_SET);
         await this.finance.createPrimary(ctx, {
           requestId: ctx.snap.id,
           assignmentId: assignment.id,
@@ -188,13 +180,7 @@ export class CompletionService {
           : {}),
       },
       async (ctx) => {
-        if (
-          ctx.snap.status !== 'completion_pending' ||
-          ctx.snap.openIssues.length
-        )
-          throw conflict(
-            'Customer acknowledgement is required before final closure.',
-          );
+        // The runner guard checked that the report awaits the customer and no issue is open.
         const days = Number(ctx.settings['completion.defectsWindowDays'] ?? 7);
         const endsAt = new Date(ctx.now.getTime() + days * 86_400_000);
         await ctx.tx.serviceRequest.update({
@@ -220,9 +206,7 @@ export class CompletionService {
           quote?.payoutAmount == null ||
           quote.payoutAssignmentId !== assignment.id
         )
-          throw conflict(
-            'Set the provider payout before confirming completion.',
-          );
+          throw conflict(PAYOUT_NOT_SET);
         await this.finance.createPrimary(ctx, {
           requestId: ctx.snap.id,
           assignmentId: assignment.id,

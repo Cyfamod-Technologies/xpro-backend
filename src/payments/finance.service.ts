@@ -33,6 +33,7 @@ import {
   planSecondApproval,
   planTransferEvent,
   type ClosureState,
+  type HoldSource,
   type PayoutFailure,
   type TransferOutcome,
 } from './domain/payout-rules';
@@ -879,10 +880,53 @@ export class FinanceService {
     );
   }
 
+  /**
+   * `issue.raise` in the defects window (05 §6.6): every unpaid or
+   * untransferred payout of the request goes `on_hold` with source `issue`,
+   * audited, with its version bumped. A `processing` transfer cannot be
+   * stopped, so it is flagged for urgent Finance review instead. Runs in the
+   * raising command's transaction; the request row is already locked.
+   */
+  async holdForIssue(
+    ctx: PayoutCreationContext,
+    requestId: string,
+    issueId: string,
+  ): Promise<{ held: string[]; flagged: string[] }> {
+    const payouts = await ctx.tx.payout.findMany({
+      where: {
+        requestId,
+        status: {
+          in: [
+            'pending_approval',
+            'awaiting_second_approval',
+            'approved',
+            'failed',
+            'processing',
+          ],
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    const held: string[] = [];
+    const flagged: string[] = [];
+    for (const payout of payouts) {
+      const action = holdAction(payout.status);
+      if (!action) continue;
+      await this.applyHold(ctx, payout, PAYOUT_MESSAGES.holdIssue, 'issue', {
+        issueId,
+        sourceEvent: 'issue.raise',
+      });
+      (action === 'flag' ? flagged : held).push(payout.id);
+    }
+    return { held, flagged };
+  }
+
   private async applyHold(
-    ctx: CommandContext,
-    payout: PayoutWithApprovals,
+    ctx: PayoutCreationContext,
+    payout: Payout,
     reason: string,
+    source: HoldSource = 'manual',
+    extra: Record<string, unknown> = {},
   ) {
     const action = holdAction(payout.status);
     if (!action) throw conflict(PAYOUT_MESSAGES.cannotHold);
@@ -891,7 +935,7 @@ export class FinanceService {
         where: { id: payout.id, status: 'processing' },
         data: {
           holdReason: reason,
-          holdSource: 'manual',
+          holdSource: source,
           version: { increment: 1 },
         },
       });
@@ -900,7 +944,10 @@ export class FinanceService {
         resourceType: 'payout',
         resourceId: payout.id,
         note: reason,
-        changes: this.change(payout, 'processing', { holdSource: 'manual' }),
+        changes: this.change(payout, 'processing', {
+          holdSource: source,
+          ...extra,
+        }),
       });
       ctx.notify('payout.needs_attention', {
         requestCode: ctx.snap.number,
@@ -916,7 +963,7 @@ export class FinanceService {
       data: {
         status: 'on_hold',
         holdReason: reason,
-        holdSource: 'manual',
+        holdSource: source,
         version: { increment: 1 },
       },
     });
@@ -930,9 +977,9 @@ export class FinanceService {
       resourceType: 'payout',
       resourceId: payout.id,
       note: reason,
-      changes: this.change(payout, 'on_hold', { holdSource: 'manual' }),
+      changes: this.change(payout, 'on_hold', { holdSource: source, ...extra }),
     });
-    await this.notifyHold(ctx, payout, 'held');
+    await this.notifyHold(ctx, payout, 'held', source);
     return { bumpVersion: false };
   }
 
@@ -1379,15 +1426,16 @@ export class FinanceService {
 
   /** 05 §9: the provider hears of a hold (with a safe reason) and its release; Finance hears of both. */
   private async notifyHold(
-    ctx: CommandContext,
+    ctx: PayoutCreationContext,
     payout: Payout,
     outcome: 'held' | 'released',
+    source: HoldSource = 'manual',
   ): Promise<void> {
     const provider = await ctx.tx.providerProfile.findUnique({
       where: { id: payout.providerId },
       select: { userId: true },
     });
-    const reason = safeHoldReason('on_hold', 'manual');
+    const reason = safeHoldReason('on_hold', source);
     if (provider && (outcome === 'released' || reason))
       ctx.notify(`payout.${outcome}`, {
         requestCode: ctx.snap.number,

@@ -993,3 +993,139 @@ describe('progress guards (04 §6.14 state rows)', () => {
     ).toEqual({ ok: true });
   });
 });
+
+describe('completion and issue guards (04 §6.17)', () => {
+  const resolver = staff('issue.resolve');
+  const superAdmin: ActorView = { ...resolver, isSuperAdmin: true };
+  const acknowledged = (overrides: Partial<RequestSnapshot> = {}) =>
+    snapshot({
+      status: 'acknowledged',
+      defectsWindowEndsAt: new Date(NOW.getTime() + 24 * HOUR),
+      ...overrides,
+    });
+
+  it('completion.respond needs a note on an issue response and none on an acknowledgement', () => {
+    const row = snapshot({ status: 'completion_pending' });
+    expect(
+      run('completion.respond', row, customer(), { acknowledge: true }),
+    ).toEqual({ ok: true });
+    expect(
+      run('completion.respond', row, customer(), {
+        acknowledge: false,
+        note: '  ',
+      }),
+    ).toEqual(
+      failure(422, 'VALIDATION_ERROR', 'Explain the unresolved issue.'),
+    );
+    expect(
+      run('completion.respond', row, customer(), {
+        acknowledge: false,
+        note: 'Cracked tiles.',
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it('issue.raise needs a note once the window check passes', () => {
+    expect(
+      run('issue.raise', acknowledged(), customer(), { note: ' ' }),
+    ).toEqual(failure(422, 'VALIDATION_ERROR', 'Explain the issue.'));
+    expect(
+      run('issue.raise', acknowledged(), customer(), { note: 'Leak.' }),
+    ).toEqual({ ok: true });
+    expect(
+      run(
+        'issue.raise',
+        acknowledged({ defectsWindowEndsAt: new Date(NOW.getTime() - HOUR) }),
+        customer(),
+        { note: 'Leak.' },
+      ),
+    ).toEqual(failure(409, 'STATE_CONFLICT', 'The defects window has ended.'));
+  });
+
+  describe('issue.escalate', () => {
+    const open = snapshot({
+      status: 'blocked',
+      openIssues: [{ status: 'open' }],
+    });
+
+    it('requires a note of at least 5 characters, with the 02 §6.10 message', () => {
+      const missing = failure(
+        422,
+        'VALIDATION_ERROR',
+        'Add a note explaining the escalation.',
+      );
+      expect(run('issue.escalate', open, resolver, {})).toEqual(missing);
+      expect(run('issue.escalate', open, resolver, { note: ' abc ' })).toEqual(
+        missing,
+      );
+      expect(
+        run('issue.escalate', open, resolver, { note: 'Customer is abusive.' }),
+      ).toEqual({ ok: true });
+    });
+
+    it('is offered without a body, and refused when no issue is open', () => {
+      expect(run('issue.escalate', open, resolver)).toEqual({ ok: true });
+      expect(
+        run('issue.escalate', snapshot({ status: 'blocked' }), resolver),
+      ).toEqual(
+        failure(409, 'STATE_CONFLICT', 'This issue is no longer open.'),
+      );
+    });
+  });
+
+  describe('issue.resolve', () => {
+    const rework = snapshot({
+      status: 'in_progress',
+      openIssues: [{ status: 'rework' }],
+    });
+    const disputed = snapshot({
+      status: 'blocked',
+      openIssues: [{ status: 'disputed' }],
+    });
+
+    it('needs a reason', () => {
+      expect(
+        run('issue.resolve', rework, resolver, {
+          outcome: 'no_rework',
+          note: '',
+        }),
+      ).toEqual(
+        failure(
+          422,
+          'VALIDATION_ERROR',
+          'Add a reason for this issue decision.',
+        ),
+      );
+    });
+
+    it('matches the outcome to the issue state', () => {
+      const none = failure(
+        409,
+        'STATE_CONFLICT',
+        'This issue is no longer open.',
+      );
+      expect(
+        run('issue.resolve', disputed, resolver, {
+          outcome: 'no_rework',
+          note: 'Fine.',
+        }),
+      ).toEqual(none);
+      expect(
+        run('issue.resolve', rework, superAdmin, {
+          outcome: 'dispute_decision',
+          note: 'Fine.',
+        }),
+      ).toEqual(none);
+    });
+
+    it('lets only a super admin make a dispute decision', () => {
+      const input = { outcome: 'dispute_decision', note: 'Final.' };
+      expect(run('issue.resolve', disputed, resolver, input)).toEqual(
+        failure(403, 'FORBIDDEN', 'A super admin must decide this dispute.'),
+      );
+      expect(run('issue.resolve', disputed, superAdmin, input)).toEqual({
+        ok: true,
+      });
+    });
+  });
+});

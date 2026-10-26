@@ -5,6 +5,7 @@ import {
   accountDenied,
   assertOpen,
   conflict,
+  fail,
   firstFailure,
   invalid,
   isCurrentProvider,
@@ -55,12 +56,22 @@ const CANCEL_DECIDE_FIRST =
 // new message: not in spec
 const REJECT_CANCELLATION_REASON =
   'Add a reason for rejecting this cancellation request.';
-const CANNOT_BE_CANCELLED = 'This request can no longer be cancelled.';
-const NOT_AWAITING_DECISION =
-  'This cancellation request is no longer awaiting a decision.';
 // new message: not in spec
-const CLOSE_WITH_CANCELLATION =
-  'A cancellation request is waiting. Decide it before closing.';
+const NOSHOW_DECISION_STALE = 'This no-show decision is stale.';
+// new message: not in spec
+const NOSHOW_NOT_CORRECTABLE = 'This no-show cannot be corrected.';
+// new message: not in spec
+const DEFECTS_WINDOW_ENDED = 'The defects window has ended.';
+// new message: not in spec
+const EXPLAIN_ISSUE = 'Explain the issue.';
+// new message: not in spec
+const ISSUE_NOT_AWAITING_REVIEW = 'This issue is no longer awaiting review.';
+// new message: not in spec
+const ISSUE_NOT_OPEN = 'This issue is no longer open.';
+// new message: not in spec
+const ISSUE_DECISION_REASON = 'Add a reason for this issue decision.';
+// new message: not in spec
+const DISPUTE_NEEDS_SUPER_ADMIN = 'A super admin must decide this dispute.';
 
 const EXECUTION_STATUSES = new Set([
   'in_progress',
@@ -289,6 +300,13 @@ const releaseHold: DomainGuard<unknown> = (snap, actor, _input, now) => {
           'This provider is suspended. Replace them or wait for reactivation.',
         )
       : null,
+    snap.hold?.previousStatus === 'scheduled' &&
+      confirmed &&
+      confirmed.endAt < now
+      ? conflict(
+          'The confirmed date has passed. Propose a new date before releasing the hold.',
+        )
+      : null,
   );
 };
 
@@ -308,7 +326,7 @@ const noshowDecide: DomainGuard<unknown> = (snap, actor) => {
     assertOpen(snap),
     snap.latestNoShow?.status === 'open'
       ? null
-      : conflict('This no-show decision is stale.'),
+      : conflict(NOSHOW_DECISION_STALE),
   );
 };
 
@@ -318,7 +336,7 @@ const noshowCorrect: DomainGuard<unknown> = (snap, actor) => {
     assertOpen(snap),
     snap.latestNoShow?.status === 'confirmed'
       ? null
-      : conflict('This no-show cannot be corrected.'),
+      : conflict(NOSHOW_NOT_CORRECTABLE),
   );
 };
 
@@ -327,9 +345,16 @@ const awaitingCustomerConfirmation = (snap: RequestSnapshot): GuardResult =>
     ? ok
     : conflict(ACKNOWLEDGEMENT_REQUIRED);
 
-const completionRespond: DomainGuard<unknown> = (snap, actor) => {
+const completionRespond: DomainGuard<unknown> = (snap, actor, input) => {
   if (!isOwner(snap, actor)) return accountDenied();
-  return firstFailure(assertOpen(snap), awaitingCustomerConfirmation(snap));
+  const body = objectInput<{ acknowledge?: unknown; note?: unknown }>(input);
+  return firstFailure(
+    assertOpen(snap),
+    awaitingCustomerConfirmation(snap),
+    body && body.acknowledge === false && !trimmed(body.note)
+      ? invalid(EXPLAIN_UNRESOLVED_ISSUE)
+      : null,
+  );
 };
 
 const completionConfirmOnBehalf: DomainGuard<unknown> = (snap, actor) => {
@@ -337,15 +362,17 @@ const completionConfirmOnBehalf: DomainGuard<unknown> = (snap, actor) => {
   return firstFailure(assertOpen(snap), awaitingCustomerConfirmation(snap));
 };
 
-const issueRaise: DomainGuard<unknown> = (snap, actor, _input, now) => {
+const issueRaise: DomainGuard<unknown> = (snap, actor, input, now) => {
   if (!isOwner(snap, actor)) return accountDenied();
+  const body = objectInput<{ note?: unknown }>(input);
   return firstFailure(
     assertOpen(snap),
     snap.status === 'acknowledged' &&
       snap.defectsWindowEndsAt &&
       now < snap.defectsWindowEndsAt
       ? null
-      : conflict('The defects window has ended.'),
+      : conflict(DEFECTS_WINDOW_ENDED),
+    body && !trimmed(body.note) ? invalid(EXPLAIN_ISSUE) : null,
   );
 };
 
@@ -355,17 +382,42 @@ const issueAccept: DomainGuard<unknown> = (snap, actor) => {
     assertOpen(snap),
     snap.openIssues.some((item) => item.status === 'open')
       ? null
-      : conflict('This issue is no longer awaiting review.'),
+      : conflict(ISSUE_NOT_AWAITING_REVIEW),
   );
 };
 
-const issueOpen: DomainGuard<unknown> = (snap, actor) => {
+// The issue id is a path parameter, so the service finds the row; the snapshot
+// says whether any issue is in a state this outcome can act on.
+const issueResolve: DomainGuard<unknown> = (snap, actor, input) => {
   if (!isStaffWith(actor, 'issue.resolve')) return staffDenied();
+  const body = objectInput<{ outcome?: unknown; note?: unknown }>(input);
+  const disputing = body?.outcome === 'dispute_decision';
+  const states: ReadonlyArray<string> = disputing
+    ? ['disputed']
+    : body
+      ? ['open', 'rework']
+      : ['open', 'rework', 'disputed'];
   return firstFailure(
     assertOpen(snap),
-    snap.openIssues.length > 0
+    snap.openIssues.some(({ status }) => states.includes(status))
       ? null
-      : conflict('This issue is no longer open.'),
+      : conflict(ISSUE_NOT_OPEN),
+    body && !trimmed(body.note) ? invalid(ISSUE_DECISION_REASON) : null,
+    disputing && !actor.isSuperAdmin
+      ? fail(403, 'FORBIDDEN', DISPUTE_NEEDS_SUPER_ADMIN)
+      : null,
+  );
+};
+
+const issueEscalate: DomainGuard<unknown> = (snap, actor, input) => {
+  if (!isStaffWith(actor, 'issue.resolve')) return staffDenied();
+  const body = objectInput<{ note?: unknown }>(input);
+  return firstFailure(
+    assertOpen(snap),
+    snap.openIssues.length > 0 ? null : conflict(ISSUE_NOT_OPEN),
+    body && trimmed(body.note).length < 5
+      ? invalid(ESCALATION_NOTE_REQUIRED)
+      : null,
   );
 };
 
@@ -512,9 +564,9 @@ export const LIFECYCLE_GUARDS: GuardRegistry = {
   'completion.respond': completionRespond,
   'completion.confirmOnBehalf': completionConfirmOnBehalf,
   'issue.raise': issueRaise,
-  'issue.resolve': issueOpen,
+  'issue.resolve': issueResolve,
   'issue.accept': issueAccept,
-  'issue.escalate': issueOpen,
+  'issue.escalate': issueEscalate,
   'request.close': requestClose,
   'request.cancel': requestCancel,
   'cancellation.request': cancellationRequest,

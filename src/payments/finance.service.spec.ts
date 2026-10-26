@@ -770,6 +770,124 @@ describe('FinanceService hold and release (C-40)', () => {
   });
 });
 
+describe('FinanceService.holdForIssue (D-28, 05 §6.6)', () => {
+  const hold = (h: ReturnType<typeof build>) =>
+    h.service.holdForIssue(h.ctx, 'request-1', 'issue-1');
+
+  it('asks only for unpaid and in-flight payouts of the request', async () => {
+    const h = build();
+
+    await expect(hold(h)).resolves.toEqual({ held: [], flagged: [] });
+
+    expect(h.tx.payout.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          requestId: 'request-1',
+          status: {
+            in: [
+              'pending_approval',
+              'awaiting_second_approval',
+              'approved',
+              'failed',
+              'processing',
+            ],
+          },
+        },
+      }),
+    );
+    expect(h.effects.audit).toEqual([]);
+  });
+
+  it('puts an unpaid payout on hold with source issue, a version bump and an audit row', async () => {
+    const h = build();
+    h.tx.payout.findMany.mockResolvedValue([
+      payoutRow({ id: 'payout-1', status: 'approved' }),
+    ]);
+
+    await expect(hold(h)).resolves.toEqual({
+      held: ['payout-1'],
+      flagged: [],
+    });
+
+    expect(h.tx.payout.updateMany).toHaveBeenCalledWith({
+      where: { id: 'payout-1', status: 'approved' },
+      data: {
+        status: 'on_hold',
+        holdReason: 'An issue is open on this request.',
+        holdSource: 'issue',
+        version: { increment: 1 },
+      },
+    });
+    expect(h.effects.audit[0]).toMatchObject({
+      action: 'Payout held',
+      data: {
+        resourceType: 'payout',
+        resourceId: 'payout-1',
+        note: 'An issue is open on this request.',
+        changes: {
+          before: { status: 'approved' },
+          after: { status: 'on_hold' },
+          holdSource: 'issue',
+          issueId: 'issue-1',
+          sourceEvent: 'issue.raise',
+        },
+      },
+    });
+    expect(h.effects.notify.map(({ event }) => event)).toEqual([
+      'payout.held',
+      'payout.finance_update',
+    ]);
+    expect(h.effects.notify[0].params).toMatchObject({
+      reason: 'On hold while a reported issue is reviewed.',
+    });
+  });
+
+  it('closes the second-approval item of a payout that was awaiting one', async () => {
+    const h = build();
+    h.tx.payout.findMany.mockResolvedValue([
+      payoutRow({ status: 'awaiting_second_approval' }),
+    ]);
+
+    await hold(h);
+
+    expect(h.effects.approvalCloses).toEqual([
+      { kind: 'payout_second', itemId: 'payout-1', reason: 'held' },
+    ]);
+    expect(h.effects.approvalOpens).toEqual([
+      { kind: 'payout', itemId: 'payout-1' },
+    ]);
+  });
+
+  it('flags a processing transfer for urgent Finance review instead of holding it', async () => {
+    const h = build();
+    h.tx.payout.findMany.mockResolvedValue([
+      payoutRow({ id: 'payout-9', status: 'processing' }),
+    ]);
+
+    await expect(hold(h)).resolves.toEqual({
+      held: [],
+      flagged: ['payout-9'],
+    });
+
+    expect(h.tx.payout.updateMany).toHaveBeenCalledWith({
+      where: { id: 'payout-9', status: 'processing' },
+      data: {
+        holdReason: 'An issue is open on this request.',
+        holdSource: 'issue',
+        version: { increment: 1 },
+      },
+    });
+    expect(h.effects.audit[0]).toMatchObject({
+      action: 'Payout flagged for urgent review',
+      data: { changes: { holdSource: 'issue', issueId: 'issue-1' } },
+    });
+    expect(h.effects.notify[0].event).toBe('payout.needs_attention');
+    expect(h.effects.notify.map(({ event }) => event)).not.toContain(
+      'payout.held',
+    );
+  });
+});
+
 describe('FinanceService.transferPayout (C-05, C-23, C-43)', () => {
   const approved = {
     status: 'approved',
