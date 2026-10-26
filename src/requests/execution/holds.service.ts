@@ -8,6 +8,7 @@ import { RequestCommandRunner } from '../command-runner';
 import {
   blockedReviewDueAt,
   noShowCheckDueAt,
+  staleEscalationDueAt,
   staleUpdateDueAt,
 } from '../domain/execution-timers';
 
@@ -62,6 +63,7 @@ export class HoldsService {
           },
         });
         ctx.timers.stop(['T13.noShowCheck', 'T15.stale', 'T15.escalate']);
+        ctx.approvals.close('progress', ctx.snap.id, 'hold');
         ctx.timers.start(
           'T16.review',
           blockedReviewDueAt(ctx.now, ctx.settings),
@@ -113,18 +115,8 @@ export class HoldsService {
           where: { id: ctx.snap.id },
           select: { holdPreviousStatus: true, holdKind: true },
         });
-        // 04 §6.15 row 1 is the runner guard; the previous status is a row column the snapshot lacks.
+        // 04 §6.15 rows 1 to 3 are the runner guard; the previous status is a row column.
         if (!row?.holdPreviousStatus) throw conflict("This job isn't on hold.");
-        if (row.holdPreviousStatus === 'scheduled') {
-          const schedule = await ctx.tx.schedule.findFirst({
-            where: { requestId: ctx.snap.id, status: 'confirmed' },
-            orderBy: { proposedAt: 'desc' },
-          });
-          if (schedule && schedule.endAt < ctx.now)
-            throw conflict(
-              'The confirmed date has passed. Propose a new date before releasing the hold.',
-            );
-        }
         await ctx.tx.serviceRequest.update({
           where: { id: ctx.snap.id },
           data: {
@@ -137,6 +129,7 @@ export class HoldsService {
           },
         });
         ctx.timers.stop('T16.review');
+        ctx.approvals.close('blocker', ctx.snap.id, 'hold_released');
         if (row.holdPreviousStatus === 'scheduled') {
           const schedule = await ctx.tx.schedule.findFirst({
             where: { requestId: ctx.snap.id, status: 'confirmed' },
@@ -148,11 +141,16 @@ export class HoldsService {
               noShowCheckDueAt(schedule.startAt, ctx.settings),
               schedule.id,
             );
-        } else
+        } else {
           ctx.timers.start(
             'T15.stale',
             staleUpdateDueAt(ctx.now, ctx.settings),
           );
+          ctx.timers.start(
+            'T15.escalate',
+            staleEscalationDueAt(ctx.now, ctx.settings),
+          );
+        }
         ctx.audit('Hold released', { note: dto.note });
         ctx.notify('request.hold_released', { requestCode: ctx.snap.number });
         ctx.notify('request.hold_released_customer', {

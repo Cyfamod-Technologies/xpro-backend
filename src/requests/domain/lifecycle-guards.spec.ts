@@ -734,6 +734,7 @@ describe('execution and completion guards keep their service messages', () => {
         snapshot({
           status: 'blocked',
           currentProviderUserId: 'provider-1',
+          currentAssignment: assignment('accepted'),
           hold: { kind: 'staff' },
         }),
         provider(),
@@ -776,5 +777,219 @@ describe('execution and completion guards keep their service messages', () => {
     ).toMatchObject({
       message: "Set the new provider's payout before scheduling.",
     });
+  });
+});
+
+describe('progress guards (04 §6.14 state rows)', () => {
+  const working = (overrides: Partial<RequestSnapshot> = {}) =>
+    snapshot({
+      status: 'in_progress',
+      currentProviderUserId: 'provider-1',
+      currentAssignment: assignment('accepted'),
+      ...overrides,
+    });
+  const body = { status: 'in_progress', note: 'Laid the first row of tiles.' };
+  const conflict = (message: string) => failure(409, 'STATE_CONFLICT', message);
+
+  it('row 1: the status must be one of the three', () => {
+    expect(
+      run('progress.add', working(), provider(), { ...body, status: 'done' }),
+    ).toEqual(failure(422, 'VALIDATION_ERROR', 'Choose a valid update type.'));
+    expect(run('progress.add', working(), provider(), body)).toEqual({
+      ok: true,
+    });
+  });
+
+  it('row 2: the current assignment must be accepted', () => {
+    expect(
+      run(
+        'progress.add',
+        working({ currentAssignment: assignment('pending_approval') }),
+        provider(),
+        body,
+      ),
+    ).toEqual(
+      conflict('Accept the current assignment before updating this job.'),
+    );
+  });
+
+  it('row 4: the note is 3 to 2000 characters once the body is given', () => {
+    const note = failure(422, 'VALIDATION_ERROR', 'Add a progress note.');
+    expect(
+      run('progress.add', working(), provider(), { ...body, note: ' ab ' }),
+    ).toEqual(note);
+    expect(
+      run('progress.add', working(), provider(), {
+        ...body,
+        note: 'x'.repeat(2001),
+      }),
+    ).toEqual(note);
+    expect(run('progress.add', working(), provider())).toEqual({ ok: true });
+  });
+
+  it('row 5 comes before the hold row and the issue row', () => {
+    expect(
+      run('progress.add', working({ status: 'matched' }), provider(), body),
+    ).toEqual(conflict('This job is not open for execution updates.'));
+    expect(
+      run(
+        'progress.add',
+        working({ status: 'blocked', hold: { kind: 'staff' } }),
+        provider(),
+        body,
+      ),
+    ).toEqual(
+      conflict(
+        'XPro has paused this job. Message XPro Dispatch before continuing.',
+      ),
+    );
+  });
+
+  it.each(['open', 'disputed'] as const)(
+    'row 7: an %s issue holds the provider back',
+    (status) => {
+      expect(
+        run(
+          'progress.add',
+          working({ status: 'blocked', openIssues: [{ status }] }),
+          provider(),
+          body,
+        ),
+      ).toEqual(
+        conflict(
+          'XPro is resolving the issue reported at completion. You can update the job once it is resolved.',
+        ),
+      );
+    },
+  );
+
+  it('addOnBehalf needs how the provider reported it, then the same state rows', () => {
+    const ops = staff('progress.review');
+    const onBehalf = { ...body, reportedVia: 'Phone call' };
+    expect(run('progress.addOnBehalf', working(), ops, onBehalf)).toEqual({
+      ok: true,
+    });
+    expect(
+      run('progress.addOnBehalf', working(), ops, {
+        ...onBehalf,
+        reportedVia: ' ',
+      }),
+    ).toEqual(
+      failure(
+        422,
+        'VALIDATION_ERROR',
+        'Add how the provider reported this update.',
+      ),
+    );
+    expect(
+      run(
+        'progress.addOnBehalf',
+        working({ status: 'blocked', openIssues: [{ status: 'open' }] }),
+        ops,
+        onBehalf,
+      ),
+    ).toMatchObject({
+      message:
+        'XPro is resolving the issue reported at completion. You can update the job once it is resolved.',
+    });
+    expect(
+      run(
+        'progress.addOnBehalf',
+        working({ status: 'blocked', hold: { kind: 'staff' } }),
+        ops,
+        onBehalf,
+      ),
+    ).toMatchObject({
+      message:
+        'XPro has paused this job. Message XPro Dispatch before continuing.',
+    });
+  });
+
+  it('review: a rejection needs a note; an approval is refused while paused or disputed', () => {
+    const ops = staff('progress.review');
+    const pendingRow = (overrides: Partial<RequestSnapshot> = {}) =>
+      working({
+        pendingUpdates: [{ kind: 'completion', state: 'pending' }],
+        ...overrides,
+      });
+    expect(
+      run('progress.review', pendingRow(), ops, { approve: false, note: ' ' }),
+    ).toEqual(
+      failure(
+        422,
+        'VALIDATION_ERROR',
+        'Explain why the update is not approved.',
+      ),
+    );
+    expect(
+      run('progress.review', pendingRow(), ops, { approve: true }),
+    ).toEqual({ ok: true });
+    const disputed = pendingRow({ openIssues: [{ status: 'disputed' }] });
+    expect(run('progress.review', disputed, ops, { approve: true })).toEqual(
+      conflict(
+        'This update no longer fits the current job status. Reject it instead.',
+      ),
+    );
+    expect(
+      run('progress.review', disputed, ops, {
+        approve: false,
+        note: 'Not enough evidence.',
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      run(
+        'progress.review',
+        pendingRow({ status: 'blocked', hold: { kind: 'staff' } }),
+        ops,
+        { approve: true },
+      ),
+    ).toEqual(
+      conflict(
+        'XPro has paused this job. Message XPro Dispatch before continuing.',
+      ),
+    );
+  });
+
+  it('releaseHold: a hold from before work is refused once the confirmed date has passed (04 §6.15)', () => {
+    const ops = staff('dispatch.manage');
+    const held = (endAt: Date, overrides: Partial<RequestSnapshot> = {}) =>
+      snapshot({
+        status: 'blocked',
+        hold: { kind: 'staff', previousStatus: 'scheduled' },
+        currentSchedule: schedule('confirmed', {
+          startAt: new Date(endAt.getTime() - 2 * HOUR),
+          endAt,
+        }),
+        ...overrides,
+      });
+    expect(
+      run('request.releaseHold', held(new Date(NOW.getTime() + HOUR)), ops),
+    ).toEqual({ ok: true });
+    expect(
+      run('request.releaseHold', held(new Date(NOW.getTime() - HOUR)), ops),
+    ).toEqual(
+      conflict(
+        'The confirmed date has passed. Propose a new date before releasing the hold.',
+      ),
+    );
+    const reproposed = held(new Date(NOW.getTime() - HOUR), {
+      currentSchedule: schedule('proposed'),
+      replacedSchedule: schedule('confirmed', {
+        endAt: new Date(NOW.getTime() - HOUR),
+      }),
+    });
+    expect(run('request.releaseHold', reproposed, ops)).toMatchObject({
+      ok: false,
+    });
+    expect(
+      run(
+        'request.releaseHold',
+        {
+          ...held(new Date(NOW.getTime() - HOUR)),
+          hold: { kind: 'staff', previousStatus: 'in_progress' },
+        },
+        ops,
+      ),
+    ).toEqual({ ok: true });
   });
 });

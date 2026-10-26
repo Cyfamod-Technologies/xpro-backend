@@ -33,7 +33,7 @@ function setup() {
     {} as never,
     {} as never,
   );
-  return { service, prisma };
+  return { service, prisma, actors };
 }
 
 describe('ProgressService.list reference lookup', () => {
@@ -64,6 +64,48 @@ describe('ProgressService.list reference lookup', () => {
         message: gone,
       });
       expect(prisma.progressUpdate.findMany).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('ProgressService.list review text', () => {
+  const rows = [
+    {
+      id: 'u1',
+      kind: 'progress',
+      target: 'in_progress',
+      note: 'Tiling done',
+      state: 'approved',
+      reviewNote: 'Looks good, keep photos coming.',
+      createdAt: new Date('2026-10-25T10:00:00.000Z'),
+    },
+  ];
+  const listFor = async (kind: 'customer' | 'staff' | 'provider') => {
+    const { service, prisma, actors } = setup();
+    prisma.progressUpdate.findMany.mockResolvedValue(rows);
+    prisma.assignment.findFirst.mockResolvedValue({ id: 'a1' });
+    actors.resolve.mockResolvedValue({
+      userId: 'customer-1',
+      kind,
+      platformRoles: [kind],
+      accountActive: true,
+      staff: { status: 'active', permissions: new Set(['progress.review']) },
+    });
+    return service.list({ id: 'customer-1' } as never, 'XPR-00042');
+  };
+
+  it('never returns reviewNote to the customer (D-37)', async () => {
+    const [item] = await listFor('customer');
+    expect(item).not.toHaveProperty('reviewNote');
+  });
+
+  it.each(['provider', 'staff'] as const)(
+    'returns reviewNote to the %s',
+    async (kind) => {
+      const [item] = await listFor(kind);
+      expect(item).toMatchObject({
+        reviewNote: 'Looks good, keep photos coming.',
+      });
     },
   );
 });

@@ -17,16 +17,31 @@ import {
   trimmed,
 } from './guards/common';
 import type { DomainGuard, GuardResult } from './guards/types';
+import {
+  PROGRESS_INPUT_STATUSES,
+  PROGRESS_ISSUE_PENDING_MESSAGE,
+  PROGRESS_NOT_OPEN_MESSAGE,
+  PROGRESS_PAUSED_MESSAGE,
+  PROGRESS_STALE_MESSAGE,
+} from './progress-rules';
 import type { ActorView, RequestSnapshot } from './snapshot';
 
 export { assertOpen } from './guards/common';
 
 const PAYMENT_WINDOW_MS = 30 * 60_000;
-const PAUSED_MESSAGE =
-  'XPro has paused this job. Message XPro Dispatch before continuing.';
-const NOT_OPEN_FOR_UPDATES = 'This job is not open for execution updates.';
 const ACKNOWLEDGEMENT_REQUIRED =
   'Customer acknowledgement is required before final closure.';
+const EXPLAIN_UNRESOLVED_ISSUE = 'Explain the unresolved issue.';
+// 02 §6.10 gives this message.
+const ESCALATION_NOTE_REQUIRED = 'Add a note explaining the escalation.';
+// new message: not in spec
+const CANNOT_BE_CANCELLED = 'This request can no longer be cancelled.';
+// new message: not in spec
+const NOT_AWAITING_DECISION =
+  'This cancellation request is no longer awaiting a decision.';
+// new message: not in spec
+const CLOSE_WITH_CANCELLATION =
+  'A cancellation request is waiting. Decide it before closing.';
 // new message: not in spec
 const EARLY_CLOSE_REASON =
   'Add a reason to close this request before the defects window ends.';
@@ -151,35 +166,86 @@ const scheduleRequestChange: DomainGuard<unknown> = (snap, actor) => {
   );
 };
 
-const progressAdd: DomainGuard<unknown> = (snap, actor) => {
+const notAcceptedYet = () =>
+  conflict('Accept the current assignment before updating this job.');
+
+const noteLengthOk = (value: unknown) => {
+  const length = trimmed(value).length;
+  return length >= 3 && length <= 2000;
+};
+
+const issueBlocksProgress = (snap: RequestSnapshot) =>
+  snap.openIssues.some(
+    ({ status }) => status === 'open' || status === 'disputed',
+  );
+
+// 04 §6.14 check table rows 1, 2, 4, 5, 6 and 7, in order. The schedule, link,
+// early-start, evidence and pending-update rows read rows the snapshot lacks,
+// so checkProgressAdd runs them in the service.
+const progressAdd: DomainGuard<unknown> = (snap, actor, input) => {
   if (!isCurrentProvider(snap, actor)) return accountDenied();
+  const body = objectInput<{ status?: unknown; note?: unknown }>(input);
   return firstFailure(
     assertOpen(snap),
-    snap.status === 'blocked' && snap.hold ? conflict(PAUSED_MESSAGE) : null,
+    body && !PROGRESS_INPUT_STATUSES.includes(body.status as 'in_progress')
+      ? invalid('Choose a valid update type.')
+      : null,
+    snap.currentAssignment?.status === 'accepted' ? null : notAcceptedYet(),
+    body && !noteLengthOk(body.note) ? invalid('Add a progress note.') : null,
     ['scheduled', 'in_progress', 'blocked'].includes(snap.status)
       ? null
-      : conflict(NOT_OPEN_FOR_UPDATES),
+      : conflict(PROGRESS_NOT_OPEN_MESSAGE),
+    snap.hold ? conflict(PROGRESS_PAUSED_MESSAGE) : null,
+    issueBlocksProgress(snap) ? conflict(PROGRESS_ISSUE_PENDING_MESSAGE) : null,
   );
 };
 
-const progressReview: DomainGuard<unknown> = (snap, actor) => {
+// 04 §6.14 review table. The assignment, fit, evidence and suspended rows read
+// the update's own rows, so ProgressService runs them.
+const progressReview: DomainGuard<unknown> = (snap, actor, input) => {
   if (!isStaffWith(actor, 'progress.review')) return staffDenied();
+  const body = objectInput<{ approve?: unknown; note?: unknown }>(input);
+  const approving = body?.approve === true;
   return firstFailure(
     assertOpen(snap),
     snap.pendingUpdates.length > 0
       ? null
       : conflict('This update is no longer awaiting review.'),
+    body && body.approve === false && !trimmed(body.note)
+      ? invalid('Explain why the update is not approved.')
+      : null,
+    // 04 §6.17: no completion approval while an issue is disputed.
+    approving && snap.openIssues.some(({ status }) => status === 'disputed')
+      ? conflict(PROGRESS_STALE_MESSAGE)
+      : null,
+    approving && snap.hold ? conflict(PROGRESS_PAUSED_MESSAGE) : null,
   );
 };
 
-const progressAddOnBehalf: DomainGuard<unknown> = (snap, actor) => {
+// 04 §6.14 on-behalf: the add table's state rows without the early-start and
+// one-pending rows (checkProgressAdd runs the rest).
+const progressAddOnBehalf: DomainGuard<unknown> = (snap, actor, input) => {
   if (!isStaffWith(actor, 'progress.review')) return staffDenied();
+  const body = objectInput<{
+    status?: unknown;
+    note?: unknown;
+    reportedVia?: unknown;
+  }>(input);
   return firstFailure(
     assertOpen(snap),
+    body && !PROGRESS_INPUT_STATUSES.includes(body.status as 'in_progress')
+      ? invalid('Choose a valid update type.')
+      : null,
+    snap.currentAssignment?.status === 'accepted' ? null : notAcceptedYet(),
+    body && trimmed(body.reportedVia).length < 3
+      ? invalid('Add how the provider reported this update.')
+      : null,
+    body && !noteLengthOk(body.note) ? invalid('Add a progress note.') : null,
     ['scheduled', 'in_progress', 'blocked'].includes(snap.status)
       ? null
-      : conflict(NOT_OPEN_FOR_UPDATES),
-    snap.hold ? conflict(PAUSED_MESSAGE) : null,
+      : conflict(PROGRESS_NOT_OPEN_MESSAGE),
+    snap.hold ? conflict(PROGRESS_PAUSED_MESSAGE) : null,
+    issueBlocksProgress(snap) ? conflict(PROGRESS_ISSUE_PENDING_MESSAGE) : null,
   );
 };
 
@@ -203,10 +269,16 @@ const hold: DomainGuard<unknown> = (snap, actor, input) => {
   );
 };
 
-// Whether the confirmed date has passed needs `hold.previousStatus`, which the
-// snapshot does not carry; HoldsService checks it (04 §6.15 second check).
-const releaseHold: DomainGuard<unknown> = (snap, actor) => {
+const confirmedScheduleOf = (snap: RequestSnapshot) =>
+  snap.currentSchedule?.status === 'confirmed'
+    ? snap.currentSchedule
+    : snap.replacedSchedule?.status === 'confirmed'
+      ? snap.replacedSchedule
+      : null;
+
+const releaseHold: DomainGuard<unknown> = (snap, actor, _input, now) => {
   if (!holdOrRelease(actor)) return staffDenied();
+  const confirmed = confirmedScheduleOf(snap);
   return firstFailure(
     assertOpen(snap),
     snap.status === 'blocked' && snap.hold
