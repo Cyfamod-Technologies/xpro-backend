@@ -617,7 +617,25 @@ describe('RequestEventsService.onProviderHoursChanged', () => {
     },
   });
 
-  it('sets a still-proposed schedule to changes_requested', async () => {
+  it('runs one runner command per affected request (D-25)', async () => {
+    const tx = scheduleTx({ id: 'schedule-1' });
+    const { service, runner } = build({ tx });
+    const runSystem = jest.spyOn(runner, 'runSystem');
+
+    await service.onProviderHoursChanged('provider-1', [
+      { scheduleId: 'schedule-1', requestId: 'request-1' },
+      { scheduleId: 'schedule-2', requestId: 'request-2' },
+    ]);
+
+    expect(
+      runSystem.mock.calls.map(([command, ref]) => [command, ref]),
+    ).toEqual([
+      ['provider.hoursChanged', 'request-1'],
+      ['provider.hoursChanged', 'request-2'],
+    ]);
+  });
+
+  it('sets a still-proposed schedule to changes_requested with the provider party, a staff item and a notification', async () => {
     const tx = scheduleTx({ id: 'schedule-1' });
     const { service, effects, runs } = build({ tx });
 
@@ -630,19 +648,30 @@ describe('RequestEventsService.onProviderHoursChanged', () => {
       requestRef: 'request-1',
       result: { changed: true },
     });
+    expect(runs[0].opts).toBeUndefined();
     expect(tx.schedule.update).toHaveBeenCalledWith({
       where: { id: 'schedule-1' },
       data: {
         status: 'changes_requested',
+        provider: 'changes_requested',
         responses: { push: 'Provider: working hours changed' },
       },
     });
     expect(effects.audit).toHaveLength(1);
+    expect(effects.approvalOpens).toEqual([
+      { kind: 'schedule_change', itemId: 'schedule-1' },
+    ]);
+    expect(effects.notify).toEqual([
+      {
+        event: 'schedule.change_requested',
+        params: { requestCode: 'XPR-00042' },
+      },
+    ]);
   });
 
   it('skips a schedule that was answered in the meantime', async () => {
     const tx = scheduleTx(null);
-    const { service, runs } = build({ tx });
+    const { service, effects, runs } = build({ tx });
 
     await service.onProviderHoursChanged('provider-1', [
       { scheduleId: 'schedule-1', requestId: 'request-1' },

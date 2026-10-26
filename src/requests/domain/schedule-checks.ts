@@ -19,7 +19,7 @@ export type ScheduleProviderCalendar = {
 export type ScheduleInterval = { startAt: Date; endAt: Date };
 
 /** `HH:mm` on the WAT clock. */
-function watClock(instant: Date): string {
+export function watClock(instant: Date): string {
   const minutes = Math.floor(watParts(instant).minutes);
   const hh = String(Math.floor(minutes / 60)).padStart(2, '0');
   const mm = String(minutes % 60).padStart(2, '0');
