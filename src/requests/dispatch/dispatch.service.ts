@@ -12,6 +12,11 @@ import { SETTINGS_REGISTRY } from '../../platform/settings/settings.registry';
 import { addWorkingMinutes } from '../../platform/calendar/business-calendar';
 import type { TimerKind } from '../../platform/timers/timer-kinds';
 import { PrismaService } from '../../prisma/prisma.service';
+import { rejectPendingUpdates } from '../cancellation/cancellation-cleanup';
+import {
+  closeOpenApprovals,
+  PROVIDER_BOUND_APPROVAL_KINDS,
+} from '../approval-effects';
 import { RequestCommandRunner, type CommandContext } from '../command-runner';
 import {
   assessManualOffer,
@@ -432,6 +437,14 @@ export class DispatchService {
             ctx.timers.stop(QUOTE_TIMERS, quote.id);
         }
         await this.cancelOpenSchedules(ctx);
+        await rejectPendingUpdates(ctx, assignment.id);
+        ctx.approvals.close('assignment', assignment.id, 'withdrawn');
+        ctx.approvals.open('needs_assignment', ctx.snap.id);
+        await closeOpenApprovals(
+          ctx,
+          PROVIDER_BOUND_APPROVAL_KINDS,
+          'withdrawn',
+        );
         const dispatchRequest = buildDispatchRequest(request, {
           districtName: ctx.snap.districtName,
           cityName: ctx.snap.cityName,
@@ -510,6 +523,13 @@ export class DispatchService {
           data: { providerChangedAt: ctx.now },
         });
         await this.cancelOpenSchedules(ctx);
+        await rejectPendingUpdates(ctx, assignment.id);
+        ctx.approvals.open('needs_assignment', ctx.snap.id);
+        await closeOpenApprovals(
+          ctx,
+          PROVIDER_BOUND_APPROVAL_KINDS,
+          'replaced',
+        );
         // FD-7: the old provider's primary payout never pays out; the new provider's is created at completion.
         const payouts = await ctx.tx.payout.findMany({
           where: {

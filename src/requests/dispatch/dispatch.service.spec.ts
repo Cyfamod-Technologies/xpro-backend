@@ -911,8 +911,19 @@ describe('DispatchService.respond', () => {
 describe('DispatchService.withdraw (04 §5.2 #14, §5.5, §5.6)', () => {
   const withdrawTx = (
     status: string,
-    options: { sentQuotes?: string[]; schedules?: string[] } = {},
+    options: {
+      sentQuotes?: string[];
+      schedules?: string[];
+      pending?: string[];
+    } = {},
   ) => ({
+    approvalDeadline: { findMany: jest.fn().mockResolvedValue([]) },
+    progressUpdate: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue((options.pending ?? []).map((id) => ({ id }))),
+      updateMany: jest.fn(),
+    },
     assignment: {
       findFirst: jest.fn().mockResolvedValue({
         id: 'a1',
@@ -1052,6 +1063,33 @@ describe('DispatchService.withdraw (04 §5.2 #14, §5.5, §5.6)', () => {
     expect(tx.schedule.updateMany).not.toHaveBeenCalled();
   });
 
+  it('auto-rejects the assignment’s pending updates with assignment_ended and stops their review timers', async () => {
+    const tx = withdrawTx('accepted', { pending: ['u1', 'u2'] });
+    const { service, effects } = build({ tx });
+
+    await withdraw(service);
+
+    expect(tx.progressUpdate.findMany).toHaveBeenCalledWith({
+      where: { requestId: 'request-1', state: 'pending', assignmentId: 'a1' },
+      select: { id: true, kind: true },
+    });
+    expect(tx.progressUpdate.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['u1', 'u2'] }, state: 'pending' },
+      data: {
+        state: 'rejected',
+        systemReason: 'assignment_ended',
+        reviewedAt: now,
+      },
+    });
+    expect(
+      effects.approvalCloses.filter(({ itemId }) => itemId === 'u1'),
+    ).toEqual([{ kind: 'progress', itemId: 'u1', reason: 'assignment_ended' }]);
+    expect(effects.approvalOpens).toContainEqual({
+      kind: 'needs_assignment',
+      itemId: 'request-1',
+    });
+  });
+
   it('refuses an assignment that is no longer current', async () => {
     const tx = withdrawTx('offered');
     tx.assignment.findFirst.mockResolvedValue(null);
@@ -1068,8 +1106,19 @@ describe('DispatchService.withdraw (04 §5.2 #14, §5.5, §5.6)', () => {
 
 describe('DispatchService.replace (04 §5.2 #21, §6.19)', () => {
   const replaceTx = (
-    options: { schedules?: string[]; payouts?: string[] } = {},
+    options: {
+      schedules?: string[];
+      payouts?: string[];
+      pending?: string[];
+    } = {},
   ) => ({
+    approvalDeadline: { findMany: jest.fn().mockResolvedValue([]) },
+    progressUpdate: {
+      findMany: jest
+        .fn()
+        .mockResolvedValue((options.pending ?? []).map((id) => ({ id }))),
+      updateMany: jest.fn(),
+    },
     assignment: {
       findFirst: jest.fn().mockResolvedValue({
         id: 'a1',
@@ -1123,6 +1172,31 @@ describe('DispatchService.replace (04 §5.2 #21, §6.19)', () => {
     expect(tx.serviceRequest.update).toHaveBeenCalledWith({
       where: { id: 'request-1' },
       data: { status: 'under_review', needsAssignmentReason: 'replaced' },
+    });
+  });
+
+  it('auto-rejects the old assignment’s pending updates with assignment_ended', async () => {
+    const tx = replaceTx({ pending: ['u1'] });
+    const { service, effects } = build({ tx });
+
+    await replace(service);
+
+    expect(tx.progressUpdate.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['u1'] }, state: 'pending' },
+      data: {
+        state: 'rejected',
+        systemReason: 'assignment_ended',
+        reviewedAt: now,
+      },
+    });
+    expect(effects.approvalCloses).toContainEqual({
+      kind: 'progress',
+      itemId: 'u1',
+      reason: 'assignment_ended',
+    });
+    expect(effects.approvalOpens).toContainEqual({
+      kind: 'needs_assignment',
+      itemId: 'request-1',
     });
   });
 
