@@ -7,6 +7,8 @@ export type ActorView = {
   platformRoles?: ReadonlyArray<string>;
   permissions?: ReadonlySet<string>;
   canOwn?: boolean;
+  /** Needed by the dispute decision (04 §6.17), which only a super admin may make. */
+  isSuperAdmin?: boolean;
 };
 
 export type AssignmentSnapshot = {
@@ -80,6 +82,12 @@ export type PendingCancellationSnapshot = {
   workStarted: boolean;
 };
 
+export type OpenEscalationSnapshot = {
+  id: string;
+  to: 'operations' | 'super_admin';
+  raisedBy: string | null;
+};
+
 export type RequestSnapshot = {
   id: string;
   number: string;
@@ -121,6 +129,8 @@ export type RequestSnapshot = {
   pendingCancellationInfo: PendingCancellationSnapshot | null;
   /** Refunds for this request that are neither completed, waived nor rejected. */
   refundsOutstanding: number;
+  /** Unresolved escalations, at most one per target (02 §6.10); the escalate and resolve guards read them. */
+  openEscalations?: ReadonlyArray<OpenEscalationSnapshot>;
   latestNoShow: {
     status: 'open' | 'confirmed' | 'dismissed' | 'voided';
   } | null;

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { RequestTimer } from '@prisma/client';
 import { TimerRegistry } from '../../platform/timers/timer-registry';
 import { RequestCommandRunner } from '../command-runner';
+import { openEscalation } from '../escalation-effects';
 
 @Injectable()
 export class ExecutionTimerHandlers {
@@ -36,29 +37,12 @@ export class ExecutionTimerHandlers {
       timer.requestId,
       async (ctx) => {
         if (ctx.snap.status !== 'in_progress') return { changed: false };
-        const exists = await ctx.tx.requestEscalation.findFirst({
-          where: {
-            requestId: ctx.snap.id,
-            target: 'operations',
-            resolvedAt: null,
-          },
-          select: { id: true },
+        const id = await openEscalation(ctx, {
+          to: 'operations',
+          note: 'No progress update was recorded before the escalation deadline.',
+          source: 'system',
         });
-        if (exists) return { changed: false };
-        const row = await ctx.tx.requestEscalation.create({
-          data: {
-            requestId: ctx.snap.id,
-            target: 'operations',
-            source: 'system',
-            note: 'No progress update was recorded before the escalation deadline.',
-            raisedAt: ctx.now,
-          },
-        });
-        ctx.approvals.open('escalation', row.id);
-        ctx.audit('Escalated to operations (no progress update)', {
-          resourceType: 'request_escalation',
-          resourceId: row.id,
-        });
+        if (!id) return { changed: false };
       },
     );
   }

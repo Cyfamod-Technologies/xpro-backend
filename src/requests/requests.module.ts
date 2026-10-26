@@ -22,6 +22,7 @@ import { PricingController } from './pricing/pricing.controller';
 import { DispatchTimerHandlers } from './dispatch/dispatch-timer-handlers';
 import { T9TimerHandlers } from './t9-timer-handlers';
 import { PaymentsModule } from '../payments/payments.module';
+import { ProvidersModule } from '../providers/providers.module';
 import { PricingTimerHandlers } from './pricing/pricing-timer-handlers';
 import { SchedulesController } from './scheduling/schedules.controller';
 import { SchedulesService } from './scheduling/schedules.service';
@@ -41,6 +42,8 @@ import { IssuesController } from './completion/issues.controller';
 import { IssuesService } from './completion/issues.service';
 import { CancellationController } from './cancellation/cancellation.controller';
 import { CancellationService } from './cancellation/cancellation.service';
+import { CancellationTimerHandlers } from './cancellation/cancellation-timer-handlers';
+import { EscalationsService } from '../approvals/escalations.service';
 import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
 
 @Module({
@@ -52,6 +55,7 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     OutboxModule,
     UploadsModule,
     PaymentsModule,
+    ProvidersModule,
     RequestEventsModule,
   ],
   controllers: [
@@ -89,6 +93,8 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     ClosureService,
     IssuesService,
     CancellationService,
+    CancellationTimerHandlers,
+    EscalationsService,
     ExecutionTimerHandlers,
     RequestFileAccess,
     T6TimerHandlers,

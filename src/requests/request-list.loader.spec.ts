@@ -302,6 +302,7 @@ function fakeDb() {
       ),
     },
     upload: { findMany: jest.fn().mockResolvedValue([]) },
+    requestEscalation: { findMany: jest.fn().mockResolvedValue([]) },
     payment: {
       findMany: jest.fn(({ where }: { where: Where }) =>
         Promise.resolve(

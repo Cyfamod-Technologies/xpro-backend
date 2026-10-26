@@ -3,12 +3,11 @@ import type { Prisma } from '@prisma/client';
 import { SYSTEM_ACTOR } from '../../platform/actor/actor.types';
 import { AppError } from '../../platform/errors/app-error';
 import { PrismaService } from '../../prisma/prisma.service';
-import {
-  closeRequestApprovals,
-  endAcceptedAssignments,
-} from '../cancellation/cancellation-cleanup';
+import { endAcceptedAssignments } from '../cancellation/cancellation-cleanup';
+import { closeRequestApprovals } from '../approval-effects';
 import { RequestCommandRunner } from '../command-runner';
 import { assertOpen } from '../domain/guards/common';
+import { openEscalation } from '../escalation-effects';
 import { cancellationRefundsResolved } from '../../payments/domain/refund-rules';
 
 export type AfterCommit = () => Promise<void>;
@@ -263,6 +262,12 @@ export class RequestEventsService {
                 version: { increment: 1 },
               },
             });
+            // 02 §6.10: an open job flagged by a provider suspension goes to Operations.
+            await openEscalation(ctx, {
+              to: 'operations',
+              note: `The provider on this job can no longer take work: ${reason}`,
+              source: 'system',
+            });
             ctx.audit('Provider standing changed on an accepted job', {
               changes: { providerId, reason },
             });
@@ -319,11 +324,16 @@ export class RequestEventsService {
       await this.runner.runSystem(
         'customer.suspended',
         request.id,
-        (ctx) => {
+        async (ctx) => {
+          // 02 §6.10: an open job flagged by a customer suspension goes to Operations.
+          await openEscalation(ctx, {
+            to: 'operations',
+            note: "The customer's account was suspended.",
+            source: 'system',
+          });
           ctx.notify('request.customer_suspended', {
             requestCode: ctx.snap.number,
           });
-          return Promise.resolve();
         },
         { bumpVersion: false },
       );

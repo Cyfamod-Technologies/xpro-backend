@@ -54,6 +54,9 @@ describe('T15 and T16 execution timers', () => {
         findFirst: jest.fn().mockResolvedValue(existing),
         create: jest.fn().mockResolvedValue({ id: 'esc-1' }),
       },
+      serviceRequest: {
+        findUnique: jest.fn().mockResolvedValue({ title: 'Roof repair' }),
+      },
     });
 
     it('raises one operations escalation and opens its item', async () => {
@@ -75,6 +78,16 @@ describe('T15 and T16 execution timers', () => {
         { kind: 'escalation', itemId: 'esc-1' },
       ]);
       expect(effects.audit).toHaveLength(1);
+      expect(effects.notify).toEqual([
+        {
+          event: 'escalation.raised',
+          params: {
+            requestCode: 'XPR-00042',
+            title: 'Roof repair',
+            note: 'No progress update was recorded before the escalation deadline.',
+          },
+        },
+      ]);
     });
 
     it.each([

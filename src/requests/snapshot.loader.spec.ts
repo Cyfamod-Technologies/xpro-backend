@@ -104,6 +104,9 @@ function build(options: Options = {}) {
     refund: {
       count: jest.fn().mockResolvedValue(options.refundsOutstanding ?? 0),
     },
+    requestEscalation: {
+      findMany: jest.fn().mockResolvedValue(options.escalations ?? []),
+    },
     $queryRaw: jest.fn(),
   };
   return tx;
@@ -344,5 +347,30 @@ describe('RequestSnapshotLoader cancellation and refunds', () => {
         status: { notIn: ['completed', 'waived', 'rejected'] },
       },
     });
+  });
+});
+
+describe('RequestSnapshotLoader open escalations', () => {
+  it('lists the unresolved escalations with their target and raiser', async () => {
+    const { tx, snapshot } = await load({
+      escalations: [
+        { id: 'e1', target: 'super_admin', raisedBy: 'staff-1' },
+        { id: 'e2', target: 'operations', raisedBy: null },
+      ],
+    });
+    expect(snapshot.openEscalations).toEqual([
+      { id: 'e1', to: 'super_admin', raisedBy: 'staff-1' },
+      { id: 'e2', to: 'operations', raisedBy: null },
+    ]);
+    expect(tx.requestEscalation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { requestId: REQUEST_ID, resolvedAt: null },
+      }),
+    );
+  });
+
+  it('is empty without escalations', async () => {
+    const { snapshot } = await load();
+    expect(snapshot.openEscalations).toEqual([]);
   });
 });

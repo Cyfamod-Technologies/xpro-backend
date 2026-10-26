@@ -1,10 +1,15 @@
-import { IsIn, IsString, MaxLength, MinLength } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
+import { IsIn, IsString, MaxLength } from 'class-validator';
 
+// The 5-character minimum is checked by the request.escalate / request.escalation.resolve guards so the spec's messages reach the client (plan C.7).
 export class RaiseEscalationDto {
-  @IsIn(['operations', 'super_admin']) target!: 'operations' | 'super_admin';
-  @IsString() @MinLength(5) @MaxLength(1000) note!: string;
+  @ApiProperty({ enum: ['operations', 'super_admin'] })
+  @IsIn(['operations', 'super_admin'])
+  to!: 'operations' | 'super_admin';
+
+  @ApiProperty() @IsString() @MaxLength(1000) note!: string;
 }
 
 export class ResolveEscalationDto {
-  @IsString() @MinLength(5) @MaxLength(1000) note!: string;
+  @ApiProperty() @IsString() @MaxLength(1000) note!: string;
 }

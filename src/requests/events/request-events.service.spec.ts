@@ -359,8 +359,15 @@ describe('RequestEventsService provider events', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
       },
-      serviceRequest: { update: jest.fn() },
+      serviceRequest: {
+        update: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue({ title: 'Roof repair' }),
+      },
       payout: { updateMany: jest.fn() },
+      requestEscalation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'esc-1' }),
+      },
     };
     const prisma = {
       providerProfile: {
@@ -417,6 +424,23 @@ describe('RequestEventsService provider events', () => {
     expect(effects.notify.map((entry) => entry.event)).toContain(
       'request.provider_standing_changed',
     );
+    // 02 §6.10: the accepted job is flagged to Operations as a system escalation.
+    expect(tx.requestEscalation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        requestId: 'request-1',
+        target: 'operations',
+        source: 'system',
+        raisedBy: null,
+      }) as unknown,
+    });
+    expect(effects.approvalOpens).toContainEqual({
+      kind: 'escalation',
+      itemId: 'esc-1',
+    });
+    expect(effects.notify).toContainEqual({
+      event: 'escalation.raised',
+      params: expect.objectContaining({ title: 'Roof repair' }) as unknown,
+    });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         entityType: 'provider_profile',
@@ -623,5 +647,107 @@ describe('RequestEventsService.onProviderHoursChanged', () => {
 
     expect(runs[0].result).toEqual({ changed: false });
     expect(tx.schedule.update).not.toHaveBeenCalled();
+    expect(effects.approvalOpens).toEqual([]);
+    expect(effects.notify).toEqual([]);
+  });
+
+  it('leaves a cancelled request alone', async () => {
+    const tx = scheduleTx({ id: 'schedule-1' });
+    const { service, runs } = build({ tx, snap: { status: 'cancelled' } });
+
+    await service.onProviderHoursChanged('provider-1', [
+      { scheduleId: 'schedule-1', requestId: 'request-1' },
+    ]);
+
+    expect(runs[0].result).toEqual({ changed: false });
+    expect(tx.schedule.update).not.toHaveBeenCalled();
+  });
+
+  it('keeps going after one request fails and rethrows the first failure', async () => {
+    const tx = scheduleTx({ id: 'schedule-1' });
+    tx.schedule.update.mockRejectedValueOnce(new Error('boom'));
+    const { service, runs } = build({ tx });
+
+    await expect(
+      service.onProviderHoursChanged('provider-1', [
+        { scheduleId: 'schedule-1', requestId: 'request-1' },
+        { scheduleId: 'schedule-2', requestId: 'request-2' },
+      ]),
+    ).rejects.toThrow('boom');
+    expect(runs.map((run) => run.requestRef)).toEqual(['request-2']);
+  });
+});
+
+describe('RequestEventsService.onCustomerSuspended (02 §6.10)', () => {
+  it('flags every open request of the customer to operations with a system escalation', async () => {
+    const tx = {
+      requestEscalation: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'esc-1' }),
+      },
+      serviceRequest: {
+        findUnique: jest.fn().mockResolvedValue({ title: 'Roof repair' }),
+      },
+    };
+    const prisma = {
+      serviceRequest: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'request-1' }, { id: 'request-2' }]),
+      },
+    };
+    const { service, effects, runs } = build({ tx, prisma });
+
+    await service.onCustomerSuspended('customer-1');
+
+    expect(prisma.serviceRequest.findMany).toHaveBeenCalledWith({
+      where: {
+        ownerId: 'customer-1',
+        status: { notIn: ['closed', 'cancelled', 'rejected'] },
+      },
+      select: { id: true },
+    });
+    expect(runs.map((run) => run.requestRef)).toEqual([
+      'request-1',
+      'request-2',
+    ]);
+    expect(tx.requestEscalation.create).toHaveBeenCalledTimes(2);
+    expect(tx.requestEscalation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        target: 'operations',
+        source: 'system',
+        raisedBy: null,
+      }) as unknown,
+    });
+    expect(effects.approvalOpens).toEqual([
+      { kind: 'escalation', itemId: 'esc-1' },
+      { kind: 'escalation', itemId: 'esc-1' },
+    ]);
+    expect(effects.notify.map(({ event }) => event)).toEqual([
+      'escalation.raised',
+      'request.customer_suspended',
+      'escalation.raised',
+      'request.customer_suspended',
+    ]);
+  });
+
+  it('does not raise a second escalation when one to operations is already open', async () => {
+    const tx = {
+      requestEscalation: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'esc-0' }),
+        create: jest.fn(),
+      },
+    };
+    const prisma = {
+      serviceRequest: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'request-1' }]),
+      },
+    };
+    const { service, effects } = build({ tx, prisma });
+
+    await service.onCustomerSuspended('customer-1');
+
+    expect(tx.requestEscalation.create).not.toHaveBeenCalled();
+    expect(effects.approvalOpens).toEqual([]);
   });
 });

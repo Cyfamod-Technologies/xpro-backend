@@ -9,5 +9,6 @@ export function toActorView(actor: ActorContext): ActorView {
     platformRoles: actor.platformRoles,
     permissions: actor.staff?.permissions,
     canOwn: actor.staff?.canOwn,
+    isSuperAdmin: actor.staff?.isSuperAdmin,
   };
 }

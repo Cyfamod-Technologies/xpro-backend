@@ -38,6 +38,7 @@ export type RequestDb = Pick<
   | 'requestTimer'
   | 'payment'
   | 'refund'
+  | 'requestEscalation'
   | 'upload'
   | '$queryRaw'
 >;
@@ -108,6 +109,7 @@ export class RequestSnapshotLoader {
       uploads,
       payments,
       refundsOutstanding,
+      openEscalations,
     ] = await Promise.all([
       assignment
         ? tx.providerProfile.findUnique({
@@ -171,6 +173,11 @@ export class RequestSnapshotLoader {
           status: { notIn: ['completed', 'waived', 'rejected'] },
         },
       }),
+      tx.requestEscalation.findMany({
+        where: { requestId: row.id, resolvedAt: null },
+        select: { id: true, target: true, raisedBy: true },
+        orderBy: { raisedAt: 'asc' },
+      }),
     ]);
     return {
       row,
@@ -184,6 +191,7 @@ export class RequestSnapshotLoader {
         uploads,
         payments,
         refundsOutstanding,
+        openEscalations,
       }),
     };
   }
@@ -272,6 +280,12 @@ export type SnapshotLookups = {
   cascadePending: boolean;
   payments: Array<{ status: string; createdAt: Date; quoteId: string }>;
   refundsOutstanding: number;
+  /** Unresolved escalation rows; the list loader leaves them out. */
+  openEscalations?: Array<{
+    id: string;
+    target: string;
+    raisedBy: string | null;
+  }>;
   /** The list loader leaves these out: no summary field reads them. */
   city?: { name: string } | null;
   district?: { name: string } | null;
@@ -400,6 +414,11 @@ export function buildSnapshot(
         }
       : null,
     refundsOutstanding,
+    openEscalations: (lookups.openEscalations ?? []).map((item) => ({
+      id: item.id,
+      to: item.target === 'super_admin' ? 'super_admin' : 'operations',
+      raisedBy: item.raisedBy,
+    })),
     latestNoShow: row.noShows[0] ? { status: row.noShows[0].status } : null,
     payment: {
       paid,

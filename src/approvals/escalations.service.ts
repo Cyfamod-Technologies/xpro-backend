@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import type { RequestEscalation } from '@prisma/client';
 import { ActorService } from '../platform/actor/actor.service';
-import { requirePermission } from '../platform/actor/actor.guards';
+import {
+  requireActiveStaff,
+  requirePermission,
+} from '../platform/actor/actor.guards';
 import { AppError } from '../platform/errors/app-error';
 import { hashRequest } from '../platform/idempotency/idempotency.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,11 +13,43 @@ import {
   RequestCommandRunner,
   type CommandContext,
 } from '../requests/command-runner';
-import { ApprovalsHooks } from '../requests/approvals.hooks';
+import { ESCALATION_MESSAGES } from '../requests/domain/escalation-guards';
+import { openEscalation } from '../requests/escalation-effects';
 import { resolveRequestId } from '../requests/request-ref';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
+
+export type EscalationDto = {
+  id: string;
+  requestId: string;
+  to: 'operations' | 'super_admin';
+  source: 'staff' | 'system';
+  note: string;
+  raisedBy: string | null;
+  raisedAt: string;
+  state: 'open' | 'resolved';
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  resolutionNote: string | null;
+};
+
+/** 02 §4.5: the `Escalation` shape. The columns keep their names (`target`, `resolution`); the API says `to` and `resolutionNote`. */
+export function escalationDto(row: RequestEscalation): EscalationDto {
+  return {
+    id: row.id,
+    requestId: row.requestId,
+    to: row.target === 'super_admin' ? 'super_admin' : 'operations',
+    source: row.source === 'system' ? 'system' : 'staff',
+    note: row.note,
+    raisedBy: row.raisedBy,
+    raisedAt: row.raisedAt.toISOString(),
+    state: row.resolvedAt ? 'resolved' : 'open',
+    resolvedBy: row.resolvedBy,
+    resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    resolutionNote: row.resolution,
+  };
+}
 
 @Injectable()
 export class EscalationsService {
@@ -21,13 +57,12 @@ export class EscalationsService {
     private readonly prisma: PrismaService,
     private readonly actors: ActorService,
     private readonly runner: RequestCommandRunner,
-    private readonly deadlines: ApprovalsHooks,
   ) {}
 
   async raise(
     user: RequestUser,
     requestId: string,
-    dto: { target: 'operations' | 'super_admin'; note: string },
+    dto: { to: 'operations' | 'super_admin'; note: string },
     version: number | undefined,
     url: string,
     key?: string,
@@ -49,40 +84,14 @@ export class EscalationsService {
           : {}),
       },
       async (ctx) => {
-        const duplicate = await ctx.tx.requestEscalation.findFirst({
-          where: {
-            requestId: ctx.snap.id,
-            target: dto.target,
-            resolvedAt: null,
-          },
-        });
-        if (duplicate)
-          throw conflict(
-            `This request already has an open escalation to ${dto.target}.`,
-          );
-        const row = await ctx.tx.requestEscalation.create({
-          data: {
-            requestId: ctx.snap.id,
-            target: dto.target,
-            source: 'staff',
-            note: dto.note.trim(),
-            raisedBy: user.id,
-            raisedAt: ctx.now,
-          },
-        });
-        await this.deadlines.open(
-          ctx.tx,
-          'escalation',
-          row.id,
-          ctx.snap.id,
-          ctx.now,
-          user.id,
-        );
-        ctx.audit('Request escalation raised', {
-          resourceType: 'request_escalation',
-          resourceId: row.id,
+        // The runner guard checked the note, an open request and that no escalation to this target is open.
+        const id = await openEscalation(ctx, {
+          to: dto.to,
           note: dto.note,
+          source: 'staff',
+          raisedBy: user.id,
         });
+        if (!id) throw conflict(ESCALATION_MESSAGES.alreadyOpen(dto.to));
       },
     );
   }
@@ -104,7 +113,7 @@ export class EscalationsService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
-        input: dto,
+        input: { escalationId, note: dto.note },
         ...(key
           ? {
               idempotencyKey: key,
@@ -113,32 +122,28 @@ export class EscalationsService {
           : {}),
       },
       async (ctx) => {
+        // The runner guard checked the escalation is open, the raiser and super-admin rules and the note.
+        const note = dto.note.trim();
         const row = await ctx.tx.requestEscalation.findFirst({
           where: { id: escalationId, requestId: ctx.snap.id, resolvedAt: null },
         });
-        if (!row) throw conflict('This escalation is no longer open.');
-        if (row.target === 'super_admin' && !actor.staff?.isSuperAdmin)
-          throw new AppError(
-            403,
-            'FORBIDDEN',
-            'A super admin must resolve this escalation.',
-          );
-        if (row.raisedBy === user.id && !actor.staff?.isSuperAdmin)
-          throw conflict('Someone else must resolve an escalation you raised.');
+        if (!row) throw conflict(ESCALATION_MESSAGES.notOpen);
         await ctx.tx.requestEscalation.update({
           where: { id: row.id },
-          data: {
-            resolvedBy: user.id,
-            resolvedAt: ctx.now,
-            resolution: dto.note.trim(),
-          },
+          data: { resolvedBy: user.id, resolvedAt: ctx.now, resolution: note },
         });
-        await this.deadlines.close(ctx.tx, 'escalation', row.id, ctx.now);
-        ctx.audit('Request escalation resolved', {
+        ctx.approvals.close('escalation', row.id, 'resolved');
+        ctx.audit('request.escalation_resolved', {
           resourceType: 'request_escalation',
           resourceId: row.id,
-          note: dto.note,
+          note,
         });
+        if (row.raisedBy)
+          ctx.notify('escalation.resolved', {
+            recipientId: row.raisedBy,
+            requestCode: ctx.snap.number,
+            note,
+          });
       },
     );
   }
@@ -149,7 +154,10 @@ export class EscalationsService {
    * note and its queue item closes, in the decision's own transaction.
    */
   async resolveForDispute(
-    ctx: Pick<CommandContext, 'tx' | 'snap' | 'now' | 'audit' | 'approvals'>,
+    ctx: Pick<
+      CommandContext,
+      'tx' | 'snap' | 'now' | 'audit' | 'approvals' | 'notify'
+    >,
     resolvedBy: string,
     note: string,
   ): Promise<number> {
@@ -159,26 +167,33 @@ export class EscalationsService {
         target: 'super_admin',
         resolvedAt: null,
       },
-      select: { id: true },
+      select: { id: true, raisedBy: true },
     });
-    for (const { id } of open) {
+    for (const { id, raisedBy } of open) {
       await ctx.tx.requestEscalation.update({
         where: { id },
         data: { resolvedBy, resolvedAt: ctx.now, resolution: note.trim() },
       });
       ctx.approvals.close('escalation', id, 'resolved');
-      ctx.audit('Request escalation resolved', {
+      ctx.audit('request.escalation_resolved', {
         resourceType: 'request_escalation',
         resourceId: id,
         note,
       });
+      if (raisedBy)
+        ctx.notify('escalation.resolved', {
+          recipientId: raisedBy,
+          requestCode: ctx.snap.number,
+          note: note.trim(),
+        });
     }
     return open.length;
   }
 
-  async list(user: RequestUser, requestRef: string) {
+  /** Any active staff member can read a request's escalations (02 §4.5, §11.3). */
+  async list(user: RequestUser, requestRef: string): Promise<EscalationDto[]> {
     const actor = await this.actors.resolve(user.id);
-    requirePermission(actor, 'request.escalation.resolve');
+    requireActiveStaff(actor);
     const requestId = await resolveRequestId(this.prisma, requestRef);
     if (!requestId)
       throw new AppError(
@@ -190,16 +205,6 @@ export class EscalationsService {
       where: { requestId },
       orderBy: { raisedAt: 'desc' },
     });
-    return rows.map((row) => ({
-      id: row.id,
-      target: row.target,
-      source: row.source,
-      note: row.note,
-      raisedBy: row.raisedBy,
-      raisedAt: row.raisedAt.toISOString(),
-      resolvedBy: row.resolvedBy,
-      resolvedAt: row.resolvedAt?.toISOString() ?? null,
-      resolution: row.resolution,
-    }));
+    return rows.map(escalationDto);
   }
 }
