@@ -1,7 +1,6 @@
 import {
   Body,
   Controller,
-  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -18,8 +17,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../../common/types/request-user';
 import { IdempotencyKey } from '../../platform/idempotency/idempotency-key.decorator';
-import { parseEtag } from '../../platform/concurrency/etag.util';
-import { AppError } from '../../platform/errors/app-error';
+import { IfMatch } from '../../platform/concurrency/if-match.decorator';
 import { DispatchService } from './dispatch.service';
 import {
   AutoAssignDto,
@@ -51,18 +49,11 @@ export class DispatchController {
       }),
     )
     dto: DispatchModeDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.setMode(
       user.id,
       id,
@@ -94,18 +85,11 @@ export class DispatchController {
       }),
     )
     dto: AutoAssignDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.autoAssign(
       user.id,
       id,
@@ -131,18 +115,11 @@ export class DispatchController {
       }),
     )
     dto: OfferDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.offer(
       user.id,
       id,
@@ -169,18 +146,11 @@ export class DispatchController {
       }),
     )
     dto: AssignmentRespondDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.respond(
       user.id,
       id,
@@ -208,18 +178,11 @@ export class DispatchController {
       }),
     )
     dto: AssignmentReviewDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.review(
       user.id,
       id,
@@ -247,18 +210,11 @@ export class DispatchController {
       }),
     )
     dto: AssignmentNoteDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.withdraw(
       user.id,
       id,
@@ -286,18 +242,11 @@ export class DispatchController {
       }),
     )
     dto: AssignmentNoteDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.replace(
       user.id,
       id,
@@ -324,18 +273,11 @@ export class DispatchController {
       }),
     )
     dto: ShareDetailsDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.dispatch.shareDetails(
       user.id,
       id,

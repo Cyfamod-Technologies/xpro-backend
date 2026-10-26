@@ -3,7 +3,7 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { PlatformModule } from '../platform/platform.module';
 import { LocationsModule } from '../platform/locations/locations.module';
 import { StorageModule } from '../storage/storage.module';
-import { RequestsModule } from '../requests/requests.module';
+import { RequestEventsModule } from '../requests/events/request-events.module';
 import {
   ProvidersController,
   ProviderReviewController,
@@ -16,9 +16,10 @@ import { ProvidersService } from './providers.service';
     AuditLogsModule,
     StorageModule,
     LocationsModule,
-    RequestsModule,
+    RequestEventsModule,
   ],
   controllers: [ProvidersController, ProviderReviewController],
   providers: [ProvidersService],
+  exports: [ProvidersService],
 })
 export class ProvidersModule {}

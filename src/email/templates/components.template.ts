@@ -6,24 +6,28 @@ export type NoticeTone = 'neutral' | 'success' | 'warning' | 'destructive';
 
 export function renderLogo(context: EmailRenderContext): string {
   return `
-    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
       <tr>
-        <td width="40" height="40" align="center" valign="middle" bgcolor="${EMAIL_COLORS.primary}" style="width:40px;height:40px;border-radius:12px;background-color:${EMAIL_COLORS.primary};color:#FFFFFF;font-family:${EMAIL_FONT_STACK};font-size:12px;line-height:40px;font-weight:800;letter-spacing:-0.4px;">
-          ${escapeHtml(context.logoMark)}
-        </td>
-        <td valign="middle" style="padding-left:12px;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:17px;line-height:22px;font-weight:700;letter-spacing:-0.2px;">
-          ${escapeHtml(context.appName)}
+        <td align="center" valign="middle">
+          <img src="${escapeHtml(context.logoUrl)}" width="220" alt="${escapeHtml(context.appName)}" style="display:block;width:220px;max-width:100%;height:auto;border:0;outline:none;text-decoration:none;" />
         </td>
       </tr>
     </table>`;
 }
 
-export function renderHeading(title: string): string {
-  return `<h1 class="email-heading" style="margin:0;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:28px;line-height:36px;font-weight:700;letter-spacing:-0.5px;">${escapeHtml(title)}</h1>`;
+export function renderHeading(
+  title: string,
+  align: 'left' | 'center' = 'left',
+): string {
+  return `<h1 class="email-heading" style="margin:0;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:28px;line-height:36px;font-weight:700;letter-spacing:-0.5px;text-align:${align};">${escapeHtml(title)}</h1>`;
 }
 
-export function renderParagraph(content: string, marginTop = 16): string {
-  return `<p style="margin:${marginTop}px 0 0;color:${EMAIL_COLORS.mutedForeground};font-family:${EMAIL_FONT_STACK};font-size:15px;line-height:24px;font-weight:400;">${escapeHtml(content).replace(/\n/g, '<br />')}</p>`;
+export function renderParagraph(
+  content: string,
+  marginTop = 16,
+  align: 'left' | 'center' = 'left',
+): string {
+  return `<p style="margin:${marginTop}px 0 0;color:${EMAIL_COLORS.mutedForeground};font-family:${EMAIL_FONT_STACK};font-size:15px;line-height:24px;font-weight:400;text-align:${align};">${escapeHtml(content).replace(/\n/g, '<br />')}</p>`;
 }
 
 export function renderRichParagraph(content: string, marginTop = 16): string {
@@ -58,34 +62,6 @@ export function renderFallbackUrl(href: string): string {
         <td style="padding:14px 16px;">
           <p style="margin:0 0 4px;color:${EMAIL_COLORS.mutedForeground};font-family:${EMAIL_FONT_STACK};font-size:12px;line-height:18px;font-weight:600;">Button not working?</p>
           <p style="margin:0;word-break:break-all;color:${EMAIL_COLORS.primary};font-family:${EMAIL_FONT_STACK};font-size:12px;line-height:18px;"><a href="${escapeHtml(href)}" style="color:${EMAIL_COLORS.primary};text-decoration:underline;">${escapeHtml(href)}</a></p>
-        </td>
-      </tr>
-    </table>`;
-}
-
-export function renderVerificationCode(code: string): string {
-  const cells = code
-    .split('')
-    .map(
-      (digit, index) =>
-        `${
-          index > 0
-            ? '<td class="email-code-gap" width="7" style="width:7px;font-size:0;line-height:0;">&nbsp;</td>'
-            : ''
-        }<td class="email-code-cell" width="44" height="52" align="center" valign="middle" bgcolor="#FFFFFF" style="width:44px;height:52px;border:1px solid ${EMAIL_COLORS.border};border-radius:10px;color:${EMAIL_COLORS.foreground};font-family:${EMAIL_FONT_STACK};font-size:22px;line-height:26px;font-weight:700;">${escapeHtml(digit)}</td>`,
-    )
-    .join('');
-
-  return `
-    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${EMAIL_COLORS.muted}" style="width:100%;margin-top:24px;border:1px solid ${EMAIL_COLORS.border};border-radius:16px;">
-      <tr>
-        <td style="padding:20px 16px 8px;color:${EMAIL_COLORS.mutedForeground};font-family:${EMAIL_FONT_STACK};font-size:12px;line-height:18px;font-weight:700;text-align:center;text-transform:uppercase;letter-spacing:0.8px;">Verification code</td>
-      </tr>
-      <tr>
-        <td align="center" style="padding:0 12px 20px;">
-          <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center">
-            <tr>${cells}</tr>
-          </table>
         </td>
       </tr>
     </table>`;

@@ -4,6 +4,10 @@ import type { PaymentGateway, VerifiedTransaction } from './payment-gateway';
 @Injectable()
 export class TestPaymentGateway implements PaymentGateway {
   private readonly transactions = new Map<string, VerifiedTransaction>();
+  private readonly refunds = new Map<
+    string,
+    Array<{ id: string; status: string; amount: number }>
+  >();
   initialize(input: {
     email: string;
     amount: number;
@@ -35,6 +39,9 @@ export class TestPaymentGateway implements PaymentGateway {
   verifyRefund(id: string) {
     return Promise.resolve({ id, status: 'processed' });
   }
+  listRefunds(transactionReference: string) {
+    return Promise.resolve(this.refunds.get(transactionReference) ?? []);
+  }
   verifyTransfer(reference: string) {
     return Promise.resolve({
       reference,
@@ -43,10 +50,16 @@ export class TestPaymentGateway implements PaymentGateway {
     });
   }
   refund(input: { reference: string; amount: number; reason: string }) {
-    return Promise.resolve({
-      id: `test-refund-${input.reference}`,
+    const refund = {
+      id: `test-refund-${input.reference}-${(this.refunds.get(input.reference)?.length ?? 0) + 1}`,
       status: 'processing',
-    });
+      amount: input.amount,
+    };
+    this.refunds.set(input.reference, [
+      ...(this.refunds.get(input.reference) ?? []),
+      refund,
+    ]);
+    return Promise.resolve({ id: refund.id, status: refund.status });
   }
   createRecipient(input: {
     name: string;
@@ -63,6 +76,9 @@ export class TestPaymentGateway implements PaymentGateway {
     reference: string;
     reason: string;
   }) {
-    return Promise.resolve({ transferId: `test-transfer-${input.reference}` });
+    return Promise.resolve({
+      transferId: `test-transfer-${input.reference}`,
+      status: 'pending',
+    });
   }
 }

@@ -8,6 +8,7 @@ import { renderBaseEmail } from './base-email.template';
 import {
   renderButton,
   renderHeading,
+  renderNoticePanel,
   renderParagraph,
   renderTextFooter,
 } from './components.template';
@@ -32,8 +33,12 @@ export function renderRequestUpdate(
   const footerReason = `You received this email because of an update on your ${context.appName} account.`;
   const content = [
     renderHeading(payload.title),
-    renderParagraph(payload.message),
-    url ? renderButton('View details', url) : '',
+    renderNoticePanel('Request update', payload.message),
+    renderParagraph(
+      `You can view the latest details in your ${context.appName} account.`,
+      18,
+    ),
+    url ? renderButton('View request', url) : '',
   ].join('');
   return {
     subject,
@@ -43,7 +48,7 @@ export function renderRequestUpdate(
       payload.title,
       '',
       payload.message,
-      ...(url ? ['', `View details: ${url}`] : []),
+      ...(url ? ['', `View request: ${url}`] : []),
       '',
       renderTextFooter(context, footerReason),
     ].join('\n'),

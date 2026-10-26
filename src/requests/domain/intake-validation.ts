@@ -197,8 +197,6 @@ export function validateIntake(
       details[field.key] = value as string;
     }
   }
-  if (service === 'Hire' && !text(input.startDate))
-    fail('Add the hire start date.');
   for (const field of fields) {
     const value = detailsInput[field.key];
     if (
@@ -212,6 +210,8 @@ export function validateIntake(
       return fail(`${field.label} must be a valid date.`);
     details[field.key] = value;
   }
+  if (service === 'Hire' && !text(input.startDate))
+    fail('Add the hire start date.');
   if (
     input.startDate !== undefined &&
     input.startDate !== null &&

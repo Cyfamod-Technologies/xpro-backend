@@ -81,6 +81,8 @@ const deadlineDefaults: Record<string, number> = {
   quote_build: 480,
   quote_approval: 480,
   quote_followup: 480,
+  quote_expired: 480,
+  payment_lapsed: 480,
   schedule_needed: 480,
   schedule_change: 240,
   progress: 480,

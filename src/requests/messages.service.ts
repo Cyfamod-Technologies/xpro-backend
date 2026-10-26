@@ -1,4 +1,4 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { MessageChannel, UploadPurpose, UploadStatus } from '@prisma/client';
 import type { RequestUser } from '../common/types/request-user';
 import { ActorService } from '../platform/actor/actor.service';
@@ -8,10 +8,8 @@ import { IdempotencyService } from '../platform/idempotency/idempotency.service'
 import { PrismaService } from '../prisma/prisma.service';
 import { TimerKinds } from '../platform/timers/timer-kinds';
 import { RequestCommandRunner } from './command-runner';
-import { canSendMessage } from './domain/message-guards';
 import { parseRequestId } from './domain/statuses';
 
-const TERMINAL = new Set(['closed', 'cancelled', 'rejected']);
 const CURRENT_ASSIGNMENTS = new Set([
   'offered',
   'pending_approval',
@@ -48,8 +46,9 @@ export class MessagesService {
     const request = await this.findVisibleRequest(ref, actor);
     if (!request) throw opaqueNotFound();
     const assignment = await this.currentAssignment(request.id);
+    const viewerRole = messageRole(actor, request.ownerId, request.assignments);
     const providerScope =
-      actor.kind === 'provider'
+      viewerRole === 'provider'
         ? assignment?.providerId
         : (providerId ?? assignment?.providerId);
     const requestedChannels = channel
@@ -150,7 +149,10 @@ export class MessagesService {
         label: renderAuthor(
           message.authorRole,
           message.authorId,
-          actor,
+          {
+            kind:
+              viewerRole === 'owner' ? 'customer' : (viewerRole ?? actor.kind),
+          },
           authorById,
         ),
       },
@@ -176,6 +178,7 @@ export class MessagesService {
     },
     originalUrl: string,
     idempotencyKey?: string,
+    expectedVersion?: number,
   ) {
     const actor = await this.actors.resolve(user.id);
     const text = dto.text?.trim() ?? '';
@@ -194,23 +197,14 @@ export class MessagesService {
       );
     if (new Set(uploadIds).size !== uploadIds.length)
       throw new AppError(
-        409,
-        'STATE_CONFLICT',
+        422,
+        'VALIDATION_ERROR',
         "One of your files didn't finish uploading. Remove it and try again.",
       );
     if (
       !actor.accountActive ||
       (actor.kind === 'staff' && actor.staff?.status !== 'active')
     )
-      throw forbiddenChannel();
-    if (
-      actor.kind === 'staff' &&
-      !actor.staff?.permissions.has(CHANNEL_PERMISSION[dto.channel])
-    )
-      throw forbiddenChannel();
-    if (actor.kind === 'customer' && dto.channel !== 'customer')
-      throw forbiddenChannel();
-    if (actor.kind === 'provider' && dto.channel !== 'provider')
       throw forbiddenChannel();
 
     const hash = this.idempotency.hashRequest('POST', originalUrl, {
@@ -223,11 +217,11 @@ export class MessagesService {
         command: 'message.send',
         actor,
         requestRef: ref,
+        input: { channel: dto.channel, providerId: dto.providerId ?? null },
+        ...(expectedVersion !== undefined ? { expectedVersion } : {}),
         ...(idempotencyKey ? { idempotencyKey, idempotencyHash: hash } : {}),
       },
       async (context) => {
-        if (TERMINAL.has(context.snap.status))
-          throw new ConflictException('Messages are closed for this request.');
         const request = await context.tx.serviceRequest.findUnique({
           where: { id: context.snap.id },
           select: {
@@ -256,19 +250,6 @@ export class MessagesService {
           dto.channel === 'provider'
             ? (dto.providerId ?? current?.providerId ?? null)
             : null;
-        const guard = canSendMessage(
-          context.snap,
-          {
-            kind: actor.kind,
-            userId: actor.userId,
-            permissions: actor.staff?.permissions,
-          },
-          { channel: dto.channel, providerId },
-          context.now,
-          context.settings,
-        );
-        if (!guard.ok)
-          throw new AppError(guard.status, guard.code, guard.message);
         if (
           !canWriteChannel(
             actor,
@@ -297,19 +278,22 @@ export class MessagesService {
               ownerId: actor.userId!,
               purpose: UploadPurpose.message_attachment,
               status: UploadStatus.ready,
-              expiresAt: { gt: context.now },
             },
             select: { id: true, size: true },
           });
           if (uploads.length !== uploadIds.length)
-            throw new ConflictException(
+            throw new AppError(
+              422,
+              'VALIDATION_ERROR',
               "One of your files didn't finish uploading. Remove it and try again.",
             );
           if (
             uploads.reduce((total, upload) => total + upload.size, 0) >
             25 * 1024 * 1024
           )
-            throw new ConflictException(
+            throw new AppError(
+              422,
+              'VALIDATION_ERROR',
               'Keep the combined file size under 25 MB.',
             );
           const attached = await context.tx.upload.updateMany({
@@ -318,7 +302,6 @@ export class MessagesService {
               ownerId: actor.userId!,
               purpose: UploadPurpose.message_attachment,
               status: UploadStatus.ready,
-              expiresAt: { gt: context.now },
             },
             data: {
               status: UploadStatus.attached,
@@ -328,7 +311,9 @@ export class MessagesService {
             },
           });
           if (attached.count !== uploadIds.length)
-            throw new ConflictException(
+            throw new AppError(
+              422,
+              'VALIDATION_ERROR',
               "One of your files didn't finish uploading. Remove it and try again.",
             );
         }
@@ -345,7 +330,7 @@ export class MessagesService {
 
         if (
           dto.channel === 'customer' &&
-          actor.userId === request.ownerId &&
+          isRequestOwner(actor, request.ownerId) &&
           request.intakeState === 'clarification'
         ) {
           await context.tx.serviceRequest.update({
@@ -358,6 +343,13 @@ export class MessagesService {
             TimerKinds.T6FinalWarning,
             TimerKinds.T6AutoCancel,
           ]);
+          context.approvals.close(
+            'clarification_overdue',
+            context.snap.id,
+            'clarification_answered',
+          );
+          // 02 §6.11: the intake item runs again from the customer's answer.
+          context.approvals.open('intake', context.snap.id);
           context.audit('Clarification answered');
           context.notify('request.clarification_answered', {
             requestCode: context.snap.number,
@@ -392,19 +384,9 @@ export class MessagesService {
       },
     });
     if (!request) return null;
-    if (actor.kind === 'customer' && request.ownerId !== actor.userId)
-      return null;
-    if (
-      actor.kind === 'provider' &&
-      !request.assignments.some(
-        (assignment) =>
-          assignment.providerUserId === actor.userId &&
-          CURRENT_ASSIGNMENTS.has(assignment.status),
-      )
-    )
-      return null;
-    if (actor.kind === 'staff' && actor.staff?.status !== 'active') return null;
-    return request;
+    return messageRole(actor, request.ownerId, request.assignments)
+      ? request
+      : null;
   }
 
   private async currentAssignment(requestId: string) {
@@ -424,6 +406,47 @@ export class MessagesService {
   }
 }
 
+type MessageRole = 'owner' | 'provider' | 'staff';
+
+/** A.2 rule: the request owner is the account holding the customer role whose id is `ownerId`; `actor.kind` only ranks staff over provider over customer. */
+function isRequestOwner(actor: ActorContext, ownerId: string): boolean {
+  return (
+    actor.platformRoles.includes('customer') &&
+    !!actor.userId &&
+    actor.userId === ownerId
+  );
+}
+
+function isAssignedProvider(
+  actor: ActorContext,
+  current: { providerUserId: string } | null | undefined,
+): boolean {
+  return (
+    actor.platformRoles.includes('provider') &&
+    !!actor.userId &&
+    current?.providerUserId === actor.userId
+  );
+}
+
+/** Owner first, then the offered or assigned provider, then active staff (A-15). */
+export function messageRole(
+  actor: ActorContext,
+  ownerId: string,
+  assignments: ReadonlyArray<{ providerUserId: string; status: string }>,
+): MessageRole | null {
+  if (isRequestOwner(actor, ownerId)) return 'owner';
+  if (
+    assignments.some(
+      (item) =>
+        isAssignedProvider(actor, item) && CURRENT_ASSIGNMENTS.has(item.status),
+    )
+  )
+    return 'provider';
+  if (actor.kind === 'staff' && actor.staff?.status === 'active')
+    return 'staff';
+  return null;
+}
+
 export function canReadChannel(
   actor: ActorContext,
   ownerId: string,
@@ -435,13 +458,11 @@ export function canReadChannel(
     status: string;
   } | null,
 ) {
-  if (actor.kind === 'customer')
-    return channel === 'customer' && actor.userId === ownerId;
-  if (actor.kind === 'provider')
+  if (isRequestOwner(actor, ownerId)) return channel === 'customer';
+  if (isAssignedProvider(actor, current))
     return (
       channel === 'provider' &&
-      current?.providerUserId === actor.userId &&
-      (!providerId || current.providerId === providerId)
+      (!providerId || current?.providerId === providerId)
     );
   return (
     actor.kind === 'staff' &&
@@ -461,14 +482,9 @@ export function canWriteChannel(
     status: string;
   } | null,
 ) {
-  if (actor.kind === 'customer')
-    return channel === 'customer' && actor.userId === ownerId;
-  if (actor.kind === 'provider')
-    return (
-      channel === 'provider' &&
-      current?.providerUserId === actor.userId &&
-      current.providerId === providerId
-    );
+  if (isRequestOwner(actor, ownerId)) return channel === 'customer';
+  if (isAssignedProvider(actor, current))
+    return channel === 'provider' && current?.providerId === providerId;
   return (
     actor.kind === 'staff' &&
     actor.staff?.status === 'active' &&
@@ -481,7 +497,7 @@ export function canWriteChannel(
 export function renderAuthor(
   role: string,
   authorId: string | null,
-  viewer: ActorContext,
+  viewer: Pick<ActorContext, 'kind'>,
   authors: Map<string, string>,
 ) {
   if (role === 'staff' && viewer.kind === 'customer') return 'XPro Team';

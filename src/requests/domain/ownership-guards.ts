@@ -76,13 +76,14 @@ export const canRelease: DomainGuard<unknown> = (snap, actor, input) => {
   const isOwner = !!actor.userId && actor.userId === snap.staffOwnerId;
   if (!isOwner && !hasPermission(actor, 'request.reassign'))
     return denied('Only the owner or Operations can release this request.');
+  if (isInput<ReleaseInput>(input) && !noteIsValid(input.note))
+    return invalid('Add a note for whoever picks this up.');
   if (!open(snap.status)) return conflict('This request is closed.');
-  if (isInput<ReleaseInput>(input)) {
-    if (input.expectedOwnerId !== snap.staffOwnerId)
-      return conflict(ownerChangedMessage);
-    if (!noteIsValid(input.note))
-      return invalid('Add a note for whoever picks this up.');
-  }
+  if (
+    isInput<ReleaseInput>(input) &&
+    input.expectedOwnerId !== snap.staffOwnerId
+  )
+    return conflict(ownerChangedMessage);
   return { ok: true };
 };
 
@@ -105,14 +106,14 @@ export const canHandoff: DomainGuard<unknown> = (snap, actor, input) => {
 export const canReassign: DomainGuard<unknown> = (snap, actor, input) => {
   if (actor.kind !== 'staff' || !hasPermission(actor, 'request.reassign'))
     return denied('Your staff role does not allow this action.');
+  if (isInput<ReassignInput>(input) && !noteIsValid(input.note))
+    return invalid('Add a reason for reassigning this request.');
   if (!open(snap.status)) return conflict('This request is closed.');
   if (isInput<ReassignInput>(input)) {
     if (input.expectedOwnerId !== snap.staffOwnerId)
       return conflict(ownerChangedMessage);
     if (input.staffId === snap.staffOwnerId)
       return conflict('This staff member already owns the request.');
-    if (!noteIsValid(input.note))
-      return invalid('Add a reason for reassigning this request.');
   }
   return { ok: true };
 };

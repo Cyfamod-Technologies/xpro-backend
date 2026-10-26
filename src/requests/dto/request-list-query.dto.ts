@@ -39,6 +39,14 @@ export const REQUEST_STAGES = [
   'rejected',
 ] as const;
 
+export const REQUEST_SORTS = [
+  'createdAt:desc',
+  'createdAt:asc',
+  'updatedAt:desc',
+  'id:asc',
+] as const;
+export type RequestSort = (typeof REQUEST_SORTS)[number];
+
 export class RequestListQueryDto {
   @ApiPropertyOptional({ minimum: 1, default: 1 })
   @IsOptional()
@@ -53,7 +61,11 @@ export class RequestListQueryDto {
   @Min(1)
   @Max(100)
   itemsPerPage = 20;
-  @ApiPropertyOptional({ description: 'Staff-only owner filter' })
+  @ApiPropertyOptional({
+    description:
+      'Staff-only owner filter: `all` (no filter), `mine`, `unclaimed`, or a staff user id. Ignored for other callers.',
+    example: 'mine',
+  })
   @IsOptional()
   @IsString()
   owner?: string;
@@ -61,7 +73,11 @@ export class RequestListQueryDto {
   @IsOptional()
   @IsIn(REQUEST_STATUSES)
   status?: string;
-  @ApiPropertyOptional({ enum: REQUEST_STAGES })
+  @ApiPropertyOptional({
+    enum: REQUEST_STAGES,
+    description:
+      "Narrowed in SQL to the stage's status, then matched on the derived stage within the first 100 matching requests (see `nextActor`).",
+  })
   @IsOptional()
   @IsIn(REQUEST_STAGES)
   stage?: string;
@@ -76,8 +92,21 @@ export class RequestListQueryDto {
     typeof value === 'string' ? value.trim() : (value as unknown),
   )
   q?: string;
-  @ApiPropertyOptional({ enum: ['me'] })
+  @ApiPropertyOptional({
+    enum: ['me'],
+    description:
+      'Derived per request, so `stage`, `nextActor` and provider `q` filter within the first 100 matching requests (one maximum-size page); `total` counts matches in that window.',
+  })
   @IsOptional()
   @IsIn(['me'])
   nextActor?: 'me';
+  @ApiPropertyOptional({
+    enum: REQUEST_SORTS,
+    default: 'createdAt:desc',
+    description:
+      'Sort order. Ties are always broken by `id` in the same direction.',
+  })
+  @IsOptional()
+  @IsIn(REQUEST_SORTS)
+  sort?: RequestSort;
 }

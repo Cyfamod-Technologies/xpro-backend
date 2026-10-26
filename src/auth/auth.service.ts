@@ -14,11 +14,7 @@ import {
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
-import {
-  generateNumericOtp,
-  generateRawToken,
-  hashToken,
-} from '../common/utils/token.util';
+import { generateRawToken, hashToken } from '../common/utils/token.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,9 +26,7 @@ import {
   ResendVerificationDto,
   ResetPasswordDto,
   RegisterDto,
-  SignupDto,
   UpdateMeDto,
-  VerifyEmailDto,
   VerifyEmailTokenDto,
 } from './dto/auth.dto';
 import { RedisAuthService } from './redis-auth.service';
@@ -137,68 +131,6 @@ export class AuthService {
     const token = randomBytes(32).toString('hex');
     await this.sessions.setReauthToken(userId, token);
     return { reauthToken: token, expiresInSeconds: 300 };
-  }
-
-  async signup(dto: SignupDto) {
-    const email = dto.email.toLowerCase().trim();
-    const existing = await this.prisma.user.findUnique({
-      where: { email },
-      select: { id: true },
-    });
-
-    if (existing) {
-      throw new BadRequestException('A user with this email already exists');
-    }
-
-    const firstName = dto.firstName.trim();
-    const lastName = dto.lastName.trim();
-
-    const passwordHash = await bcrypt.hash(dto.password, 12);
-    const verificationCode = generateNumericOtp(6);
-
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        passwordHash,
-        firstName,
-        lastName,
-        role: AppRole.user,
-        status: 'invited',
-      },
-    });
-
-    await this.redisAuth.storeEmailVerificationCode(
-      user.id,
-      hashToken(verificationCode),
-    );
-
-    await this.notifications.queueEmail({
-      recipientEmail: user.email,
-      recipientUserId: user.id,
-      type: 'email_verification',
-      templateKey: 'email_verification',
-      payload: {
-        code: verificationCode,
-        firstName,
-      },
-    });
-
-    this.auditLogs.record({
-      actorType: 'user',
-      actorId: user.id,
-      entityType: 'auth',
-      entityId: user.id,
-      action: 'signup_created',
-    });
-
-    return {
-      message:
-        'Registration successful. Check your email for a verification code.',
-      verification: {
-        required: true,
-        email: user.email,
-      },
-    };
   }
 
   async register(dto: RegisterDto) {
@@ -395,120 +327,6 @@ export class AuthService {
         },
       });
     }
-    return {
-      message:
-        'If the account is awaiting verification, a new email will be sent',
-    };
-  }
-
-  async verifyEmail(dto: VerifyEmailDto) {
-    const email = dto.email.toLowerCase().trim();
-    const pendingUser = await this.prisma.user.findUnique({
-      where: { email },
-      select: { id: true, emailVerifiedAt: true },
-    });
-    if (!pendingUser || pendingUser.emailVerifiedAt) {
-      throw new BadRequestException('Invalid or expired verification code');
-    }
-
-    const codeConsumed = await this.redisAuth.consumeEmailVerificationCode(
-      pendingUser.id,
-      hashToken(dto.code),
-    );
-    if (!codeConsumed) {
-      throw new BadRequestException('Invalid or expired verification code');
-    }
-
-    const verifiedAt = new Date();
-    const user = await this.prisma.user.update({
-      where: { id: pendingUser.id },
-      data: {
-        status: 'active',
-        emailVerifiedAt: verifiedAt,
-        lastLoginAt: verifiedAt,
-      },
-    });
-
-    const tokenData = await this.redisAuth.generateToken({
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      surfaces: this.surfacesForRole(user.role),
-    });
-
-    this.auditLogs.record({
-      actorType: 'user',
-      actorId: user.id,
-      entityType: 'auth',
-      entityId: user.id,
-      action: 'email_verified',
-    });
-
-    try {
-      await this.notifications.queueEmail({
-        recipientEmail: user.email,
-        recipientUserId: user.id,
-        type: 'welcome',
-        templateKey: 'welcome',
-        payload: {
-          firstName: user.firstName ?? 'there',
-        },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Welcome email enqueue failed userId=${user.id} error=${String(error)}`,
-      );
-    }
-
-    return {
-      verified: true,
-      accessToken: tokenData.access,
-      tokenType: 'Bearer',
-      sessionId: tokenData.sessionId,
-      expiresAt: tokenData.expiresAt,
-      expiresIn: tokenData.expiresIn,
-      userId: user.id,
-      email: user.email,
-      emailVerifiedAt: verifiedAt,
-    };
-  }
-
-  async resendVerification(dto: ResendVerificationDto) {
-    const email = dto.email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        emailVerifiedAt: true,
-      },
-    });
-
-    if (user && !user.emailVerifiedAt) {
-      try {
-        const verificationCode = generateNumericOtp(6);
-        await this.redisAuth.storeEmailVerificationCode(
-          user.id,
-          hashToken(verificationCode),
-        );
-        await this.notifications.queueEmail({
-          recipientEmail: user.email,
-          recipientUserId: user.id,
-          type: 'email_verification',
-          templateKey: 'email_verification',
-          payload: {
-            code: verificationCode,
-            firstName: user.firstName ?? undefined,
-          },
-        });
-      } catch (error) {
-        this.logger.error(
-          `Verification resend failed userId=${user.id} error=${String(error)}`,
-        );
-      }
-    }
-
     return {
       message:
         'If the account is awaiting verification, a new email will be sent',

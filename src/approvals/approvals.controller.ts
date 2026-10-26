@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../common/types/request-user';
-import { ApprovalsService, type ApprovalFilter } from './approvals.service';
+import { ApprovalsService } from './approvals.service';
 
 @ApiTags('Approvals')
 @ApiBearerAuth()
@@ -15,7 +15,7 @@ export class ApprovalsController {
   @Get()
   list(
     @CurrentUser() user: RequestUser,
-    @Query('filter') filter?: ApprovalFilter,
+    @Query('filter') filter?: string,
     @Query('kind') kind?: string,
     @Query('page') page?: string,
   ) {

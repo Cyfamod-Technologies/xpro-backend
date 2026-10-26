@@ -3,23 +3,37 @@ import { ActorService } from '../../platform/actor/actor.service';
 import { requirePermission } from '../../platform/actor/actor.guards';
 import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
+import { NOSHOW_ENTITY } from '../../uploads/entity-types';
+import { UploadsService } from '../../uploads/uploads.service';
+import { ProvidersService } from '../../providers/providers.service';
 import { RequestCommandRunner } from '../command-runner';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
+// new message: not in spec
+const REVIEW_ALREADY_OPEN =
+  'A no-show review is already open for this schedule.';
+// new message: not in spec
+const ASSIGNMENT_NOT_CURRENT = 'This assignment is no longer current.';
+// new message: not in spec
+const DECISION_STALE = 'This no-show decision is stale.';
+// new message: not in spec
+const NOT_CORRECTABLE = 'This no-show cannot be corrected.';
 
 @Injectable()
 export class NoShowService {
   constructor(
     private readonly actors: ActorService,
     private readonly runner: RequestCommandRunner,
+    private readonly uploads: UploadsService,
+    private readonly providers: ProvidersService,
   ) {}
 
   async record(
     userId: string,
     requestId: string,
-    dto: { scheduleId: string; note: string },
-    version: number,
+    dto: { scheduleId: string; note: string; evidenceIds?: string[] },
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -31,6 +45,7 @@ export class NoShowService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -46,21 +61,19 @@ export class NoShowService {
             status: 'confirmed',
           },
         });
-        if (!schedule || ctx.snap.currentSchedule?.status !== 'confirmed')
-          throw conflict('This schedule is no longer confirmed.');
+        // The runner guard checked the current schedule (04 §6.16); the body's scheduleId needs the row.
+        if (!schedule) throw conflict('This schedule is no longer confirmed.');
         const open = await ctx.tx.noShow.findFirst({
           where: {
             scheduleId: schedule.id,
             status: { in: ['open', 'confirmed'] },
           },
         });
-        if (open)
-          throw conflict('A no-show review is already open for this schedule.');
+        if (open) throw conflict(REVIEW_ALREADY_OPEN);
         const assignment = await ctx.tx.assignment.findUnique({
           where: { id: schedule.assignmentId },
         });
-        if (!assignment)
-          throw conflict('This assignment is no longer current.');
+        if (!assignment) throw conflict(ASSIGNMENT_NOT_CURRENT);
         const row = await ctx.tx.noShow.create({
           data: {
             requestId: ctx.snap.id,
@@ -73,6 +86,16 @@ export class NoShowService {
             note: dto.note.trim(),
           },
         });
+        await this.uploads.attach(
+          ctx.tx,
+          dto.evidenceIds ?? [],
+          userId,
+          'progress_evidence',
+          NOSHOW_ENTITY,
+          row.id,
+        );
+        // 02 §6.11: the item opened at the end of the grace period, or opens now for a staff report.
+        ctx.approvals.open('no_show', schedule.id);
         ctx.audit('Provider no-show reported', {
           resourceType: 'no_show',
           resourceId: row.id,
@@ -89,7 +112,7 @@ export class NoShowService {
     noShowId: string,
     outcome: 'confirm' | 'dismiss',
     dto: { note: string; version: number },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -101,6 +124,7 @@ export class NoShowService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -113,7 +137,7 @@ export class NoShowService {
           where: { id: noShowId, requestId: ctx.snap.id },
         });
         if (!row || row.status !== 'open' || row.version !== dto.version)
-          throw conflict('This no-show decision is stale.');
+          throw conflict(DECISION_STALE);
         const status = outcome === 'confirm' ? 'confirmed' : 'dismissed';
         await ctx.tx.noShow.update({
           where: { id: row.id },
@@ -125,43 +149,20 @@ export class NoShowService {
             version: { increment: 1 },
           },
         });
+        ctx.approvals.close('no_show', row.scheduleId, status);
         if (outcome === 'confirm') {
-          await ctx.tx.providerReliabilityEvent.createMany({
-            data: [
-              {
-                providerId: row.providerId,
-                kind: 'no_show_confirmed',
-                sourceId: row.id,
-                requestId: ctx.snap.id,
-                occurredAt: ctx.now,
-                confirmedBy: userId,
-                note: dto.note.trim(),
-              },
-            ],
-            skipDuplicates: true,
+          const review = await this.providers.recordReliabilityEvent(ctx.tx, {
+            providerId: row.providerId,
+            kind: 'no_show_confirmed',
+            sourceId: row.id,
+            requestId: ctx.snap.id,
+            occurredAt: ctx.now,
+            confirmedBy: userId,
+            note: dto.note.trim(),
           });
-          const since = new Date(ctx.now.getTime() - 90 * 86_400_000);
-          const events = await ctx.tx.providerReliabilityEvent.findMany({
-            where: {
-              providerId: row.providerId,
-              kind: { in: ['no_show_confirmed', 'no_show_voided'] },
-              occurredAt: { gte: since },
-            },
-            select: { kind: true, sourceId: true },
-          });
-          const active = new Set(
-            events
-              .filter((event) => event.kind === 'no_show_confirmed')
-              .map((event) => event.sourceId),
-          );
-          for (const event of events)
-            if (event.kind === 'no_show_voided')
-              active.delete(event.sourceId.replace(/:voided$/, ''));
-          if (active.size >= 2)
-            await ctx.tx.providerProfile.update({
-              where: { id: row.providerId },
-              data: { reliabilityStatus: 'review_due' },
-            });
+          // 02 §6.11: two confirmed no-shows in 90 days put the provider in the reliability review.
+          if (review === 'review_due')
+            ctx.approvals.open('provider_reliability', row.providerId);
         }
         ctx.audit(
           outcome === 'confirm'
@@ -182,7 +183,7 @@ export class NoShowService {
     requestId: string,
     noShowId: string,
     dto: { note: string; version: number },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -194,6 +195,7 @@ export class NoShowService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -206,7 +208,7 @@ export class NoShowService {
           where: { id: noShowId, requestId: ctx.snap.id },
         });
         if (!row || row.status !== 'confirmed' || row.version !== dto.version)
-          throw conflict('This no-show cannot be corrected.');
+          throw conflict(NOT_CORRECTABLE);
         await ctx.tx.noShow.update({
           where: { id: row.id },
           data: {
@@ -215,20 +217,21 @@ export class NoShowService {
             version: { increment: 1 },
           },
         });
-        await ctx.tx.providerReliabilityEvent.createMany({
-          data: [
-            {
-              providerId: row.providerId,
-              kind: 'no_show_voided',
-              sourceId: `${row.id}:voided`,
-              requestId: ctx.snap.id,
-              occurredAt: ctx.now,
-              confirmedBy: userId,
-              note: dto.note.trim(),
-            },
-          ],
-          skipDuplicates: true,
+        const review = await this.providers.recordReliabilityEvent(ctx.tx, {
+          providerId: row.providerId,
+          kind: 'no_show_voided',
+          sourceId: `${row.id}:voided`,
+          requestId: ctx.snap.id,
+          occurredAt: ctx.now,
+          confirmedBy: userId,
+          note: dto.note.trim(),
         });
+        if (review === 'cleared')
+          ctx.approvals.close(
+            'provider_reliability',
+            row.providerId,
+            'no_show_corrected',
+          );
         ctx.audit('Provider no-show corrected', {
           resourceType: 'no_show',
           resourceId: row.id,

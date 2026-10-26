@@ -1,3 +1,5 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -5,19 +7,27 @@ import {
   IsOptional,
   IsString,
   MaxLength,
-  MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { AttachmentRefDto } from '../dto/attachment-ref.dto';
 
+// Length and presence rules carry the spec messages, so the progress rules check them (Plan C.7).
 export class AddProgressDto {
-  @IsIn(['in_progress', 'blocked', 'completion_pending']) status!:
-    'in_progress' | 'blocked' | 'completion_pending';
-  @IsString() @MinLength(3) @MaxLength(2000) note!: string;
+  @ApiProperty({ enum: ['in_progress', 'blocked', 'completion_pending'] })
+  @IsIn(['in_progress', 'blocked', 'completion_pending'])
+  status!: 'in_progress' | 'blocked' | 'completion_pending';
+
+  @ApiProperty() @IsString() note!: string;
+
+  @ApiPropertyOptional({ type: [AttachmentRefDto] })
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(6)
-  @IsString({ each: true })
-  attachments: string[] = [];
-  @IsOptional() @IsString() issueId?: string;
+  @ValidateNested({ each: true })
+  @Type(() => AttachmentRefDto)
+  attachments: AttachmentRefDto[] = [];
+
+  @ApiPropertyOptional() @IsOptional() @IsString() issueId?: string;
 }
 
 export class ReviewProgressDto {
@@ -26,14 +36,21 @@ export class ReviewProgressDto {
 }
 
 export class AddProgressOnBehalfDto {
-  @IsIn(['in_progress', 'blocked', 'completion_pending']) status!:
-    'in_progress' | 'blocked' | 'completion_pending';
-  @IsString() @MinLength(3) @MaxLength(2000) note!: string;
-  @IsString() @MinLength(3) @MaxLength(1000) reportedVia!: string;
+  @ApiProperty({ enum: ['in_progress', 'blocked', 'completion_pending'] })
+  @IsIn(['in_progress', 'blocked', 'completion_pending'])
+  status!: 'in_progress' | 'blocked' | 'completion_pending';
+
+  @ApiProperty() @IsString() note!: string;
+
+  @ApiProperty() @IsString() reportedVia!: string;
+
+  @ApiPropertyOptional({ type: [AttachmentRefDto] })
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(6)
-  @IsString({ each: true })
-  attachments: string[] = [];
-  @IsOptional() @IsString() issueId?: string;
+  @ValidateNested({ each: true })
+  @Type(() => AttachmentRefDto)
+  attachments: AttachmentRefDto[] = [];
+
+  @ApiPropertyOptional() @IsOptional() @IsString() issueId?: string;
 }

@@ -1,7 +1,14 @@
 import type { ActorContext } from '../../platform/actor/actor.types';
+import { toActorView } from '../actor-view';
 import { allowedActions } from '../domain/allowed-actions';
+import { customerRefundStatus } from '../domain/cancellation-rules';
 import { statusLabel, type LabelValues } from '../domain/labels';
-import { deriveStage, nextActor } from '../domain/stage';
+import {
+  deriveStage,
+  nextActor,
+  viewerNextActor,
+  type RequestStage,
+} from '../domain/stage';
 import type { RequestSnapshot } from '../domain/snapshot';
 import type { LoadedRequest } from '../snapshot.loader';
 import type { RequestDetailDto, RequestRole } from '../dto/request-detail.dto';
@@ -53,7 +60,9 @@ export function cancellationProjection(context: ProjectionContext) {
     status: item.status,
     reasonCode: item.reasonCode,
     note: item.note,
-    refundStatus: null,
+    refundStatus: customerRefundStatus(
+      item.refunds.map(({ status }) => status),
+    ),
     createdAt: item.createdAt,
   }));
 }
@@ -63,6 +72,7 @@ export function noShowProjection(context: ProjectionContext) {
     id: item.id,
     scheduleId: item.scheduleId,
     status: item.status,
+    version: item.version,
     note: item.note,
     createdAt: item.detectedAt,
   }));
@@ -85,27 +95,26 @@ export function completionProjection(context: ProjectionContext) {
   };
 }
 
-export function commonProjection(context: ProjectionContext): RequestDetailDto {
+export type CommonProjectionContext = Omit<ProjectionContext, 'row'> & {
+  row: Pick<LoadedRequest, 'version' | 'status' | 'createdAt' | 'updatedAt'>;
+};
+
+export function commonProjection(
+  context: CommonProjectionContext,
+): RequestDetailDto {
   const { row, snapshot, actor, role, now, settings } = context;
   const stage = deriveStage(snapshot, now);
-  const values = labelValues(snapshot, settings);
+  const values = labelValues(snapshot, settings, stage);
   return {
     id: snapshot.number,
     version: row.version,
     status: row.status,
     stage,
     statusLabel: statusLabel(stage, role, values, snapshot),
-    contactInBrief: snapshot.contactInBrief ?? false,
-    nextActor: nextActor(snapshot, stage, now),
+    nextActor: viewerNextActor(nextActor(snapshot, stage, now), role),
     allowedActions: allowedActions(
       snapshot,
-      {
-        kind: actor.kind,
-        userId: actor.userId,
-        platformRoles: actor.platformRoles,
-        permissions: actor.staff?.permissions,
-        canOwn: actor.staff?.canOwn,
-      },
+      toActorView(actor),
       now,
       settings,
       REQUEST_GUARDS,
@@ -155,9 +164,39 @@ export function numberKobo(value: bigint | null): number | null {
   return value === null ? null : Number(value);
 }
 
+const MONEY_ITEM_KEYS = new Set(['unitPrice', 'amount', 'total', 'lineTotal']);
+
+/** Quote and costing lines with every money field as a kobo `number`, never a string or bigint (A.2 rule 7). */
+export function itemsWithNumberMoney(
+  items: unknown,
+): Array<Record<string, unknown>> {
+  return jsonArray(items).map((item) =>
+    Object.fromEntries(
+      Object.entries(item).map(([key, value]) => [
+        key,
+        MONEY_ITEM_KEYS.has(key) &&
+        (typeof value === 'string' || typeof value === 'bigint')
+          ? Number(value)
+          : value,
+      ]),
+    ),
+  );
+}
+
+/** The lines without any money, for staff who lack `view.pricing`. */
+export function itemsWithoutMoney(
+  items: unknown,
+): Array<{ description: unknown; quantity: unknown }> {
+  return jsonArray(items).map(({ description, quantity }) => ({
+    description,
+    quantity,
+  }));
+}
+
 function labelValues(
   snapshot: RequestSnapshot,
   settings: SettingsSnapshot,
+  stage: RequestStage,
 ): LabelValues {
   const values: LabelValues = {};
   if (snapshot.currentAssignment) {
@@ -169,6 +208,13 @@ function labelValues(
       hour: 'numeric',
       minute: '2-digit',
     }).format(snapshot.currentAssignment.expiresAt);
+  }
+  // `{n}` is the attempt in offer labels and the quote version in quote labels (04 §5.3).
+  if (stage === 'quote_revision' && snapshot.latestQuote)
+    values.n = snapshot.latestQuote.version;
+  else if (stage === 'quote_with_customer') {
+    const sent = snapshot.latestSentQuote ?? snapshot.latestQuote;
+    if (sent) values.n = sent.version;
   }
   if (snapshot.defectsWindowEndsAt) {
     values.date = new Intl.DateTimeFormat('en-GB', {

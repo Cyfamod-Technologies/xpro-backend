@@ -7,10 +7,27 @@ import { ActorService } from '../platform/actor/actor.service';
 import { AppError } from '../platform/errors/app-error';
 import { SettingsService } from '../platform/settings/settings.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { parseRequestId } from './domain/statuses';
-import { deriveStage, nextActor } from './domain/stage';
+import { parseRequestId, TERMINAL } from './domain/statuses';
+import {
+  deriveStage,
+  nextActor,
+  STAGE_STATUS,
+  type RequestStage,
+} from './domain/stage';
 import { RequestListQueryDto } from './dto/request-list-query.dto';
 import { RequestActivityQueryDto } from './dto/request-activity-query.dto';
+import {
+  activityCountSql,
+  activityRowsSql,
+  type ActivityRow,
+} from './request-activity.query';
+import {
+  LIST_ROW_SELECT,
+  RequestListLoader,
+  type LightRequest,
+} from './request-list.loader';
+import { listOrderBy, ownerFilter } from './request-list-query';
+import { resolveRequestId } from './request-ref';
 import { RequestSnapshotLoader } from './snapshot.loader';
 import { customerProjection } from './projections/customer.projection';
 import { listProjection } from './projections/list.projection';
@@ -19,6 +36,8 @@ import { ProjectionContext } from './projections/projection.helpers';
 import { staffProjection } from './projections/staff.projection';
 
 const OPAQUE_MESSAGE = 'This request is no longer available to your account.';
+/** Rows scanned for the filters that need child data: the maximum page size. */
+const DERIVED_FILTER_WINDOW = 100;
 const ACCESSIBLE_ASSIGNMENTS = [
   'offered',
   'pending_approval',
@@ -32,6 +51,7 @@ export class RequestsReadService {
     private readonly prisma: PrismaService,
     private readonly actors: ActorService,
     private readonly loader: RequestSnapshotLoader,
+    private readonly listLoader: RequestListLoader,
     private readonly settingsService: SettingsService,
   ) {}
 
@@ -49,7 +69,8 @@ export class RequestsReadService {
     };
     const filters: Prisma.ServiceRequestWhereInput[] = [];
     if (staff) {
-      if (query.owner) filters.push({ ownerId: query.owner });
+      const owner = ownerFilter(query.owner, user.id);
+      if (owner) filters.push(owner);
     } else if (actor.platformRoles.includes('provider')) {
       filters.push(
         actor.platformRoles.includes('customer')
@@ -63,8 +84,12 @@ export class RequestsReadService {
       filters.push({
         status: query.status as Prisma.ServiceRequestWhereInput['status'],
       });
+    if (query.stage)
+      filters.push({ status: STAGE_STATUS[query.stage as RequestStage] });
+    if (query.nextActor === 'me')
+      filters.push({ status: { notIn: [...TERMINAL] } });
     if (query.service) filters.push({ service: query.service });
-    if (query.q && !providerScoped)
+    if (query.q)
       filters.push({
         OR: [
           { title: { contains: query.q, mode: 'insensitive' } },
@@ -74,20 +99,34 @@ export class RequestsReadService {
         ],
       });
     const where: Prisma.ServiceRequestWhereInput = { AND: filters };
+    const orderBy = listOrderBy(query.sort);
     const page = query.page ?? 1;
     const limit = query.itemsPerPage ?? 20;
+    // status, service, owner and q are in SQL. The stage inside a status, the
+    // next actor and a provider's title search depend on child rows, so those
+    // filter a light snapshot of at most one maximum-size page of the
+    // SQL-narrowed rows (DERIVED_FILTER_WINDOW). Matches beyond that window
+    // are not returned, and `total` counts matches inside it.
     const needsDerivedFiltering = Boolean(
       query.stage || query.nextActor || (query.q && providerScoped),
     );
-    const rowQuery = this.prisma.serviceRequest.findMany({
-      where,
-      orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
-      ...(needsDerivedFiltering ? {} : paginationArgs(page, limit)),
-    });
     const [rows, dbTotal] = needsDerivedFiltering
-      ? ([await rowQuery, null] as const)
+      ? ([
+          await this.prisma.serviceRequest.findMany({
+            where,
+            orderBy,
+            select: LIST_ROW_SELECT,
+            take: DERIVED_FILTER_WINDOW,
+          }),
+          null,
+        ] as const)
       : await this.prisma.$transaction([
-          rowQuery,
+          this.prisma.serviceRequest.findMany({
+            where,
+            orderBy,
+            select: LIST_ROW_SELECT,
+            ...paginationArgs(page, limit),
+          }),
           this.prisma.serviceRequest.count({ where }),
         ]);
     const settings = Object.fromEntries(
@@ -97,12 +136,12 @@ export class RequestsReadService {
       ]),
     );
     const now = new Date();
-    const matching: Array<
-      NonNullable<Awaited<ReturnType<RequestSnapshotLoader['load']>>>
-    > = [];
-    for (const brief of rows) {
-      const loaded = await this.loader.load(this.prisma, brief.id);
-      if (!loaded || !this.canSee(loaded.snapshot, actor)) continue;
+    const matching: LightRequest[] = [];
+    for (const loaded of await this.listLoader.attachSnapshots(
+      this.prisma,
+      rows,
+    )) {
+      if (!this.canSee(loaded.snapshot, actor)) continue;
       if (query.stage && deriveStage(loaded.snapshot, now) !== query.stage)
         continue;
       if (
@@ -183,20 +222,20 @@ export class RequestsReadService {
           : 'This action is not available for your account type.',
       );
     }
-    const loaded = await this.loader.load(this.prisma, id);
-    if (!loaded) throw this.notFound();
+    const requestId = await resolveRequestId(this.prisma, id);
+    if (!requestId) throw this.notFound();
     const { skip, take } = paginationArgs(query.page, 20);
-    const [rows, total] = await this.prisma.$transaction([
-      this.prisma.auditLog.findMany({
-        where: { entityType: 'service_request', entityId: loaded.row.id },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        skip,
-        take,
-      }),
-      this.prisma.auditLog.count({
-        where: { entityType: 'service_request', entityId: loaded.row.id },
-      }),
+    // metadata.requestId is set on every request audit row, whatever its
+    // resource type, and audit_logs_request_id indexes exactly this expression.
+    const [rows, totals] = await Promise.all([
+      this.prisma.$queryRaw<ActivityRow[]>(
+        activityRowsSql(requestId, skip, take),
+      ),
+      this.prisma.$queryRaw<Array<{ total: number }>>(
+        activityCountSql(requestId),
+      ),
     ]);
+    const total = totals[0]?.total ?? 0;
     const canSeeContact = actor.staff.permissions.has('view.customer_contact');
     const canSeePricing = actor.staff.permissions.has('view.pricing');
     return toPaginatedResult(

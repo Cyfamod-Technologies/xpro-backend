@@ -15,10 +15,3 @@ export function generateInviteCode(length = 8): string {
     .map((b) => chars[b % chars.length])
     .join('');
 }
-
-export function generateNumericOtp(length = 6): string {
-  const bytes = randomBytes(length);
-  return Array.from(bytes)
-    .map((b) => String(b % 10))
-    .join('');
-}

@@ -3,12 +3,16 @@ import {
   commonProjection,
   effectiveDates,
   completionProjection,
-  jsonArray,
   jsonObject,
   issueProjection,
   scheduleProjection,
   type ProjectionContext,
 } from './projection.helpers';
+import {
+  providerContributionView,
+  providerCurrentQuote,
+  providerQuoteView,
+} from './quote.projection';
 
 export function providerProjection(
   context: ProjectionContext,
@@ -36,21 +40,10 @@ export function providerProjection(
   const accepted =
     assignment.status === 'accepted' || assignment.status === 'completed';
   const schedules = scheduleProjection(context, assignment.id);
-  const quote =
-    row.quotes.find((item) => item.status === 'accepted') ??
-    row.quotes.find((item) => item.status === 'sent');
+  const quote = providerCurrentQuote(row.quotes);
   const ownContribution = row.contributions.find(
     (item) => item.assignmentId === assignment.id,
   );
-  const ownPayout =
-    quote?.payoutAssignmentId === assignment.id ? quote.payoutAmount : null;
-  const scope = quote
-    ? jsonArray(quote.items).map((item) => ({
-        description:
-          typeof item.description === 'string' ? item.description : '',
-        quantity: Number(item.quantity ?? 0),
-      }))
-    : undefined;
 
   if (assignment.status === 'offered') {
     return {
@@ -86,8 +79,15 @@ export function providerProjection(
     cityName: snapshot.cityName,
     districtName: snapshot.districtName,
     ...dates,
-    details: locked ? details : safeSharedDetails(details, shared),
-    assignment: { status: assignment.status },
+    details: locked
+      ? details
+      : { ...offerDetails(details), ...safeSharedDetails(details, shared) },
+    assignment: {
+      id: assignment.id,
+      status: assignment.status,
+      note: assignment.note,
+      offerBrief: row.offerBrief,
+    },
     schedules,
     schedule:
       schedules.find((item) => item.status === 'confirmed') ??
@@ -112,14 +112,9 @@ export function providerProjection(
         }),
         sharedWithProvider,
       })),
-    quote: scope
-      ? {
-          scope,
-          ...(ownPayout === null ? {} : { payoutAmount: Number(ownPayout) }),
-        }
-      : null,
+    quote: quote ? providerQuoteView(quote, [assignment.id]) : null,
     contributions: ownContribution
-      ? [{ items: ownContribution.items, note: ownContribution.note }]
+      ? [providerContributionView(ownContribution)]
       : [],
   };
   if (accepted) fields.title = row.title;

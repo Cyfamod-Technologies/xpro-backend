@@ -1,5 +1,11 @@
 import type { RequestSnapshot } from './snapshot';
-import { deriveStage, nextActor, type RequestStage } from './stage';
+import {
+  deriveStage,
+  nextActor,
+  STAGE_STATUS,
+  viewerNextActor,
+  type RequestStage,
+} from './stage';
 
 const now = new Date('2026-10-23T12:00:00.000Z');
 
@@ -12,18 +18,22 @@ function snapshot(overrides: Partial<RequestSnapshot> = {}): RequestSnapshot {
     currentAssignment: null,
     assignments: [],
     latestQuote: null,
+    latestSentQuote: null,
     quotes: [],
     currentSchedule: null,
     replacedSchedule: null,
     pendingUpdates: [],
     openIssues: [],
     pendingCancellation: false,
+    pendingCancellationInfo: null,
+    refundsOutstanding: 0,
     latestNoShow: null,
-    payment: { paid: false, pendingPaymentAt: null },
+    payment: { paid: false, pendingPaymentAt: null, offlineRecorded: false },
     payout: null,
     customerStanding: 'active',
     providerStanding: null,
     cascadePending: false,
+    autoAttempts: 0,
     ...overrides,
   };
 }
@@ -315,6 +325,12 @@ describe('deriveStage (§5.3)', () => {
     expect(deriveStage(make(), now)).toBe(expected);
   });
 
+  it('maps every stage to the one status it is derived from', () => {
+    for (const { expected, make } of rows) {
+      expect(STAGE_STATUS[expected]).toBe(make().status);
+    }
+  });
+
   it('uses the next pending party for a proposed schedule', () => {
     const snap = snapshot({
       status: 'ready_to_schedule',
@@ -357,5 +373,22 @@ describe('deriveStage (§5.3)', () => {
       nextActor(snapshot({ providerCostingSubmitted: true }), 'pricing', now),
     ).toBe('staff:quote.manage');
     expect(nextActor(snapshot(), 'defects_window', now)).toBe('none');
+  });
+});
+
+describe('viewerNextActor (A-22)', () => {
+  it.each([
+    ['staff:quote.approve', 'staff', 'staff:quote.approve'],
+    ['staff:quote.approve', 'customer', 'xpro'],
+    ['staff:quote.approve', 'provider', 'xpro'],
+    ['system', 'customer', 'xpro'],
+    ['provider', 'customer', 'xpro'],
+    ['customer', 'provider', 'xpro'],
+    ['customer', 'customer', 'customer'],
+    ['provider', 'provider', 'provider'],
+    ['none', 'customer', 'none'],
+    ['none', 'provider', 'none'],
+  ] as const)('maps %s for %s to %s', (next, role, expected) => {
+    expect(viewerNextActor(next, role)).toBe(expected);
   });
 });

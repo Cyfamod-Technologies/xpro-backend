@@ -23,8 +23,13 @@ import { hasExpectedSignature, validateFile } from '../storage/file-validation';
 import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
+import { AppError } from '../platform/errors/app-error';
+import { confirmedJobConflictMessage } from '../requests/domain/schedule-checks';
 import { LocationsService } from '../platform/locations/locations.service';
-import { ProviderStandingHooks } from '../requests/dispatch/provider-standing.hooks';
+import {
+  RequestEventsService,
+  type HoursConflict,
+} from '../requests/events/request-events.service';
 import { intervalFits } from '../platform/calendar/provider-calendar';
 import {
   ProviderAvailabilityDto,
@@ -53,7 +58,7 @@ export class ProvidersService {
     private readonly storage: StorageService,
     private readonly actors: ActorService,
     private readonly locations: LocationsService,
-    private readonly standingHooks: ProviderStandingHooks,
+    private readonly requestEvents: RequestEventsService,
   ) {}
 
   async recordReliabilityEvent(
@@ -67,10 +72,11 @@ export class ProvidersService {
       confirmedBy?: string;
       note?: string;
     },
-  ): Promise<void> {
-    try {
-      await tx.providerReliabilityEvent.create({
-        data: {
+  ): Promise<'review_due' | 'cleared' | null> {
+    // createMany + skipDuplicates is ON CONFLICT DO NOTHING; a caught P2002 would abort the caller's interactive transaction.
+    const created = await tx.providerReliabilityEvent.createMany({
+      data: [
+        {
           providerId: input.providerId,
           kind: input.kind,
           sourceId: input.sourceId,
@@ -79,15 +85,14 @@ export class ProvidersService {
           confirmedBy: input.confirmedBy,
           note: input.note,
         },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      )
-        return;
-      throw error;
-    }
+      ],
+      skipDuplicates: true,
+    });
+    if (
+      !created.count ||
+      (input.kind !== 'no_show_confirmed' && input.kind !== 'no_show_voided')
+    )
+      return null;
 
     const since = new Date(
       input.occurredAt.getTime() - 90 * 24 * 60 * 60 * 1000,
@@ -114,7 +119,17 @@ export class ProvidersService {
         where: { id: input.providerId },
         data: { reliabilityStatus: 'review_due' },
       });
+      return 'review_due';
     }
+    if (input.kind === 'no_show_voided') {
+      // 03 §6.3: a void closes a review that is not yet decided once the count drops below the threshold.
+      const cleared = await tx.providerProfile.updateMany({
+        where: { id: input.providerId, reliabilityStatus: 'review_due' },
+        data: { reliabilityStatus: 'normal' },
+      });
+      return cleared.count > 0 ? 'cleared' : null;
+    }
+    return null;
   }
 
   async myProfile(userId: string) {
@@ -560,10 +575,7 @@ export class ProvidersService {
       metadata: { available: dto.available },
     });
     if (!dto.available)
-      await this.standingHooks.onProviderUnavailable(
-        updated.id,
-        'Provider turned availability off.',
-      );
+      await this.requestEvents.onProviderUnavailable(updated.id);
     return this.myProfile(userId);
   }
 
@@ -576,7 +588,9 @@ export class ProvidersService {
         'Submit your provider profile before setting working hours.',
       );
     this.validateCalendar(dto.workingHours, dto.timeOff ?? []);
+    const conflicts: HoursConflict[] = [];
     const updated = await this.prisma.$transaction(async (tx) => {
+      conflicts.length = 0;
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${profile.id} FOR UPDATE`,
       );
@@ -607,12 +621,15 @@ export class ProvidersService {
           schedule.endAt,
           displayName,
         );
-        if (problem) {
-          const date = schedule.startAt.toISOString().slice(0, 10);
-          throw new ConflictException(
-            `You have a confirmed job on ${date} (${schedule.request.number}). Ask XPro to move it before changing these hours.`,
+        if (problem)
+          throw new AppError(
+            409,
+            'STATE_CONFLICT',
+            confirmedJobConflictMessage(
+              schedule.startAt,
+              schedule.request.number,
+            ),
           );
-        }
       }
       const proposed = await tx.schedule.findMany({
         where: { providerId: profile.id, status: 'proposed' },
@@ -627,12 +644,9 @@ export class ProvidersService {
           displayName,
         );
         if (problem)
-          await tx.schedule.update({
-            where: { id: schedule.id },
-            data: {
-              status: 'changes_requested',
-              responses: { push: 'Provider: working hours changed' },
-            },
+          conflicts.push({
+            scheduleId: schedule.id,
+            requestId: schedule.requestId,
           });
       }
       return tx.providerProfile.update({
@@ -644,6 +658,7 @@ export class ProvidersService {
         },
       });
     });
+    await this.requestEvents.onProviderHoursChanged(profile.id, conflicts);
     this.audit.record({
       actorType: 'user',
       actorId: userId,
@@ -766,7 +781,7 @@ export class ProvidersService {
       metadata: { version: updated.version, note: dto.note?.trim() },
     });
     if (dto.decision !== 'approved')
-      await this.standingHooks.onProviderUnavailable(
+      await this.requestEvents.onProviderStandingChanged(
         profile.id,
         'Provider verification was rejected.',
       );

@@ -34,6 +34,18 @@ export class TimersProcessor extends WorkerHost {
     if (job.name === TIMER_FAILED_JOB_NAME && job.data.timerId)
       await this.revive(job.data.timerId);
     await this.processDue();
+    await this.runSweepers();
+  }
+
+  /** A failing sweeper is logged and never blocks the others or the next sweep. */
+  private async runSweepers(now = new Date()): Promise<void> {
+    for (const sweeper of this.registry.sweepHandlers()) {
+      try {
+        await sweeper(now);
+      } catch (error) {
+        this.logger.error(`Timers sweeper failed: ${String(error)}`);
+      }
+    }
   }
 
   /** Runs every due timer (oldest first, 50 at a time). Returns how many handlers succeeded. */

@@ -99,6 +99,30 @@ describe('validateIntake', () => {
           hireType: 'Professional',
           trade: 'Mason',
           quantity: 1,
+          endDate: '2026-13-45',
+        },
+      }),
+      'Hire end date must be a valid date.',
+    ],
+    [
+      valid({
+        service: 'Hire',
+        details: {
+          hireType: 'Professional',
+          trade: 'Mason',
+          quantity: 1,
+          endDate: '2026-10-30',
+        },
+      }),
+      'Add the hire start date.',
+    ],
+    [
+      valid({
+        service: 'Hire',
+        details: {
+          hireType: 'Professional',
+          trade: 'Mason',
+          quantity: 11,
           endDate: '2026-10-30',
         },
       }),

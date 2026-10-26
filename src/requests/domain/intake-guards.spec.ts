@@ -147,4 +147,36 @@ describe('intake action guards', () => {
       message: 'Only a request still in intake review can be rejected.',
     });
   });
+  it('lets a provider who also holds the customer role free-cancel their own request (A-15)', () => {
+    const dualRole = {
+      kind: 'provider' as const,
+      userId: 'customer-1',
+      platformRoles: ['provider', 'customer'],
+    };
+    expect(canFreeCancel(snapshot(), dualRole, undefined, now, {})).toEqual({
+      ok: true,
+    });
+    expect(
+      canFreeCancel(
+        snapshot(),
+        { ...dualRole, userId: 'someone-else' },
+        undefined,
+        now,
+        {},
+      ),
+    ).toMatchObject({ ok: false, status: 403 });
+    expect(
+      canFreeCancel(
+        snapshot(),
+        { kind: 'provider', userId: 'customer-1', platformRoles: ['provider'] },
+        undefined,
+        now,
+        {},
+      ),
+    ).toMatchObject({
+      ok: false,
+      status: 403,
+      message: 'This action is not available for your account type.',
+    });
+  });
 });

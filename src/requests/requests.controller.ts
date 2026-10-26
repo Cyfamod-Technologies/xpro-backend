@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Body,
-  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -24,19 +23,19 @@ import { RequestListQueryDto } from './dto/request-list-query.dto';
 import { RequestActivityQueryDto } from './dto/request-activity-query.dto';
 import { RequestsReadService } from './requests-read.service';
 import { formatEtag } from '../platform/concurrency/etag.util';
-import { parseEtag } from '../platform/concurrency/etag.util';
-import { AppError } from '../platform/errors/app-error';
+import { IfMatch } from '../platform/concurrency/if-match.decorator';
 import { IdempotencyKey } from '../platform/idempotency/idempotency-key.decorator';
 import { IntakeService } from './intake.service';
 import {
   RequestClarifyDto,
-  RequestFreeCancelDto,
   RequestIntakeDto,
   RequestRejectDto,
   RequestReviewDto,
   RequestUpdateDto,
 } from './dto/request-intake.dto';
 import { OwnershipService } from './ownership.service';
+import { CancellationService } from './cancellation/cancellation.service';
+import { CancelRequestDto } from './cancellation/cancellation.dto';
 import {
   RequestHandoffDto,
   RequestReassignDto,
@@ -58,6 +57,7 @@ export class RequestsController {
     private readonly intake: IntakeService,
     private readonly ownership: OwnershipService,
     private readonly messages: MessagesService,
+    private readonly cancellation: CancellationService,
   ) {}
 
   @Post()
@@ -101,18 +101,11 @@ export class RequestsController {
       }),
     )
     dto: RequestUpdateDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch({ required: true }) version: number,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.intake.update(
       user,
       id,
@@ -139,18 +132,11 @@ export class RequestsController {
       }),
     )
     dto: RequestClarifyDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.intake.clarify(
       user,
       id,
@@ -177,18 +163,11 @@ export class RequestsController {
       }),
     )
     dto: RequestReviewDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.intake.review(
       user,
       id,
@@ -215,18 +194,11 @@ export class RequestsController {
       }),
     )
     dto: RequestRejectDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.intake.reject(
       user,
       id,
@@ -241,7 +213,10 @@ export class RequestsController {
 
   @Post(':id/cancel')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Cancel a request before intake approval or offer' })
+  @ApiOperation({
+    summary:
+      'Cancel a request: free cancel, a cancellation request, or a staff cancel',
+  })
   async cancel(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -252,20 +227,13 @@ export class RequestsController {
         forbidNonWhitelisted: true,
       }),
     )
-    dto: RequestFreeCancelDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    dto: CancelRequestDto,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const version = ifMatch ? parseEtag(ifMatch) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
-    const result = await this.intake.freeCancel(
+    const result = await this.cancellation.cancel(
       user,
       id,
       dto,
@@ -283,12 +251,11 @@ export class RequestsController {
   async claim(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const version = optionalVersion(ifMatch);
     const result = await this.ownership.claim(
       user,
       id,
@@ -314,7 +281,7 @@ export class RequestsController {
       }),
     )
     dto: RequestReleaseDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
@@ -323,7 +290,7 @@ export class RequestsController {
       user,
       id,
       dto,
-      optionalVersion(ifMatch),
+      version,
       request.originalUrl,
       key,
     );
@@ -345,7 +312,7 @@ export class RequestsController {
       }),
     )
     dto: RequestHandoffDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
@@ -354,7 +321,7 @@ export class RequestsController {
       user,
       id,
       dto,
-      optionalVersion(ifMatch),
+      version,
       request.originalUrl,
       key,
     );
@@ -376,7 +343,7 @@ export class RequestsController {
       }),
     )
     dto: RequestReassignDto,
-    @Headers('if-match') ifMatch: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
@@ -385,7 +352,7 @@ export class RequestsController {
       user,
       id,
       dto,
-      optionalVersion(ifMatch),
+      version,
       request.originalUrl,
       key,
     );
@@ -473,6 +440,7 @@ export class RequestsController {
       }),
     )
     dto: SendRequestMessageDto,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
@@ -483,19 +451,9 @@ export class RequestsController {
       dto,
       request.originalUrl,
       key,
+      version,
     );
     response.status(result.status).setHeader('ETag', result.etag);
     return result.body;
   }
-}
-
-function requireVersion(ifMatch: string | undefined): number {
-  const version = ifMatch ? parseEtag(ifMatch) : null;
-  if (version === null)
-    throw new AppError(422, 'VALIDATION_ERROR', 'If-Match header is required.');
-  return version;
-}
-
-function optionalVersion(ifMatch: string | undefined): number | undefined {
-  return ifMatch ? requireVersion(ifMatch) : undefined;
 }

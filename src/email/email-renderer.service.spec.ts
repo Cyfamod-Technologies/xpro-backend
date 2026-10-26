@@ -18,7 +18,7 @@ describe('EmailRendererService', () => {
     welcome: { firstName: 'Ada' },
     email_verification: {
       firstName: 'Ada',
-      code: '123456',
+      token: 'verification-token',
     },
     password_reset: {
       firstName: 'Ada',
@@ -58,9 +58,12 @@ describe('EmailRendererService', () => {
     },
   );
 
-  it('takes the brand name from APP_NAME and derives a logo monogram', () => {
+  it('uses the Xpro logo asset and takes the brand name from APP_NAME', () => {
     const branded = new EmailRendererService(
-      new ConfigService({ APP_NAME: 'Northwind Labs' }),
+      new ConfigService({
+        APP_NAME: 'Northwind Labs',
+        FRONTEND_URL: 'https://app.example.com',
+      }),
     );
     const result = branded.render({
       recipientEmail: 'ada@example.com',
@@ -69,8 +72,22 @@ describe('EmailRendererService', () => {
     });
 
     expect(result.subject).toContain('Northwind Labs');
-    expect(result.html).toContain('NL');
+    expect(result.html).toContain(
+      'https://app.example.com/images/xpro-logo-transparent.png',
+    );
+    expect(result.html).toContain('alt="Northwind Labs"');
     expect(result.html).not.toContain('Xpro');
+  });
+
+  it('uses the dashboard primary color in branded buttons', () => {
+    const result = renderer.render({
+      recipientEmail: 'ada@example.com',
+      templateKey: 'welcome',
+      payload: fixtures.welcome,
+    });
+
+    expect(result.html).toContain('#4AA7DF');
+    expect(result.html).toContain('#102A3A');
   });
 
   it('escapes untrusted names', () => {
@@ -84,29 +101,24 @@ describe('EmailRendererService', () => {
     expect(result.html).not.toContain('<script>alert(1)</script>');
   });
 
-  it('renders email verification as a code without a verification URL', () => {
+  it('renders email verification as a link', () => {
     const result = renderer.render({
       recipientEmail: 'ada+test@example.com',
       templateKey: 'email_verification',
       payload: {
         firstName: 'Ada',
-        code: '123456',
+        token: 'verification-token',
       },
     });
 
-    // Each digit renders in its own cell, so assert on the cells rather than
-    // on a contiguous "123456" that never appears in the markup.
-    const cellDigits = [
-      ...result.html.matchAll(
-        /<td class="email-code-cell"[^>]*>([^<]*)<\/td>/g,
-      ),
-    ].map((match) => match[1].trim());
-    expect(cellDigits).toHaveLength(6);
-    expect(cellDigits.join('')).toBe('123456');
-    expect(result.text).toContain('Verification code: 123456');
-    expect(result.html).not.toContain('/verify-email');
-    expect(result.text).not.toContain('/verify-email');
-    expect(result.html).not.toContain('token=');
+    expect(result.html).toContain(
+      'https://app.example.com/auth/verify-email?token=verification-token',
+    );
+    expect(result.text).toContain(
+      'Verification link: https://app.example.com/auth/verify-email?token=verification-token',
+    );
+    expect(result.html).not.toContain('Verification code');
+    expect(result.text).not.toContain('Verification code');
   });
 
   it('rejects a payload with a missing required field', () => {

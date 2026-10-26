@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -18,8 +17,7 @@ import type { Request, Response } from 'express';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../../common/types/request-user';
-import { parseEtag } from '../../platform/concurrency/etag.util';
-import { AppError } from '../../platform/errors/app-error';
+import { IfMatch } from '../../platform/concurrency/if-match.decorator';
 import { IdempotencyKey } from '../../platform/idempotency/idempotency-key.decorator';
 import { PricingService } from './pricing.service';
 import {
@@ -58,18 +56,11 @@ export class PricingController {
       }),
     )
     dto: QuoteItemsDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.contribute(
       user,
       id,
@@ -100,18 +91,11 @@ export class PricingController {
       }),
     )
     dto: QuoteItemsDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.saveQuote(
       user.id,
       id,
@@ -137,18 +121,11 @@ export class PricingController {
       }),
     )
     dto: EditQuoteDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.saveQuote(
       user.id,
       id,
@@ -174,18 +151,11 @@ export class PricingController {
       }),
     )
     dto: PublishQuoteDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.publish(
       user.id,
       id,
@@ -212,18 +182,11 @@ export class PricingController {
       }),
     )
     dto: QuoteApprovalDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.approve(
       user.id,
       id,
@@ -250,18 +213,11 @@ export class PricingController {
       }),
     )
     dto: QuoteReturnDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.returnQuote(
       user.id,
       id,
@@ -288,18 +244,11 @@ export class PricingController {
       }),
     )
     dto: QuoteDecisionDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.respond(
       user,
       id,
@@ -326,18 +275,11 @@ export class PricingController {
       }),
     )
     dto: PayoutAmountDto,
-    @Headers('if-match') etag: string | undefined,
+    @IfMatch() version: number | undefined,
     @IdempotencyKey() key: string | undefined,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const version = etag ? parseEtag(etag) : null;
-    if (version === null)
-      throw new AppError(
-        422,
-        'VALIDATION_ERROR',
-        'If-Match header is required.',
-      );
     const result = await this.pricing.setPayout(
       user.id,
       id,

@@ -1,4 +1,5 @@
 import type { RequestSnapshot, ScheduleSnapshot } from './snapshot';
+import type { RequestStatus } from './statuses';
 
 export type RequestStage =
   | 'intake_review'
@@ -34,8 +35,61 @@ export type RequestStage =
   | 'cancelled'
   | 'rejected';
 
+/** The only request status each stage is derived from, so a stage filter can narrow the SQL by status first. */
+export const STAGE_STATUS: Record<RequestStage, RequestStatus> = {
+  intake_review: 'submitted',
+  awaiting_clarification: 'submitted',
+  dispatching: 'under_review',
+  offer_out: 'under_review',
+  acceptance_review: 'under_review',
+  replacing_provider: 'under_review',
+  pricing: 'matched',
+  quote_approval: 'matched',
+  quote_revision: 'matched',
+  quote_expired: 'matched',
+  payment_lapsed: 'matched',
+  quote_with_customer: 'quoted',
+  awaiting_payment: 'awaiting_payment',
+  set_payout: 'ready_to_schedule',
+  scheduling: 'ready_to_schedule',
+  schedule_proposed: 'ready_to_schedule',
+  schedule_changes: 'ready_to_schedule',
+  scheduled: 'scheduled',
+  reschedule: 'scheduled',
+  in_progress: 'in_progress',
+  rework: 'in_progress',
+  blocked_provider: 'blocked',
+  on_hold: 'blocked',
+  issue_open: 'blocked',
+  dispute: 'blocked',
+  awaiting_customer_confirmation: 'completion_pending',
+  defects_window: 'acknowledged',
+  ready_to_close: 'acknowledged',
+  closed: 'closed',
+  refund_pending: 'cancelling',
+  cancelled: 'cancelled',
+  rejected: 'rejected',
+};
+
 export type NextActor =
   'customer' | 'provider' | `staff:${string}` | 'system' | 'none';
+
+/**
+ * What customers and providers see as the next actor: their own side, `xpro`
+ * for everyone else, or `none`. Staff permission keys and the system actor are
+ * internal (04 §10), and naming `provider` to a customer would reveal an offer
+ * before XPro confirms the assignment (ASG-D3).
+ */
+export type ViewerNextActor = 'customer' | 'provider' | 'xpro' | 'none';
+
+export function viewerNextActor(
+  next: NextActor,
+  role: 'customer' | 'provider' | 'staff',
+): NextActor | ViewerNextActor {
+  if (role === 'staff') return next;
+  if (next === 'none') return 'none';
+  return next === role ? role : 'xpro';
+}
 
 function hasOpenChangeRequest(schedule: ScheduleSnapshot): boolean {
   return schedule.changeRequests.some((change) => change.handledAt === null);

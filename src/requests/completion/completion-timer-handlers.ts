@@ -1,22 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import type { RequestTimer } from '@prisma/client';
-import { NotificationDispatcher } from '../../notifications/notification-dispatcher';
-import { OutboxService } from '../../platform/outbox/outbox.service';
 import { TimerRegistry } from '../../platform/timers/timer-registry';
-import { PrismaService } from '../../prisma/prisma.service';
 import { FinanceService } from '../../payments/finance.service';
-import { ApprovalsHooks } from '../approvals.hooks';
+import { RequestCommandRunner } from '../command-runner';
 
 @Injectable()
 export class CompletionTimerHandlers {
   constructor(
     registry: TimerRegistry,
-    private readonly prisma: PrismaService,
-    private readonly notifications: NotificationDispatcher,
-    private readonly outbox: OutboxService,
+    private readonly runner: RequestCommandRunner,
     private readonly finance: FinanceService,
-    private readonly approvals: ApprovalsHooks,
   ) {
     registry.register('T17.reminder24h', (timer) => this.remind(timer));
     registry.register('T17.reminder48h', (timer) => this.remind(timer));
@@ -25,161 +18,109 @@ export class CompletionTimerHandlers {
   }
 
   private async remind(timer: RequestTimer) {
-    const sent = await this.prisma.$transaction(async (tx) => {
-      const request = await tx.serviceRequest.findUnique({
-        where: { id: timer.requestId },
-        select: {
-          id: true,
-          number: true,
-          ownerId: true,
-          status: true,
-          confirmDueAt: true,
-        },
-      });
-      if (
-        !request ||
-        request.status !== 'completion_pending' ||
-        !request.confirmDueAt ||
-        request.confirmDueAt <= new Date()
-      )
-        return false;
-      await this.notifications.dispatch(
-        tx,
-        'completion.reminder',
-        { requestCode: format(request.number) },
-        { requestId: request.id, ownerId: request.ownerId, actorId: null },
-      );
-      return true;
-    });
-    if (sent) await this.outbox.kick();
+    await this.runner.runSystem(
+      `timer.${timer.kind}`,
+      timer.requestId,
+      async (ctx) => {
+        if (ctx.snap.status !== 'completion_pending') return { changed: false };
+        const request = await ctx.tx.serviceRequest.findUnique({
+          where: { id: ctx.snap.id },
+          select: { confirmDueAt: true },
+        });
+        if (!request?.confirmDueAt || request.confirmDueAt <= ctx.now)
+          return { changed: false };
+        ctx.notify('completion.reminder', { requestCode: ctx.snap.number });
+      },
+      { bumpVersion: false },
+    );
   }
 
   private async autoConfirm(timer: RequestTimer) {
-    const now = new Date();
-    const confirmed = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw(
-        Prisma.sql`SELECT id FROM service_requests WHERE id = ${timer.requestId}::uuid FOR UPDATE`,
-      );
-      const request = await tx.serviceRequest.findUnique({
-        where: { id: timer.requestId },
-        select: {
-          id: true,
-          number: true,
-          ownerId: true,
-          status: true,
-          confirmDueAt: true,
-          holdKind: true,
-          cancellationId: true,
-        },
-      });
-      if (
-        !request ||
-        request.status !== 'completion_pending' ||
-        !request.confirmDueAt ||
-        request.confirmDueAt > now ||
-        request.holdKind ||
-        request.cancellationId
-      )
-        return false;
-      const openIssue = await tx.issue.findFirst({
-        where: {
-          requestId: request.id,
-          status: { in: ['open', 'rework', 'disputed'] },
-        },
-        select: { id: true },
-      });
-      if (openIssue) return false;
-      const assignment = await tx.assignment.findFirst({
-        where: { requestId: request.id, status: 'accepted' },
-        orderBy: { createdAt: 'desc' },
-      });
-      const quote = await tx.quote.findFirst({
-        where: { requestId: request.id, status: 'accepted' },
-        orderBy: { version: 'desc' },
-      });
-      if (
-        !assignment ||
-        quote?.payoutAmount == null ||
-        quote.payoutAssignmentId !== assignment.id
-      )
-        return false;
-      const days = Number(
-        (
-          await tx.setting.findUnique({
-            where: { key: 'completion.defectsWindowDays' },
-            select: { value: true },
-          })
-        )?.value ?? 7,
-      );
-      const endsAt = new Date(now.getTime() + days * 86_400_000);
-      await tx.serviceRequest.update({
-        where: { id: request.id },
-        data: {
-          status: 'acknowledged',
-          acknowledgedAt: now,
-          acknowledgedBy: 'system',
-          acknowledgedNote: 'No response within 72 h',
-          defectsWindowEndsAt: endsAt,
-          version: { increment: 1 },
-        },
-      });
-      await this.finance.createPrimary(tx, {
-        requestId: request.id,
-        assignmentId: assignment.id,
-        providerId: assignment.providerId,
-        amount: quote.payoutAmount,
-        now,
-      });
-      await tx.requestTimer.updateMany({
-        where: {
-          requestId: request.id,
-          kind: { startsWith: 'T17.' },
-          status: 'pending',
-        },
-        data: { status: 'cancelled' },
-      });
-      await this.approvals.open(
-        tx,
-        'ready_to_close',
-        request.id,
-        request.id,
-        now,
-      );
-      await this.notifications.dispatch(
-        tx,
-        'completion.auto_confirmed',
-        { requestCode: format(request.number) },
-        { requestId: request.id, ownerId: request.ownerId, actorId: null },
-      );
-      return true;
-    });
-    if (confirmed) await this.outbox.kick();
+    await this.runner.runSystem(
+      'timer.T17.autoConfirm',
+      timer.requestId,
+      async (ctx) => {
+        // 04 §7: only while the report still awaits the customer, with no open issue, hold or pending cancellation.
+        if (
+          ctx.snap.status !== 'completion_pending' ||
+          ctx.snap.hold ||
+          ctx.snap.openIssues.length ||
+          ctx.snap.pendingCancellation
+        )
+          return { changed: false };
+        const request = await ctx.tx.serviceRequest.findUnique({
+          where: { id: ctx.snap.id },
+          select: { confirmDueAt: true, cancellationId: true },
+        });
+        if (
+          !request?.confirmDueAt ||
+          request.confirmDueAt > ctx.now ||
+          request.cancellationId
+        )
+          return { changed: false };
+        const assignment = await ctx.tx.assignment.findFirst({
+          where: { requestId: ctx.snap.id, status: 'accepted' },
+          orderBy: { createdAt: 'desc' },
+        });
+        const quote = await ctx.tx.quote.findFirst({
+          where: { requestId: ctx.snap.id, status: 'accepted' },
+          orderBy: { version: 'desc' },
+        });
+        if (
+          !assignment ||
+          quote?.payoutAmount == null ||
+          quote.payoutAssignmentId !== assignment.id
+        )
+          return { changed: false };
+        const days = Number(ctx.settings['completion.defectsWindowDays'] ?? 7);
+        const endsAt = new Date(ctx.now.getTime() + days * 86_400_000);
+        await ctx.tx.serviceRequest.update({
+          where: { id: ctx.snap.id },
+          data: {
+            status: 'acknowledged',
+            acknowledgedAt: ctx.now,
+            acknowledgedBy: 'system',
+            acknowledgedNote: 'No response within 72 h',
+            defectsWindowEndsAt: endsAt,
+          },
+        });
+        await this.finance.createPrimary(ctx, {
+          requestId: ctx.snap.id,
+          assignmentId: assignment.id,
+          providerId: assignment.providerId,
+          amount: quote.payoutAmount,
+          payoutAssignmentId: quote.payoutAssignmentId,
+        });
+        ctx.timers.stop([
+          'T17.reminder24h',
+          'T17.reminder48h',
+          'T17.autoConfirm',
+        ]);
+        // T21 opens ready_to_close when the defects window ends, not at confirmation.
+        ctx.timers.start('T21.defectsEnd', endsAt);
+        ctx.audit('Completion auto-confirmed', {
+          changes: { assignmentId: assignment.id, defectsWindowEndsAt: endsAt },
+        });
+        ctx.notify('completion.auto_confirmed', {
+          requestCode: ctx.snap.number,
+        });
+      },
+    );
   }
 
   private async readyToClose(timer: RequestTimer) {
-    const created = await this.prisma.$transaction(async (tx) => {
-      const request = await tx.serviceRequest.findUnique({
-        where: { id: timer.requestId },
-        select: { id: true, status: true, defectsWindowEndsAt: true },
-      });
-      if (
-        !request ||
-        request.status !== 'acknowledged' ||
-        !request.defectsWindowEndsAt ||
-        request.defectsWindowEndsAt > new Date()
-      )
-        return false;
-      await this.approvals.open(
-        tx,
-        'ready_to_close',
-        request.id,
-        request.id,
-        new Date(),
-      );
-      return true;
-    });
-    void created;
+    await this.runner.runSystem(
+      'timer.T21.defectsEnd',
+      timer.requestId,
+      (ctx) => {
+        const endsAt = ctx.snap.defectsWindowEndsAt;
+        if (ctx.snap.status !== 'acknowledged' || !endsAt || endsAt > ctx.now)
+          return Promise.resolve({ changed: false });
+        ctx.approvals.open('ready_to_close', ctx.snap.id);
+        ctx.audit('Ready to close');
+        return Promise.resolve();
+      },
+      { bumpVersion: false },
+    );
   }
 }
-
-const format = (number: number) => `XPR-${String(number).padStart(5, '0')}`;
