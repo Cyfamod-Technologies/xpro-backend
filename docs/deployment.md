@@ -60,43 +60,6 @@ applies what is committed. Never run `migrate dev` against production.
 With more than one API replica, run migrations as a separate step before rolling
 out rather than in each container's start command, or concurrent replicas will race.
 
-## One-time initial platform admin
-
-The bootstrap is fixed to `admin@xpro.test` in
-`src/auth/bootstrap-admin.config.ts`. That file contains only the SHA-256 hash
-of a random 256-bit token. The raw token is kept locally in the ignored,
-owner-readable `.bootstrap-super-admin-token` file. Keep that file private and
-available until the bootstrap succeeds. The deployment needs no bootstrap
-environment variables or schema migration. Deploy the API first.
-
-Send one HTTPS `POST /auth/bootstrap-super-admin` request with
-`Authorization: Bearer <contents of .bootstrap-super-admin-token>`,
-`X-XPro-Client: web`, `Content-Type: application/json`, and a JSON body:
-
-```json
-{
-  "firstName": "Platform",
-  "lastName": "Admin",
-  "password": "<a unique password of at least 16 characters>"
-}
-```
-
-Choose a fresh password in a password manager. Do not use one previously sent
-in chat, and do not put the token or password in a URL, source file, shell
-history, or log.
-
-The response returns only the new user's id and email. Account creation, the
-one-time marker in the existing `settings` table, and an audit entry commit
-together. The route refuses to create or modify an existing user and refuses
-to run when any super admin already exists. Concurrent calls can create at
-most one account. After success, delete the local token file and remove the
-bootstrap route and hash from a later deployment. The database record prevents
-reuse in the meantime.
-Enroll MFA after the first login.
-
-An address under `.test` cannot receive password recovery email. If choosing
-one deliberately, keep its unique password in an approved password manager.
-
 ## Environment
 
 `validateEnv` runs at boot and refuses to start on a bad configuration. In
