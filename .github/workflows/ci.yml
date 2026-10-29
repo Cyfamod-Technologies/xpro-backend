@@ -86,3 +86,41 @@ jobs:
           fi
           printf 'Linting %s\n' "${CHANGED[@]}"
           npx --yes squawk-cli@2.68.0 "${CHANGED[@]}"
+
+  notify-failure:
+    needs: [ci, migration-lint]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Discord (CI failed)
+        # A notification problem must never change the CI result.
+        continue-on-error: true
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping notification."
+            exit 0
+          fi
+          export RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python3 - "$DISCORD_WEBHOOK_URL" <<'PY'
+          import json, os, sys, urllib.request
+          content = (
+              f"❌ **xpro-backend CI failed** — commit `{os.environ.get('GITHUB_SHA', '')[:7]}` "
+              f"on `{os.environ.get('GITHUB_REF_NAME', '')}` ({os.environ.get('GITHUB_EVENT_NAME', '')}).\n"
+              f"{os.environ['RUN_URL']}"
+          )
+          data = json.dumps({"content": content}).encode()
+          req = urllib.request.Request(
+              sys.argv[1],
+              data=data,
+              headers={
+                  "Content-Type": "application/json",
+                  # Discord's Cloudflare front rejects urllib's default
+                  # User-Agent with 403 (error 1010).
+                  "User-Agent": "xpro-backend-ci (+https://github.com/Cyfamod-Technologies/xpro-backend)",
+              },
+          )
+          urllib.request.urlopen(req, timeout=15)
+          PY
