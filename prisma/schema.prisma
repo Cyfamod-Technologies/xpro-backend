@@ -384,6 +384,8 @@ model ProviderProfile {
   serviceAreaIds     String[]                 @default([]) @map("service_area_ids")
   businessName       String?                  @map("business_name")
   skills             Json
+  serviceIds         Json?                    @map("service_ids")
+  skillIds           Json?                    @map("skill_ids")
   capacity           Int                      @default(3)
   workingHours       Json                     @map("working_hours")
   timeOff            Json                     @default("[]") @map("time_off")
@@ -411,9 +413,29 @@ model ProviderProfile {
   bankAccounts ProviderBankAccount[]
   reviews    ProviderReview[]
   payouts    Payout[]
+  featured   FeaturedProvider?
 
   @@index([verification, available])
   @@map("provider_profiles")
+}
+
+enum FeaturedProviderMode {
+  pinned
+  hidden
+}
+
+model FeaturedProvider {
+  providerId String               @id @map("provider_id")
+  mode       FeaturedProviderMode
+  position   Int?
+  updatedBy  String               @map("updated_by")
+  createdAt  DateTime             @default(now()) @map("created_at")
+  updatedAt  DateTime             @updatedAt @map("updated_at")
+
+  provider ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([mode, position])
+  @@map("featured_providers")
 }
 
 enum LocationKind {
@@ -965,6 +987,71 @@ enum MessageChannel {
   internal
 }
 
+enum QuestionType {
+  yes_no
+  single_choice
+  multiple_choice
+  short_text
+  long_text
+  number
+  date
+}
+
+enum DateRole {
+  start
+  end
+}
+
+model CatalogService {
+  id                String   @id @default(uuid())
+  parentId          String?  @map("parent_id")
+  name              String
+  description       String?
+  icon              String?
+  depth             Int      @default(0)
+  sortOrder         Int      @default(0) @map("sort_order")
+  active            Boolean  @default(true)
+  requiresStartDate Boolean  @default(false) @map("requires_start_date")
+  version           Int      @default(1)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  parent        CatalogService?   @relation("CatalogHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children      CatalogService[]  @relation("CatalogHierarchy")
+  questions     ServiceQuestion[]
+  requests      ServiceRequest[]  @relation("RequestService")
+  rootedRequests ServiceRequest[] @relation("RequestServiceRoot")
+
+  @@unique([parentId, name])
+  @@index([parentId, sortOrder])
+  @@map("catalog_services")
+}
+
+model ServiceQuestion {
+  id           String       @id @default(uuid())
+  serviceId    String       @map("service_id")
+  key          String
+  label        String
+  helpText     String?      @map("help_text")
+  type         QuestionType
+  required     Boolean      @default(false)
+  sortOrder    Int          @default(0) @map("sort_order")
+  active       Boolean      @default(true)
+  options      Json         @default("[]")
+  config       Json         @default("{}")
+  dateRole     DateRole?    @map("date_role")
+  sensitive    Boolean      @default(false)
+  matchesSkill Boolean      @default(false) @map("matches_skill")
+  version      Int          @default(1)
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  service CatalogService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([serviceId, key])
+  @@map("service_questions")
+}
+
 model ServiceRequest {
   id                    String                  @id @default(uuid())
   number                Int                     @unique @default(autoincrement())
@@ -981,6 +1068,10 @@ model ServiceRequest {
   budget                BigInt                  @default(0)
   startDate             String?                 @map("start_date")
   details               Json                    @default("{}")
+  serviceId             String?                 @map("service_id")
+  serviceRootId         String?                 @map("service_root_id")
+  servicePath           Json?                   @map("service_path")
+  answers               Json                    @default("[]")
   status                RequestStatus           @default(submitted)
   version               Int                     @default(1)
   contactInBrief        Boolean                 @default(false) @map("contact_in_brief")
@@ -1018,6 +1109,8 @@ model ServiceRequest {
   createdAt             DateTime                @default(now()) @map("created_at")
   updatedAt             DateTime                @updatedAt @map("updated_at")
 
+  catalogService CatalogService? @relation("RequestService", fields: [serviceId], references: [id], onDelete: Restrict)
+  catalogRoot    CatalogService? @relation("RequestServiceRoot", fields: [serviceRootId], references: [id], onDelete: Restrict)
   attachments   RequestAttachment[]
   edits         RequestEdit[]
   runs          DispatchRun[]
@@ -1038,6 +1131,7 @@ model ServiceRequest {
   @@index([status, intakeState])
   @@index([staffOwnerId, status])
   @@index([service, districtId, createdAt])
+  @@index([serviceRootId])
   @@map("service_requests")
 }
 
