@@ -4,6 +4,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import type { DispatchProvider } from '../domain/eligibility';
 import { countCommittedJobs } from '../domain/committed-jobs';
 import type { TimeOff } from '../../platform/calendar/provider-calendar';
+import { loadCatalog } from '../../platform/catalog/catalog.tree';
+import { profileSkillIds } from '../../platform/catalog/provider-skills';
 
 /** The Prisma client or a transaction on it; a command passes its `tx` so the data is read inside the lock. */
 type Db = PrismaService | Prisma.TransactionClient;
@@ -68,7 +70,8 @@ export class ProviderDispatchLoader {
       },
     });
     const profileIds = profiles.map(({ id }) => id);
-    const [assignments, events] = await Promise.all([
+    const [catalog, assignments, events] = await Promise.all([
+      loadCatalog(db),
       db.assignment.findMany({
         where: { providerId: { in: profileIds } },
         include: { request: { select: { id: true, status: true } } },
@@ -106,12 +109,7 @@ export class ProviderDispatchLoader {
           kind === 'expired' ||
           (kind === 'no_show_confirmed' && !voided.has(sourceId)),
       );
-      const skills = Object.fromEntries(
-        Object.entries(object(profile.skills)).map(([key, value]) => [
-          key,
-          strings(value),
-        ]),
-      );
+      const { serviceIds, skillIds } = profileSkillIds(catalog, profile);
       const providerName = [profile.user.firstName, profile.user.lastName]
         .filter(Boolean)
         .join(' ')
@@ -125,8 +123,8 @@ export class ProviderDispatchLoader {
         verification: profile.verification,
         userStatus: profile.user.status,
         reliabilityStatus: profile.reliabilityStatus,
-        services: strings(profile.services),
-        skills,
+        serviceIds,
+        skillIds,
         serviceAreaIds: areas,
         available: profile.available,
         capacity: profile.capacity,

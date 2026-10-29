@@ -65,7 +65,7 @@ describe('RequestCommandRunner idempotency', () => {
           transactionCount += 1;
           let release: (() => void) | undefined;
           const tx = {
-            $queryRaw: jest.fn(async () => {
+            $executeRaw: jest.fn(async () => {
               if (transactionCount === 2) secondLockStarted();
               release = await acquireLock();
               return [];

@@ -1,5 +1,6 @@
 import type { RequestStage, NextActor, ViewerNextActor } from '../domain/stage';
 import type { RequestStatus } from '../domain/statuses';
+import type { AnswerSnapshot } from '../domain/answers';
 
 export type RequestRole = 'customer' | 'provider' | 'staff';
 export interface RequestScheduleView {
@@ -65,6 +66,8 @@ export interface RequestDetailDto {
   effectiveStartDate?: string | null;
   effectiveEndDate?: string | null;
   details?: Record<string, unknown>;
+  servicePath?: unknown;
+  answers?: Array<Partial<AnswerSnapshot>>;
   customerName?: string;
   ownerId?: string;
   staffOwnerId?: string | null;

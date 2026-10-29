@@ -25,7 +25,7 @@ import {
   OFFER_NOT_APPROVED_MESSAGE,
   OFFER_STALE_MESSAGE,
 } from '../domain/assignment-rules';
-import { buildDispatchRequest } from '../domain/dispatch-request';
+import { dispatchRequestFor } from '../domain/dispatch-request';
 import { offerExpiry } from '../domain/offer-expiry';
 import {
   evaluateAll,
@@ -97,7 +97,7 @@ export class DispatchService {
       where: { id: { in: [row.districtId, row.cityId] } },
       select: { id: true, name: true },
     });
-    const request = buildDispatchRequest(row, {
+    const request = await dispatchRequestFor(this.prisma, row, {
       districtName: locations.find(({ id }) => id === row.districtId)?.name,
       cityName: locations.find(({ id }) => id === row.cityId)?.name,
     });
@@ -276,7 +276,7 @@ export class DispatchService {
           providerName: provider.name,
           failures: evaluateAll(
             provider,
-            buildDispatchRequest(requestRow, {
+            await dispatchRequestFor(ctx.tx, requestRow, {
               districtName: ctx.snap.districtName,
               cityName: ctx.snap.cityName,
             }),
@@ -453,7 +453,7 @@ export class DispatchService {
           PROVIDER_BOUND_APPROVAL_KINDS,
           'withdrawn',
         );
-        const dispatchRequest = buildDispatchRequest(request, {
+        const dispatchRequest = await dispatchRequestFor(ctx.tx, request, {
           districtName: ctx.snap.districtName,
           cityName: ctx.snap.cityName,
         });
@@ -562,7 +562,7 @@ export class DispatchService {
           data: { status: 'under_review', needsAssignmentReason: 'replaced' },
         });
         ctx.timers.stop(['T7.reminder24h', 'T7.stall48h'], assignment.id);
-        const dispatchRequest = buildDispatchRequest(request, {
+        const dispatchRequest = await dispatchRequestFor(ctx.tx, request, {
           districtName: ctx.snap.districtName,
           cityName: ctx.snap.cityName,
         });
@@ -747,7 +747,7 @@ export class DispatchService {
           );
         const failures = evaluateAll(
           provider,
-          buildDispatchRequest(request, {
+          await dispatchRequestFor(ctx.tx, request, {
             districtName: ctx.snap.districtName,
             cityName: ctx.snap.cityName,
           }),
@@ -846,10 +846,12 @@ export class DispatchService {
           service: request.service,
           district: ctx.snap.districtName ?? '',
           skill:
-            buildDispatchRequest(request, {
-              districtName: ctx.snap.districtName,
-              cityName: ctx.snap.cityName,
-            }).skill ?? request.service,
+            (
+              await dispatchRequestFor(ctx.tx, request, {
+                districtName: ctx.snap.districtName,
+                cityName: ctx.snap.cityName,
+              })
+            ).skill ?? request.service,
         });
       },
     );

@@ -293,26 +293,3 @@ export const intakeFields: Record<ServiceLine, IntakeField[]> = {
     ),
   ],
 };
-
-export const effectiveDateRules = {
-  startDate: 'Required for Hire; optional for all other services.',
-  effectiveStartDate: {
-    'Waste management': 'pickupDate',
-    Procurement: 'deliveryDate',
-    'Facility management': 'visitDate when provided, otherwise startDate',
-    default: 'startDate',
-  },
-  effectiveEndDate: { Hire: 'endDate', default: null },
-  dateRange:
-    'Every date is an ISO date in WAT, from today through today + 365 days.',
-};
-
-export const serviceCatalogue = serviceLines.map((name) => ({
-  service: name,
-  name,
-  intakeFields: intakeFields[name],
-  skillFieldKey: skillFieldKey[name],
-  serviceSkills: serviceSkills[name],
-  effectiveDateRules,
-  ...(name === 'Hire' ? { hireTradeGroups } : {}),
-}));

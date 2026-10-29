@@ -10,6 +10,7 @@ import {
   scheduleProjection,
   type ProjectionContext,
 } from './projection.helpers';
+import { answerSnapshots } from '../domain/answers';
 import {
   payoutSuggestion,
   staffContributionView,
@@ -29,7 +30,9 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
     row.service,
     row.startDate,
     jsonObject(row.details),
+    row.answers,
   );
+  const answers = answerSnapshots(row.answers);
   const schedules = scheduleProjection(context);
   return {
     ...commonProjection(context),
@@ -51,7 +54,14 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
     ...dates,
     details: canSeeContact
       ? jsonObject(row.details)
-      : hideContactDetails(jsonObject(row.details)),
+      : hideContactDetails(
+          jsonObject(row.details),
+          answers.filter(({ sensitive }) => sensitive).map(({ key }) => key),
+        ),
+    servicePath: row.servicePath,
+    answers: canSeeContact
+      ? answers
+      : answers.filter(({ sensitive }) => !sensitive),
     customerName: row.customerName,
     ownerId: row.ownerId,
     staffOwnerId: row.staffOwnerId,
@@ -128,24 +138,37 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
 
 function hideContactDetails(
   details: Record<string, unknown>,
+  sensitiveKeys: readonly string[] = [],
 ): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(details).flatMap(([key, value]) => {
-      if (/address|access|gate|entry|contact|phone/i.test(key)) return [];
+      if (
+        sensitiveKeys.includes(key) ||
+        /address|access|gate|entry|contact|phone/i.test(key)
+      )
+        return [];
       if (Array.isArray(value)) {
         return [
           [
             key,
             value.map((item: unknown): unknown =>
               item !== null && typeof item === 'object' && !Array.isArray(item)
-                ? hideContactDetails(item as Record<string, unknown>)
+                ? hideContactDetails(
+                    item as Record<string, unknown>,
+                    sensitiveKeys,
+                  )
                 : item,
             ),
           ],
         ];
       }
       if (value !== null && typeof value === 'object') {
-        return [[key, hideContactDetails(value as Record<string, unknown>)]];
+        return [
+          [
+            key,
+            hideContactDetails(value as Record<string, unknown>, sensitiveKeys),
+          ],
+        ];
       }
       return [[key, value]];
     }),

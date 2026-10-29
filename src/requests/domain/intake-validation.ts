@@ -1,15 +1,17 @@
+import type { QuestionType } from '@prisma/client';
 import { AppError } from '../../platform/errors/app-error';
-import {
-  hireTradeGroups,
-  intakeFields,
-  serviceLines,
-  type IntakeField,
-  type ServiceLine,
-} from '../../platform/catalog/service-lines';
+import type {
+  CatalogOption,
+  CatalogQuestion,
+  QuestionConfig,
+  ResolvedService,
+} from '../../platform/catalog/catalog.types';
+import type { AnswerSnapshot, AnswerValue } from './answers';
 
 export type IntakeValidationInput = {
   title?: unknown;
   service?: unknown;
+  serviceId?: unknown;
   preferredProviderId?: unknown;
   providerId?: unknown;
   cityId?: unknown;
@@ -21,6 +23,7 @@ export type IntakeValidationInput = {
   budget?: unknown;
   startDate?: unknown;
   details?: unknown;
+  answers?: unknown;
   attachments?: unknown;
 };
 
@@ -33,7 +36,11 @@ export type IntakeLocation = {
 
 export type ValidatedIntake = {
   title: string;
-  service: ServiceLine;
+  service: string;
+  serviceId: string;
+  serviceRootId: string;
+  servicePath: Array<{ id: string; name: string }>;
+  skill: string | null;
   cityId: string;
   districtId: string;
   address: string;
@@ -42,7 +49,8 @@ export type ValidatedIntake = {
   description: string;
   budget: number;
   startDate: string | null;
-  details: Record<string, string | number>;
+  details: Record<string, string | number | string[]>;
+  answers: AnswerSnapshot[];
   attachmentIds: string[];
   effectiveStartDate: string | null;
   effectiveEndDate: string | null;
@@ -55,13 +63,27 @@ const fail = (message: string): never => {
 
 const text = (value: unknown): value is string => typeof value === 'string';
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+const TEXT_LIMITS: Partial<Record<QuestionType, number>> = {
+  short_text: 500,
+  long_text: 5000,
+};
+
+const isEmpty = (value: unknown): boolean =>
+  value === undefined ||
+  value === null ||
+  value === '' ||
+  (Array.isArray(value) && value.length === 0);
+
+type Normalized = {
+  value: AnswerValue;
+  display: string;
+  optionIds?: string[];
+};
 
 /** Validate intake in the same first-failure order as Spec 04 §6.2. */
 export function validateIntake(
   input: IntakeValidationInput,
-  catalogue: Partial<
-    Record<ServiceLine, readonly IntakeField[]>
-  > = intakeFields,
+  resolved: ResolvedService | null,
   locations: readonly IntakeLocation[] = [],
   now = new Date(),
 ): ValidatedIntake {
@@ -75,12 +97,10 @@ export function validateIntake(
   )
     fail('Add a title and a project brief of at least 20 characters.');
 
-  if (
-    typeof input.service !== 'string' ||
-    !serviceLines.includes(input.service as ServiceLine)
-  )
-    fail('Choose a valid service.');
-  const service = input.service as ServiceLine;
+  if (!resolved) return fail('Choose a valid service.');
+  const { path, questions } = resolved;
+  const root = path[0];
+  const leaf = path[path.length - 1];
 
   const detailsInput =
     input.details !== null &&
@@ -135,83 +155,120 @@ export function validateIntake(
   )
     return fail('Budget must be zero or a positive amount.');
 
-  const fields = catalogue[service] ?? intakeFields[service];
-  const details: Record<string, string | number> = {};
-  for (const field of fields) {
-    const value = detailsInput[field.key];
-    if (
-      field.required &&
-      (value === undefined || value === null || value === '')
-    )
-      fail(`Complete ${field.label.toLowerCase()}.`);
+  const given =
+    input.answers !== null &&
+    typeof input.answers === 'object' &&
+    !Array.isArray(input.answers)
+      ? (input.answers as Record<string, unknown>)
+      : null;
+  const valueOf = (question: CatalogQuestion): unknown =>
+    given ? given[question.id] : detailsInput[question.key];
+  const normalized = new Map<string, Normalized>();
+
+  for (const question of questions)
+    if (question.required && isEmpty(valueOf(question)))
+      fail(`Complete ${question.label.toLowerCase()}.`);
+  for (const question of questions) {
+    const value = valueOf(question);
+    if (isEmpty(value)) continue;
+    const invalid = () =>
+      fail(`Choose a valid ${question.label.toLowerCase()}.`);
+    if (question.type === 'yes_no') {
+      if (value !== 'Yes' && value !== 'No') invalid();
+      normalized.set(question.id, {
+        value: value as string,
+        display: value as string,
+      });
+    } else if (question.type === 'single_choice') {
+      const option = text(value) ? findOption(question, value) : undefined;
+      if (!option) return invalid();
+      normalized.set(question.id, {
+        value: option.label,
+        display: option.label,
+        optionIds: [option.id],
+      });
+    } else if (question.type === 'multiple_choice') {
+      if (!Array.isArray(value)) return invalid();
+      const picked: CatalogOption[] = [];
+      for (const item of value) {
+        const option = text(item) ? findOption(question, item) : undefined;
+        if (!option || picked.some(({ id }) => id === option.id))
+          return invalid();
+        picked.push(option);
+      }
+      const labels = picked.map(({ label }) => label);
+      normalized.set(question.id, {
+        value: labels,
+        display: labels.join(', '),
+        optionIds: picked.map(({ id }) => id),
+      });
+    }
   }
-  for (const field of fields) {
-    const value = detailsInput[field.key];
-    if (value === undefined || value === null || value === '') continue;
-    if (
-      field.type === 'select' &&
-      (!text(value) || !field.options?.includes(value))
-    )
-      fail(`Choose a valid ${field.label.toLowerCase()}.`);
-  }
-  for (const field of fields) {
-    const value = detailsInput[field.key];
-    if (
-      value === undefined ||
-      value === null ||
-      value === '' ||
-      field.type !== 'number'
-    )
-      continue;
-    const number = typeof value === 'number' ? value : Number(value);
-    const isHireQuantity = service === 'Hire' && field.key === 'quantity';
+  for (const question of questions) {
+    const value = valueOf(question);
+    if (isEmpty(value) || question.type !== 'number') continue;
+    const number =
+      typeof value === 'number'
+        ? value
+        : text(value) && value.trim()
+          ? Number(value)
+          : Number.NaN;
+    const { config } = question;
     if (
       !Number.isFinite(number) ||
-      (field.integer && !Number.isInteger(number)) ||
-      (!isHireQuantity &&
-        field.min !== undefined &&
-        (field.exclusiveMinimum ? number <= field.min : number < field.min)) ||
-      (field.max !== undefined && !isHireQuantity && number > field.max)
-    ) {
-      if (isHireQuantity) continue;
-      fail(`${field.label} must be positive.`);
-    }
-    details[field.key] = number;
+      (config.integer && !Number.isInteger(number)) ||
+      (config.min !== undefined &&
+        (config.exclusiveMinimum
+          ? number <= config.min
+          : number < config.min)) ||
+      (config.max !== undefined && number > config.max)
+    )
+      fail(numberMessage(question.label, config));
+    normalized.set(question.id, { value: number, display: String(number) });
   }
-  for (const field of fields) {
-    const value = detailsInput[field.key];
-    if (value === undefined || value === null || value === '') continue;
-    if (field.type === 'text') {
-      const textValue = text(value)
-        ? value
-        : fail(`Complete ${field.label.toLowerCase()}.`);
-      if (
-        (field.minLength !== undefined &&
-          textValue.trim().length < field.minLength) ||
-        (field.maxLength !== undefined &&
-          textValue.trim().length > field.maxLength)
-      )
-        fail(`Complete ${field.label.toLowerCase()}.`);
-      details[field.key] = textValue.trim();
-    } else if (field.type === 'select') {
-      details[field.key] = value as string;
-    }
-  }
-  for (const field of fields) {
-    const value = detailsInput[field.key];
+  for (const question of questions) {
+    const value = valueOf(question);
     if (
-      field.type !== 'date' ||
-      value === undefined ||
-      value === null ||
-      value === ''
+      isEmpty(value) ||
+      (question.type !== 'short_text' && question.type !== 'long_text')
     )
       continue;
-    if (!text(value) || !isIsoDate(value))
-      return fail(`${field.label} must be a valid date.`);
-    details[field.key] = value;
+    const textValue = text(value)
+      ? value.trim()
+      : fail(`Complete ${question.label.toLowerCase()}.`);
+    const { minLength, maxLength } = question.config;
+    if (
+      (minLength !== undefined && textValue.length < minLength) ||
+      textValue.length > (maxLength ?? TEXT_LIMITS[question.type] ?? 5000)
+    )
+      fail(`Complete ${question.label.toLowerCase()}.`);
+    normalized.set(question.id, { value: textValue, display: textValue });
   }
-  if (service === 'Hire' && !text(input.startDate))
-    fail('Add the hire start date.');
+  for (const question of questions) {
+    const value = valueOf(question);
+    if (question.type !== 'date' || isEmpty(value)) continue;
+    if (!text(value) || !isIsoDate(value))
+      return fail(`${question.label} must be a valid date.`);
+    normalized.set(question.id, { value, display: displayDate(value) });
+  }
+
+  const dateOf = (role: 'start' | 'end'): string | null => {
+    for (const question of questions) {
+      if (question.dateRole !== role) continue;
+      const answer = normalized.get(question.id);
+      if (answer && typeof answer.value === 'string') return answer.value;
+    }
+    return null;
+  };
+  const effectiveStartDate =
+    dateOf('start') ?? optionalIsoDate(input.startDate);
+  const effectiveEndDate = dateOf('end');
+  const hire = root.name === 'Hire';
+  if (
+    path.some(({ requiresStartDate }) => requiresStartDate) &&
+    !effectiveStartDate
+  )
+    fail(hire ? 'Add the hire start date.' : 'Add the start date.');
   if (
     input.startDate !== undefined &&
     input.startDate !== null &&
@@ -221,21 +278,12 @@ export function validateIntake(
     fail('Start date must be a valid date.');
   const inputDates = [
     input.startDate,
-    ...fields
+    ...questions
       .filter(({ type }) => type === 'date')
-      .map(({ key }) => detailsInput[key]),
+      .map(({ id }) => normalized.get(id)?.value),
   ].filter(
     (value): value is string => typeof value === 'string' && value.length > 0,
   );
-  if (inputDates.some((date) => !isIsoDate(date))) {
-    const invalidField = fields.find(
-      ({ type, key }) =>
-        type === 'date' &&
-        typeof detailsInput[key] === 'string' &&
-        !isIsoDate(detailsInput[key]),
-    );
-    fail(`${invalidField?.label ?? 'Date'} must be a valid date.`);
-  }
   const today = watDate(now);
   const maxDate = addDays(today, 365);
   if (inputDates.some((date) => date < today))
@@ -243,24 +291,16 @@ export function validateIntake(
   if (inputDates.some((date) => date > maxDate))
     fail('Choose a date within the next 12 months.');
 
-  if (service === 'Hire' && String(details.endDate) < String(input.startDate))
-    fail('Hire end date cannot be before the start date.');
-  if (service === 'Hire') {
-    const group =
-      hireTradeGroups[details.hireType as keyof typeof hireTradeGroups];
-    if (!group?.includes(details.trade as never))
-      fail('Choose a trade or equipment type that matches the hire category.');
-  }
-  if (service === 'Hire') {
-    const quantity = details.quantity;
-    if (
-      typeof quantity !== 'number' ||
-      !Number.isInteger(quantity) ||
-      quantity < 1 ||
-      quantity > 10
-    )
-      fail('Quantity must be a whole number from 1 to 10.');
-  }
+  if (
+    effectiveStartDate &&
+    effectiveEndDate &&
+    effectiveEndDate < effectiveStartDate
+  )
+    fail(
+      hire
+        ? 'Hire end date cannot be before the start date.'
+        : 'End date cannot be before the start date.',
+    );
 
   if (input.attachments !== undefined && !Array.isArray(input.attachments))
     fail("One of your files didn't finish uploading. Remove it and try again.");
@@ -282,20 +322,43 @@ export function validateIntake(
   if (attachmentIds.length > 20)
     fail('A request can hold up to 20 files. Remove one before adding more.');
 
-  const effectiveStartDate =
-    service === 'Waste management'
-      ? stringDetail(details, 'pickupDate')
-      : service === 'Procurement'
-        ? stringDetail(details, 'deliveryDate')
-        : service === 'Facility management'
-          ? (stringDetail(details, 'visitDate') ??
-            optionalIsoDate(input.startDate))
-          : optionalIsoDate(input.startDate);
-  const effectiveEndDate =
-    service === 'Hire' ? stringDetail(details, 'endDate') : null;
+  const serviceNames = new Map(path.map(({ id, name }) => [id, name]));
+  const details: Record<string, string | number | string[]> = {};
+  const answers: AnswerSnapshot[] = [];
+  for (const question of questions) {
+    const answer = normalized.get(question.id);
+    if (!answer) continue;
+    details[question.key] = answer.value;
+    answers.push({
+      questionId: question.id,
+      serviceId: question.serviceId,
+      serviceName: serviceNames.get(question.serviceId) ?? '',
+      key: question.key,
+      label: question.label,
+      type: question.type,
+      value: answer.value,
+      display: answer.display,
+      ...(answer.optionIds ? { optionIds: answer.optionIds } : {}),
+      sensitive: question.sensitive,
+      ...(question.dateRole ? { dateRole: question.dateRole } : {}),
+      matchesSkill: question.matchesSkill,
+    });
+  }
+  const skillAnswer = answers.find(({ matchesSkill }) => matchesSkill);
+  const skill =
+    typeof skillAnswer?.value === 'string'
+      ? skillAnswer.value
+      : leaf.depth >= 1
+        ? leaf.name
+        : null;
+
   return {
     title,
-    service,
+    service: root.name,
+    serviceId: leaf.id,
+    serviceRootId: root.id,
+    servicePath: path.map(({ id, name }) => ({ id, name })),
+    skill,
     cityId: city.id,
     districtId: district.id,
     address,
@@ -305,6 +368,7 @@ export function validateIntake(
     budget: input.budget,
     startDate: optionalIsoDate(input.startDate),
     details,
+    answers,
     attachmentIds,
     effectiveStartDate,
     effectiveEndDate,
@@ -315,12 +379,48 @@ export function validateIntake(
   };
 }
 
+function findOption(
+  question: CatalogQuestion,
+  value: string,
+): CatalogOption | undefined {
+  const active = question.options.filter((option) => option.active);
+  return (
+    active.find(({ id }) => id === value) ??
+    active.find(({ label }) => label === value)
+  );
+}
+
+function numberMessage(label: string, config: QuestionConfig): string {
+  const { min, max } = config;
+  const ranged = min !== undefined && max !== undefined;
+  if (config.integer && ranged)
+    return `${label} must be a whole number from ${min} to ${max}.`;
+  if (config.integer)
+    return `${label} must be a whole number${min !== undefined ? ` of at least ${min}` : ''}.`;
+  if (config.exclusiveMinimum && min === 0 && max === undefined)
+    return `${label} must be positive.`;
+  if (ranged) return `${label} must be a number from ${min} to ${max}.`;
+  if (min !== undefined)
+    return `${label} must be ${config.exclusiveMinimum ? 'more than' : 'at least'} ${min}.`;
+  if (max !== undefined) return `${label} must be at most ${max}.`;
+  return `${label} must be a number.`;
+}
+
 export function normalizeNigerianPhone(value: string): string | null {
   const compact = value.replace(/[\s().-]/g, '');
   if (/^0[789][01]\d{8}$/.test(compact)) return `+234${compact.slice(1)}`;
   if (/^234[789][01]\d{8}$/.test(compact)) return `+${compact}`;
   if (/^\+234[789][01]\d{8}$/.test(compact)) return compact;
   return null;
+}
+
+function displayDate(value: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'UTC',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(new Date(`${value}T00:00:00.000Z`));
 }
 
 function isIsoDate(value: string): boolean {
@@ -344,11 +444,4 @@ function addDays(date: string, count: number): string {
 
 function optionalIsoDate(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null;
-}
-
-function stringDetail(
-  details: Record<string, string | number>,
-  key: string,
-): string | null {
-  return typeof details[key] === 'string' ? details[key] : null;
 }

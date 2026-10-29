@@ -4,7 +4,7 @@ import { SETTINGS_REGISTRY } from '../../platform/settings/settings.registry';
 import type { CommandContext } from '../command-runner';
 import { noLongerAvailableMessage } from '../domain/assignment-rules';
 import {
-  buildDispatchRequest,
+  dispatchRequestFor,
   type DispatchRequestRow,
 } from '../domain/dispatch-request';
 import {
@@ -45,7 +45,7 @@ export async function runAutoDispatch(
   input: AutoDispatchInput,
 ): Promise<{ offered: boolean }> {
   const { request } = input;
-  const dispatchRequest = buildDispatchRequest(request, {
+  const dispatchRequest = await dispatchRequestFor(ctx.tx, request, {
     districtName: ctx.snap.districtName,
     cityName: ctx.snap.cityName,
   });

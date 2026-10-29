@@ -10,7 +10,9 @@ const request: DispatchRequest = {
   id: 'request-1',
   ownerId: 'customer-1',
   service: 'Design',
+  serviceId: 'svc:Design',
   skill: 'Architectural plan',
+  skillId: 'skill:architectural-plan',
   districtId: 'district-1',
   districtName: 'Wuse II',
   cityId: 'city-1',
@@ -23,8 +25,8 @@ const provider: DispatchProvider = {
   verification: 'approved',
   userStatus: 'active',
   reliabilityStatus: 'normal',
-  services: ['Design'],
-  skills: { Design: ['Architectural plan'] },
+  serviceIds: ['svc:Design'],
+  skillIds: { 'svc:Design': ['skill:architectural-plan'] },
   serviceAreaIds: ['district-1'],
   available: true,
   capacity: 3,
@@ -63,12 +65,12 @@ describe('evaluateEligibility (04 §6.5)', () => {
     ['E2', { verification: 'delisted' }, 'standing', 'Delisted'],
     ['E2', { reliabilityStatus: 'restricted' }, 'standing', 'Restricted'],
     ['E3', { userId: 'customer-1' }, 'conflict', 'Own request'],
-    ['E4', { services: [] }, 'service', 'Doesn’t offer Design'],
+    ['E4', { serviceIds: [] }, 'service', 'Doesn’t offer Design'],
     ['E5', { available: false }, 'available', 'Not accepting new jobs'],
     ['E6', { serviceAreaIds: [] }, 'area', 'Doesn’t cover Wuse II'],
     [
       'E8',
-      { skills: { Design: [] } },
+      { skillIds: { 'svc:Design': [] } },
       'skill',
       'Doesn’t offer Architectural plan',
     ],
@@ -169,11 +171,13 @@ describe('evaluateEligibility (04 §6.5)', () => {
     describe('Hire spans startDate to endDate', () => {
       const hire = {
         service: 'Hire',
+        serviceId: 'svc:Hire',
         skill: null,
+        skillId: null,
         effectiveStartDate: '2026-10-26',
         effectiveEndDate: '2026-10-29',
       };
-      const hiring = { services: ['Hire'] };
+      const hiring = { serviceIds: ['svc:Hire'] };
 
       it('excludes time off inside the span', () => {
         expect(
@@ -214,15 +218,54 @@ describe('evaluateEligibility (04 §6.5)', () => {
 
   describe('E8 skill', () => {
     it('is skipped when the request has no skill', () => {
-      expect(evaluate({ skills: {} }, { skill: null })).toEqual({
-        eligible: true,
-      });
+      expect(
+        evaluate({ skillIds: {} }, { skill: null, skillId: null }),
+      ).toEqual({ eligible: true });
     });
 
     it('looks the skill up under the request service only', () => {
       expect(
-        evaluate({ skills: { Hire: ['Architectural plan'] } }),
+        evaluate({
+          skillIds: { 'svc:Hire': ['skill:architectural-plan'] },
+        }),
       ).toMatchObject({ eligible: false, rule: 'skill' });
+    });
+
+    it('matches by id, so a renamed service or skill still passes', () => {
+      expect(
+        evaluate({}, { service: 'Design studio', skill: 'Plans (architects)' }),
+      ).toEqual({ eligible: true });
+    });
+
+    it('does not match a stored name that equals the request skill name', () => {
+      expect(
+        evaluate(
+          { skillIds: { 'svc:Design': ['Architectural plan'] } },
+          { skillId: 'skill:architectural-plan' },
+        ),
+      ).toEqual({
+        eligible: false,
+        rule: 'skill',
+        reason: 'Doesn’t offer Architectural plan',
+      });
+    });
+
+    it('fails a request whose skill could not be resolved to an id', () => {
+      expect(evaluate({}, { skillId: null })).toEqual({
+        eligible: false,
+        rule: 'skill',
+        reason: 'Doesn’t offer Architectural plan',
+      });
+    });
+  });
+
+  describe('E4 service by id', () => {
+    it('fails a request whose service could not be resolved to an id', () => {
+      expect(evaluate({}, { serviceId: null })).toEqual({
+        eligible: false,
+        rule: 'service',
+        reason: 'Doesn’t offer Design',
+      });
     });
   });
 
@@ -290,7 +333,7 @@ describe('evaluateAll', () => {
       {
         ...provider,
         serviceAreaIds: [],
-        skills: {},
+        skillIds: {},
         committedJobs: 3,
         earlierEndReasons: ['declined'],
         hasVerifiedCurrentBank: false,

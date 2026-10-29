@@ -8,8 +8,11 @@ import { providerBlocked } from './provider-standing';
 export type DispatchRequest = {
   id: string;
   ownerId: string;
+  /** Names are for reason text; eligibility compares the ids. */
   service: string;
+  serviceId: string | null;
   skill?: string | null;
+  skillId: string | null;
   districtId: string;
   districtName: string;
   cityId: string;
@@ -27,8 +30,9 @@ export type DispatchProvider = {
   userStatus: string;
   /** 03 §4.1 `reliability_status`; `restricted` blocks new offers. */
   reliabilityStatus: string;
-  services: readonly string[];
-  skills: Readonly<Record<string, readonly string[]>>;
+  serviceIds: readonly string[];
+  /** Root service id to the option ids and skill-leaf ids the provider holds under it. */
+  skillIds: Readonly<Record<string, readonly string[]>>;
   /** District and city ids the provider covers; a city id covers every district in it (04 §4.3). */
   serviceAreaIds: readonly string[];
   available: boolean;
@@ -125,7 +129,7 @@ const conflictCheck: Check = (provider, request) =>
     : null;
 
 const serviceCheck: Check = (provider, request) =>
-  provider.services.includes(request.service)
+  request.serviceId !== null && provider.serviceIds.includes(request.serviceId)
     ? null
     : failure('service', `Doesn’t offer ${request.service}`);
 
@@ -180,11 +184,13 @@ const dayCheck: Check = (provider, request) => {
   return null;
 };
 
-const skillCheck: Check = (provider, request) =>
-  request.skill &&
-  !(provider.skills[request.service] ?? []).includes(request.skill)
-    ? failure('skill', `Doesn’t offer ${request.skill}`)
-    : null;
+const skillCheck: Check = (provider, request) => {
+  if (!request.skill && !request.skillId) return null;
+  const held = request.serviceId ? provider.skillIds[request.serviceId] : null;
+  return request.skillId !== null && held?.includes(request.skillId)
+    ? null
+    : failure('skill', `Doesn’t offer ${request.skill ?? 'this skill'}`);
+};
 
 const capacityCheck: Check = (provider) =>
   provider.committedJobs >= provider.capacity

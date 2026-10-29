@@ -1,13 +1,17 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { serviceCatalogue } from './service-lines';
+import { CatalogService } from './catalog.service';
 
 @ApiTags('Service catalogue')
 @Controller('services')
 export class CatalogController {
+  constructor(private readonly catalog: CatalogService) {}
+
   @Get()
-  @ApiOperation({ summary: 'List request service lines and intake fields' })
+  @ApiOperation({
+    summary: 'List the active service tree with each service questions',
+  })
   list() {
-    return serviceCatalogue;
+    return this.catalog.publicTree();
   }
 }

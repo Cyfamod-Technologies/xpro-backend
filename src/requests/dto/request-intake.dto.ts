@@ -1,7 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { Allow } from 'class-validator';
-import { serviceLines } from '../../platform/catalog/service-lines';
 
 export class RequestAttachmentRefDto {
   @ApiProperty()
@@ -11,7 +10,12 @@ export class RequestAttachmentRefDto {
 
 export class RequestIntakeDto {
   @ApiProperty() @Allow() title!: string;
-  @ApiProperty({ enum: serviceLines }) @Allow() service!: string;
+  @ApiPropertyOptional({ description: 'The leaf service the customer chose' })
+  @Allow()
+  serviceId?: string;
+  @ApiPropertyOptional({ description: 'Legacy top-level service name' })
+  @Allow()
+  service?: string;
   @ApiProperty() @Allow() cityId!: string;
   @ApiProperty() @Allow() districtId!: string;
   @ApiProperty() @Allow() address!: string;
@@ -24,7 +28,15 @@ export class RequestIntakeDto {
   @ApiPropertyOptional({ description: 'ISO calendar date in WAT' })
   @Allow()
   startDate?: string;
-  @ApiProperty() @Allow() details!: Record<string, unknown>;
+  @ApiPropertyOptional({
+    description:
+      'Answers by question id: "Yes"/"No", an option id, an array of option ids, text, a number or an ISO date',
+  })
+  @Allow()
+  answers?: Record<string, unknown>;
+  @ApiPropertyOptional({ description: 'Legacy answers by question key' })
+  @Allow()
+  details?: Record<string, unknown>;
   @ApiProperty({ type: [RequestAttachmentRefDto] })
   @Type(() => RequestAttachmentRefDto)
   @Allow()
@@ -35,7 +47,8 @@ export class RequestIntakeDto {
 
 export class RequestUpdateDto {
   @ApiPropertyOptional() @Allow() title?: string;
-  @ApiPropertyOptional({ enum: serviceLines }) @Allow() service?: string;
+  @ApiPropertyOptional() @Allow() serviceId?: string;
+  @ApiPropertyOptional() @Allow() service?: string;
   @ApiPropertyOptional() @Allow() cityId?: string;
   @ApiPropertyOptional() @Allow() districtId?: string;
   @ApiPropertyOptional() @Allow() address?: string;
@@ -46,6 +59,7 @@ export class RequestUpdateDto {
   @ApiPropertyOptional() @Allow() description?: string;
   @ApiPropertyOptional({ minimum: 0 }) @Allow() budget?: number;
   @ApiPropertyOptional() @Allow() startDate?: string;
+  @ApiPropertyOptional() @Allow() answers?: Record<string, unknown>;
   @ApiPropertyOptional() @Allow() details?: Record<string, unknown>;
   @ApiPropertyOptional({ type: [RequestAttachmentRefDto] })
   @Type(() => RequestAttachmentRefDto)

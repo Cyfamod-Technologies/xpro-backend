@@ -14,6 +14,7 @@ import type { LoadedRequest } from '../snapshot.loader';
 import type { RequestDetailDto, RequestRole } from '../dto/request-detail.dto';
 import type { SettingsSnapshot } from '../domain/guards/types';
 import { REQUEST_GUARDS } from '../domain/request-guard-registry';
+import { answerSnapshots } from '../domain/answers';
 
 export type ProjectionContext = {
   row: LoadedRequest;
@@ -232,7 +233,17 @@ export function effectiveDates(
   service: string,
   startDate: string | null,
   details: Record<string, unknown>,
+  answers: unknown = [],
 ) {
+  const dated = answerSnapshots(answers).filter(({ dateRole }) => dateRole);
+  if (dated.length) {
+    const dateOf = (role: 'start' | 'end') =>
+      stringValue(dated.find((answer) => answer.dateRole === role)?.value);
+    return {
+      effectiveStartDate: dateOf('start') ?? startDate,
+      effectiveEndDate: dateOf('end'),
+    };
+  }
   const effectiveStartDate =
     service === 'Waste management'
       ? stringValue(details.pickupDate)

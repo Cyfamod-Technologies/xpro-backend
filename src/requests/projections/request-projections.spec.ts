@@ -705,4 +705,123 @@ describe('request role projections', () => {
         ]);
     });
   });
+
+  describe('catalog answers', () => {
+    const answer = (
+      key: string,
+      type: string,
+      value: unknown,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      questionId: `q-${key}`,
+      serviceId: 'svc-leaf',
+      serviceName: 'Heavy equipment',
+      key,
+      label: key,
+      type,
+      value,
+      display: String(value),
+      sensitive: false,
+      matchesSkill: false,
+      ...extra,
+    });
+    const answers = [
+      answer('trade', 'single_choice', 'Excavator', { matchesSkill: true }),
+      answer('operator', 'yes_no', 'Yes'),
+      answer('quantity', 'number', 2),
+      answer('endDate', 'date', '2026-11-20', { dateRole: 'end' }),
+      answer('notes', 'long_text', 'Soft ground at the back'),
+      answer('access', 'long_text', 'Gate code 1234', { sensitive: true }),
+    ];
+    const rows = {
+      details: {
+        trade: 'Excavator',
+        operator: 'Yes',
+        quantity: 2,
+        endDate: '2026-11-20',
+        notes: 'Soft ground at the back',
+        access: 'Gate code 1234',
+      },
+      answers,
+      servicePath: [
+        { id: 'svc-root', name: 'Hire' },
+        { id: 'svc-leaf', name: 'Heavy equipment' },
+      ],
+      service: 'Hire',
+      startDate: '2026-11-10',
+    } as unknown as Partial<LoadedRequest>;
+
+    it('shows staff without view.customer_contact no sensitive answers or details', () => {
+      const dto = staffProjection(context('staff', rows));
+      expect(dto.details).not.toHaveProperty('access');
+      expect(dto.answers?.map(({ key }) => key)).toEqual([
+        'trade',
+        'operator',
+        'quantity',
+        'endDate',
+        'notes',
+      ]);
+      expect(dto.servicePath).toEqual(rows.servicePath);
+      expect(dto.effectiveEndDate).toBe('2026-11-20');
+      expect(dto.effectiveStartDate).toBe('2026-11-10');
+    });
+
+    it('shows staff with view.customer_contact every answer', () => {
+      const dto = staffProjection(
+        context('staff', rows, {}, ['view.customer_contact']),
+      );
+      expect(dto.answers).toHaveLength(6);
+      expect(dto.details).toHaveProperty('access', 'Gate code 1234');
+    });
+
+    it('gives customers their own answers and path', () => {
+      const dto = customerProjection(context('customer', rows));
+      expect(dto.answers).toHaveLength(6);
+      expect(dto.servicePath).toEqual(rows.servicePath);
+      expect(dto.effectiveEndDate).toBe('2026-11-20');
+    });
+
+    it('offers a provider only non-sensitive choice, yes/no and number answers', () => {
+      const offered = {
+        id: 'assignment-1',
+        providerId: 'provider-1',
+        providerUserId: 'user-1',
+        status: 'offered',
+        note: '',
+        offeredAt: now,
+        expiresAt: new Date(now.getTime() + 60_000),
+        sharedDetails: null,
+        createdAt: now,
+      };
+      const dto = providerProjection(
+        context(
+          'provider',
+          { ...rows, assignments: [offered] as never },
+          {
+            accessibleProviderUserIds: ['user-1'],
+            currentProviderUserId: 'user-1',
+            currentAssignment: {
+              status: 'offered',
+              attempt: 1,
+              expiresAt: offered.expiresAt,
+            },
+            assignments: [
+              { status: 'offered', attempt: 1, expiresAt: offered.expiresAt },
+            ],
+          },
+        ),
+      );
+      expect(dto.details).toEqual({
+        trade: 'Excavator',
+        operator: 'Yes',
+        quantity: 2,
+      });
+      expect(dto.answers?.map(({ key }) => key)).toEqual([
+        'trade',
+        'operator',
+        'quantity',
+      ]);
+      expect(dto.servicePath).toEqual(rows.servicePath);
+    });
+  });
 });

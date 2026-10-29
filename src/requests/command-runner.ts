@@ -174,7 +174,7 @@ export class RequestCommandRunner {
 
     const outcome = await this.prisma.$transaction(
       async (tx) => {
-        await tx.$queryRaw(
+        await tx.$executeRaw(
           Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${actor.userId}:${idempotencyKey}`}, 0))`,
         );
         const replay = await this.idempotency.lookup(
@@ -308,7 +308,7 @@ export class RequestCommandRunner {
     const outcome = await this.prisma.$transaction(
       async (tx) => {
         if (options.idempotencyKey && actor.userId && options.idempotencyHash) {
-          await tx.$queryRaw(
+          await tx.$executeRaw(
             Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${actor.userId}:${options.idempotencyKey}`}, 0))`,
           );
           const replay = await this.idempotency.lookup(
