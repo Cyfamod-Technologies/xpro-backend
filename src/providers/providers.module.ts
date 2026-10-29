@@ -9,6 +9,11 @@ import {
   ProviderReviewController,
 } from './providers.controller';
 import { ProvidersService } from './providers.service';
+import {
+  FeaturedProvidersAdminController,
+  FeaturedProvidersController,
+} from './featured-providers.controller';
+import { FeaturedProvidersService } from './featured-providers.service';
 
 @Module({
   imports: [
@@ -18,8 +23,13 @@ import { ProvidersService } from './providers.service';
     LocationsModule,
     RequestEventsModule,
   ],
-  controllers: [ProvidersController, ProviderReviewController],
-  providers: [ProvidersService],
+  controllers: [
+    ProvidersController,
+    ProviderReviewController,
+    FeaturedProvidersController,
+    FeaturedProvidersAdminController,
+  ],
+  providers: [ProvidersService, FeaturedProvidersService],
   exports: [ProvidersService],
 })
 export class ProvidersModule {}

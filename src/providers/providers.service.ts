@@ -27,6 +27,16 @@ import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
 import { AppError } from '../platform/errors/app-error';
+import { loadCatalog } from '../platform/catalog/catalog.tree';
+import type { CatalogIndex } from '../platform/catalog/catalog.types';
+import {
+  idsFromNames,
+  namesFromIds,
+  profileSkillIds,
+  rootByName,
+  skillEntries,
+  type ProviderIds,
+} from '../platform/catalog/provider-skills';
 import { confirmedJobConflictMessage } from '../requests/domain/schedule-checks';
 import { LocationsService } from '../platform/locations/locations.service';
 import {
@@ -152,7 +162,7 @@ export class ProvidersService {
       },
     });
     return profile
-      ? this.project(profile, true)
+      ? this.project(await loadCatalog(this.prisma), profile, true)
       : { verification: 'draft', profile: null };
   }
 
@@ -310,7 +320,7 @@ export class ProvidersService {
       throw new ForbiddenException(
         'Verify your email before submitting your provider profile.',
       );
-    const normalized = this.validateSubmission(dto);
+    const normalized = await this.validateSubmission(dto);
     const locationValues = await this.locations.resolveProviderLocationIds(dto);
     await this.verifyAttachments(userId, dto);
     const resolved = await this.resolveBank(dto.bankCode, dto.accountNumber);
@@ -337,11 +347,13 @@ export class ProvidersService {
       const proposed = {
         trade: dto.trade.trim(),
         services: normalized.services,
+        serviceIds: normalized.serviceIds,
         city: locationValues.cityName,
         cityId: locationValues.cityId,
         serviceAreas: locationValues.serviceAreaNames,
         serviceAreaIds: locationValues.serviceAreaIds,
         skills: normalized.skills,
+        skillIds: normalized.skillIds,
         capacity: dto.capacity,
         documents: dto.documents,
         photo: dto.photo,
@@ -382,9 +394,11 @@ export class ProvidersService {
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || undefined,
             services: json(normalized.services),
+            serviceIds: json(normalized.serviceIds),
             serviceAreas: json(locationValues.serviceAreaNames),
             serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
+            skillIds: json(normalized.skillIds),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
             experience: dto.experience,
@@ -402,9 +416,11 @@ export class ProvidersService {
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || null,
             services: json(normalized.services),
+            serviceIds: json(normalized.serviceIds),
             serviceAreas: json(locationValues.serviceAreaNames),
             serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
+            skillIds: json(normalized.skillIds),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
             experience: dto.experience,
@@ -693,8 +709,9 @@ export class ProvidersService {
       },
       orderBy: { updatedAt: 'asc' },
     });
+    const catalog = await loadCatalog(this.prisma);
     return rows.map((row) => {
-      const payout = this.project(row, false, bankReview).payout;
+      const payout = this.project(catalog, row, false, bankReview).payout;
       if (!providerReview) {
         return {
           id: row.id,
@@ -711,7 +728,7 @@ export class ProvidersService {
         };
       }
       return {
-        ...this.project(row, false, bankReview),
+        ...this.project(catalog, row, false, bankReview),
         firstName: row.user.firstName,
         lastName: row.user.lastName,
         email: row.user.email,
@@ -774,7 +791,7 @@ export class ProvidersService {
         profile.id,
         'Provider verification was rejected.',
       );
-    return this.project(updated, false);
+    return this.project(await loadCatalog(this.prisma), updated, false);
   }
 
   async reviewChanges(
@@ -808,6 +825,9 @@ export class ProvidersService {
             ? {
                 trade,
                 services: json(changes.services),
+                serviceIds: Array.isArray(changes.serviceIds)
+                  ? json(changes.serviceIds)
+                  : Prisma.DbNull,
                 serviceAreas: json(changes.serviceAreas),
                 ...(typeof changes.city === 'string'
                   ? { city: changes.city }
@@ -819,6 +839,12 @@ export class ProvidersService {
                   ? { serviceAreaIds: changes.serviceAreaIds as string[] }
                   : {}),
                 skills: json(changes.skills),
+                skillIds:
+                  changes.skillIds &&
+                  typeof changes.skillIds === 'object' &&
+                  !Array.isArray(changes.skillIds)
+                    ? json(changes.skillIds)
+                    : Prisma.DbNull,
                 capacity: Number(changes.capacity),
                 documents: json(changes.documents),
                 photo: json(changes.photo),
@@ -932,7 +958,7 @@ export class ProvidersService {
       },
     });
     if (!profile) throw new NotFoundException('Provider profile not found.');
-    return this.project(profile, false);
+    return this.project(await loadCatalog(this.prisma), profile, false);
   }
 
   private async requireProvider(userId: string) {
@@ -957,9 +983,17 @@ export class ProvidersService {
     });
   }
 
-  private validateSubmission(dto: ProviderProfileSubmissionDto) {
-    if (!dto.services.length)
+  private async validateSubmission(dto: ProviderProfileSubmissionDto) {
+    const catalog = await loadCatalog(this.prisma);
+    const requested = this.requestedSkills(catalog, dto);
+    if (!requested.serviceIds.length)
       throw new BadRequestException('Choose at least one service.');
+    const roots = [...new Set(requested.serviceIds)].map((id) => {
+      const root = catalog.roots.find((item) => item.id === id && item.active);
+      if (!root)
+        throw new BadRequestException('Choose services from the list.');
+      return root;
+    });
     if (!dto.serviceAreaIds?.length && !dto.serviceAreas?.length)
       throw new BadRequestException('Add at least one service area.');
     if (!dto.documents.length)
@@ -973,21 +1007,61 @@ export class ProvidersService {
       throw new BadRequestException('Add a clear face photo.');
     if (!/^\d{10}$/.test(dto.accountNumber))
       throw new BadRequestException('Enter a 10-digit account number.');
-    for (const service of dto.services)
-      if (!Array.isArray(dto.skills?.[service]) || !dto.skills[service].length)
+    const skillIds: Record<string, string[]> = {};
+    for (const root of roots) {
+      const chosen: unknown = requested.skillIds[root.id] ?? [];
+      const offered = skillEntries(root, { activeOnly: true });
+      if (
+        !Array.isArray(chosen) ||
+        chosen.some(
+          (id) =>
+            typeof id !== 'string' || !offered.some((entry) => entry.id === id),
+        )
+      )
         throw new BadRequestException(
-          `Choose at least one skill for ${service}.`,
+          `Choose ${root.name} skills from the list.`,
         );
+      if (offered.length && !chosen.length)
+        throw new BadRequestException(
+          `Choose at least one skill for ${root.name}.`,
+        );
+      skillIds[root.id] = [...new Set(chosen as string[])];
+    }
     this.validateCalendar(dto.workingHours, []);
+    const serviceIds = roots.map(({ id }) => id);
     return {
-      services: [...new Set(dto.services)],
+      serviceIds,
+      skillIds,
+      ...namesFromIds(catalog, serviceIds, skillIds),
       serviceAreas: [
         ...new Set(
           (dto.serviceAreas ?? []).map((area) => area.trim()).filter(Boolean),
         ),
       ],
-      skills: dto.skills,
     };
+  }
+
+  /** The submitted ids, or the ids that an older client's names resolve to. */
+  private requestedSkills(
+    catalog: CatalogIndex,
+    dto: ProviderProfileSubmissionDto,
+  ): ProviderIds {
+    if (dto.serviceIds)
+      return { serviceIds: dto.serviceIds, skillIds: dto.skillIds ?? {} };
+    const services = dto.services ?? [];
+    const unknown = services.find((name) => !rootByName(catalog, name));
+    if (unknown !== undefined)
+      throw new BadRequestException(`${unknown} is not a service XPro offers.`);
+    const { serviceIds, skillIds, unmatched } = idsFromNames(
+      catalog,
+      services,
+      dto.skills,
+    );
+    if (unmatched.length)
+      throw new BadRequestException(
+        `Choose ${unmatched[0].split(' › ')[0]} skills from the list.`,
+      );
+    return { serviceIds, skillIds };
   }
 
   private async verifyAttachments(
@@ -1216,6 +1290,7 @@ export class ProvidersService {
   }
 
   private project(
+    catalog: CatalogIndex,
     profile: {
       id: string;
       userId: string;
@@ -1225,9 +1300,11 @@ export class ProvidersService {
       cityId?: string | null;
       businessName?: string | null;
       services: Prisma.JsonValue;
+      serviceIds?: Prisma.JsonValue | null;
       serviceAreas: Prisma.JsonValue;
       serviceAreaIds?: string[];
       skills: Prisma.JsonValue;
+      skillIds?: Prisma.JsonValue | null;
       capacity: number;
       workingHours: Prisma.JsonValue;
       timeOff: Prisma.JsonValue;
@@ -1280,10 +1357,9 @@ export class ProvidersService {
       city: profile.city,
       cityId: profile.cityId,
       businessName: profile.businessName,
-      services: profile.services,
+      ...currentSkills(catalog, profile),
       serviceAreas: profile.serviceAreas,
       serviceAreaIds: profile.serviceAreaIds,
-      skills: profile.skills,
       capacity: profile.capacity,
       workingHours: profile.workingHours,
       timeOff: profile.timeOff,
@@ -1295,7 +1371,15 @@ export class ProvidersService {
       verification: profile.verification,
       available: profile.available,
       reviewNote: owner ? profile.reviewNote : undefined,
-      pendingChanges: profile.pendingChanges,
+      pendingChanges:
+        profile.pendingChanges &&
+        typeof profile.pendingChanges === 'object' &&
+        !Array.isArray(profile.pendingChanges)
+          ? {
+              ...profile.pendingChanges,
+              ...currentSkills(catalog, profile.pendingChanges),
+            }
+          : profile.pendingChanges,
       changesReview: profile.changesReview,
       version: profile.version,
       payout: {
@@ -1314,4 +1398,13 @@ export class ProvidersService {
       })),
     };
   }
+}
+
+/** The stored ids, with the services and skills names taken from the catalog now, so a rename shows at once. */
+function currentSkills(catalog: CatalogIndex, stored: object) {
+  const ids = profileSkillIds(catalog, stored);
+  return {
+    ...ids,
+    ...namesFromIds(catalog, ids.serviceIds, ids.skillIds),
+  };
 }

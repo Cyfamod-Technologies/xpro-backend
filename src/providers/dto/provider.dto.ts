@@ -82,10 +82,23 @@ export class ProviderProfileSubmissionDto {
   @IsUUID()
   cityId?: string;
 
-  @ApiProperty({ type: [String] })
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Deprecated: send serviceIds.',
+  })
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  services: string[];
+  services?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Ids of the top-level catalog services the provider offers.',
+  })
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  serviceIds?: string[];
 
   @ApiPropertyOptional({ type: [String] })
   @IsOptional()
@@ -106,9 +119,18 @@ export class ProviderProfileSubmissionDto {
   @MaxLength(100)
   businessName?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ description: 'Deprecated: send skillIds.' })
+  @IsOptional()
   @IsObject()
-  skills: Record<string, string[]>;
+  skills?: Record<string, string[]>;
+
+  @ApiPropertyOptional({
+    description:
+      'Top-level service id to the skill option ids and skill-leaf ids chosen under it.',
+  })
+  @IsOptional()
+  @IsObject()
+  skillIds?: Record<string, string[]>;
 
   @ApiProperty({ minimum: 1, maximum: 20 })
   @IsInt()
