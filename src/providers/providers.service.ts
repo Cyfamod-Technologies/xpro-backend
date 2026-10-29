@@ -716,8 +716,29 @@ export class ProvidersService {
       },
       orderBy: { updatedAt: 'asc' },
     });
+    const signups =
+      providerReview &&
+      (!query.verification || query.verification === ProviderVerificationStatus.draft)
+        ? await this.prisma.user.findMany({
+            where: {
+              platformRoles: { some: { role: 'provider' } },
+              providerProfile: null,
+              deletedAt: null,
+              status: { notIn: ['deleted', 'archived'] },
+            },
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              status: true,
+              createdAt: true,
+            },
+            orderBy: { createdAt: 'asc' },
+          })
+        : [];
     const catalog = await loadCatalog(this.prisma);
-    return rows.map((row) => {
+    const profiles = rows.map((row) => {
       const payout = this.project(catalog, row, false, bankReview).payout;
       if (!providerReview) {
         return {
@@ -741,6 +762,19 @@ export class ProvidersService {
         email: row.user.email,
       };
     });
+    return [
+      ...profiles,
+      ...signups.map((user) => ({
+        id: user.id,
+        userId: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        profileStarted: false as const,
+        accountStatus: user.status,
+        registeredAt: user.createdAt.toISOString(),
+      })),
+    ];
   }
 
   async reviewProfile(
