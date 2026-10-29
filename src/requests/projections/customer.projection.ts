@@ -9,6 +9,7 @@ import {
   scheduleProjection,
   type ProjectionContext,
 } from './projection.helpers';
+import { answerSnapshots } from '../domain/answers';
 import { customerCurrentQuote, customerQuoteView } from './quote.projection';
 
 export function customerProjection(
@@ -27,6 +28,7 @@ export function customerProjection(
     row.service,
     row.startDate,
     jsonObject(row.details),
+    row.answers,
   );
   return {
     ...dto,
@@ -44,6 +46,8 @@ export function customerProjection(
     startDate: row.startDate,
     ...dates,
     details: jsonObject(row.details),
+    servicePath: row.servicePath,
+    answers: answerSnapshots(row.answers),
     customerName: row.customerName,
     intake: {
       state: row.intakeState,

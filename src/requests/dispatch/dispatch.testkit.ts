@@ -1,4 +1,13 @@
+import {
+  catalogRows,
+  seededCatalog,
+} from '../../platform/catalog/catalog.testkit';
 import type { DispatchProvider } from '../domain/eligibility';
+
+/** The seeded catalog as `tx.catalogService`, which `dispatchRequestFor` reads. */
+export const catalogStub = () => ({
+  findMany: jest.fn().mockResolvedValue(catalogRows(seededCatalog())),
+});
 
 /** An eligible Design provider covering `district-1`; override fields per test. */
 export function dispatchProvider(
@@ -12,8 +21,8 @@ export function dispatchProvider(
     verification: 'approved',
     userStatus: 'active',
     reliabilityStatus: 'normal',
-    services: ['Design'],
-    skills: { Design: ['Architectural plan'] },
+    serviceIds: ['svc:Design'],
+    skillIds: { 'svc:Design': ['svc:Design/Architectural plan'] },
     serviceAreaIds: ['district-1'],
     available: true,
     capacity: 3,

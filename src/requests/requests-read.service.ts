@@ -90,6 +90,8 @@ export class RequestsReadService {
     if (query.nextActor === 'me')
       filters.push({ status: { notIn: [...TERMINAL] } });
     if (query.service) filters.push({ service: query.service });
+    if (query.serviceRootId)
+      filters.push({ serviceRootId: query.serviceRootId });
     if (query.q)
       filters.push({
         OR: [

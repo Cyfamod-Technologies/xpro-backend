@@ -1,7 +1,11 @@
 import { ENGINE_ACTOR } from '../../platform/actor/actor.types';
 import { TimerRegistry } from '../../platform/timers/timer-registry';
 import { systemCommandKit, timerFixture } from '../system-command.testkit';
-import { designRequestRow, dispatchProvider } from './dispatch.testkit';
+import {
+  catalogStub,
+  designRequestRow,
+  dispatchProvider,
+} from './dispatch.testkit';
 import {
   DispatchTimerHandlers,
   cascadeTrigger,
@@ -216,6 +220,7 @@ describe('dispatch.cascade handler', () => {
     needsAssignmentReason: null as string | null,
   };
   const cascadeTx = (request: Record<string, unknown>) => ({
+    catalogService: catalogStub(),
     serviceRequest: {
       findUnique: jest.fn().mockResolvedValue({ ...baseRequest, ...request }),
       update: jest.fn(),
@@ -369,6 +374,7 @@ describe('dispatch.cascade handler', () => {
 describe('dispatch.cascade offers', () => {
   // 2026-10-24 12:00 UTC is a Saturday; the provider works Monday to Friday.
   const designTx = (request: Record<string, unknown> = {}) => ({
+    catalogService: catalogStub(),
     serviceRequest: {
       findUnique: jest
         .fn()
@@ -390,7 +396,9 @@ describe('dispatch.cascade offers', () => {
 
   it('applies the skill from the catalogue skill field (E8) and shows the real district', async () => {
     const tx = designTx();
-    const wrongSkill = dispatchProvider('p-wrong', { skills: { Design: [] } });
+    const wrongSkill = dispatchProvider('p-wrong', {
+      skillIds: { 'svc:Design': [] },
+    });
     const right = dispatchProvider('p-right');
     const { fire, effects } = setup({
       tx,
@@ -437,8 +445,10 @@ describe('dispatch.cascade offers', () => {
     });
     // 2026-11-01 is a Sunday; the provider has no Sunday hours.
     const provider = dispatchProvider('p1', {
-      services: ['Waste management'],
-      skills: { 'Waste management': ['Commercial'] },
+      serviceIds: ['svc:Waste management'],
+      skillIds: {
+        'svc:Waste management': ['svc:Waste management/Commercial'],
+      },
     });
     const { fire, effects } = setup({ tx, settings, providers: [provider] });
 

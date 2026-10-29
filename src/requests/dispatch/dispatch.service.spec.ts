@@ -2,7 +2,11 @@ import { Prisma } from '@prisma/client';
 import { AppError } from '../../platform/errors/app-error';
 import type { RequestSnapshot } from '../domain/snapshot';
 import { systemCommandKit } from '../system-command.testkit';
-import { designRequestRow, dispatchProvider } from './dispatch.testkit';
+import {
+  catalogStub,
+  designRequestRow,
+  dispatchProvider,
+} from './dispatch.testkit';
 import { DispatchService } from './dispatch.service';
 
 const now = new Date('2026-10-24T12:00:00.000Z');
@@ -34,6 +38,7 @@ function build<T extends Mocks = Mocks>(
   const providers = options.providers ?? [];
   const base = {
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'locked' }]),
+    catalogService: catalogStub(),
     serviceRequest: {
       findUnique: jest.fn().mockResolvedValue(designRequestRow),
       update: jest.fn(),
@@ -107,6 +112,7 @@ describe('DispatchService.offer (04 §6.6 manual offer)', () => {
         };
   const offerTx = (runRow: unknown) => ({
     $queryRaw: jest.fn().mockResolvedValue([{ id: 'locked' }]),
+    catalogService: catalogStub(),
     serviceRequest: {
       findUnique: jest.fn().mockResolvedValue(designRequestRow),
       update: jest.fn(),
@@ -287,7 +293,7 @@ describe('DispatchService.offer (04 §6.6 manual offer)', () => {
   it.each([
     ['E1', { verification: 'pending' }],
     ['E2', { reliabilityStatus: 'restricted' }],
-    ['E4', { services: [] }],
+    ['E4', { serviceIds: [] }],
     ['E5', { available: false }],
   ])('refuses a provider failing %s even with a note', async (_row, patch) => {
     const { service, tx } = build({
@@ -478,6 +484,7 @@ describe('DispatchService.rankingRun', () => {
     jest.useFakeTimers({ now });
     try {
       const prisma = {
+        catalogService: catalogStub(),
         setting: { findMany: jest.fn().mockResolvedValue([]) },
         serviceRequest: {
           findUnique: jest.fn().mockResolvedValue(designRequestRow),
@@ -602,7 +609,7 @@ describe('DispatchService.review (04 §6.9)', () => {
       ['E1', { verification: 'pending' }],
       ['E2', { userStatus: 'suspended' }],
       ['E3', { userId: 'customer-1' }],
-      ['E4', { services: [] }],
+      ['E4', { serviceIds: [] }],
     ])(
       'refuses with 409 when the provider now fails %s',
       async (_row, patch) => {
@@ -627,7 +634,7 @@ describe('DispatchService.review (04 §6.9)', () => {
     it.each([
       ['E5', { available: false }, 'Not accepting new jobs'],
       ['E6', { serviceAreaIds: [] }, 'Doesn’t cover Ikeja'],
-      ['E8', { skills: {} }, 'Doesn’t offer Architectural plan'],
+      ['E8', { skillIds: {} }, 'Doesn’t offer Architectural plan'],
       ['E11', { hasVerifiedCurrentBank: false }, 'Bank details not verified'],
     ])(
       'asks for a note when the provider now fails %s',

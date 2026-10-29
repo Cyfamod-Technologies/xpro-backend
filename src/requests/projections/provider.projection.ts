@@ -1,4 +1,5 @@
 import type { RequestDetailDto } from '../dto/request-detail.dto';
+import { answerSnapshots, type AnswerSnapshot } from '../domain/answers';
 import {
   commonProjection,
   effectiveDates,
@@ -31,7 +32,13 @@ export function providerProjection(
 
   const dto = commonProjection(context);
   const details = jsonObject(row.details);
-  const dates = effectiveDates(row.service, row.startDate, details);
+  const dates = effectiveDates(
+    row.service,
+    row.startDate,
+    details,
+    row.answers,
+  );
+  const answers = answerSnapshots(row.answers);
   const locked = row.schedules.some(
     (schedule) =>
       schedule.status === 'confirmed' &&
@@ -54,7 +61,9 @@ export function providerProjection(
       cityName: snapshot.cityName,
       districtName: snapshot.districtName,
       ...dates,
-      details: offerDetails(details),
+      details: offerDetails(details, answers),
+      servicePath: row.servicePath,
+      answers: visibleAnswers(answers, offerDetails(details, answers)),
       assignment: {
         id: assignment.id,
         status: assignment.status,
@@ -71,6 +80,12 @@ export function providerProjection(
       ? shared.fields.filter((key): key is string => typeof key === 'string')
       : [],
   );
+  const visibleDetails = locked
+    ? details
+    : {
+        ...offerDetails(details, answers),
+        ...safeSharedDetails(details, shared),
+      };
   const fields: RequestDetailDto = {
     ...dto,
     service: row.service,
@@ -79,9 +94,9 @@ export function providerProjection(
     cityName: snapshot.cityName,
     districtName: snapshot.districtName,
     ...dates,
-    details: locked
-      ? details
-      : { ...offerDetails(details), ...safeSharedDetails(details, shared) },
+    details: visibleDetails,
+    servicePath: row.servicePath,
+    answers: visibleAnswers(answers, visibleDetails),
     assignment: {
       id: assignment.id,
       status: assignment.status,
@@ -124,9 +139,32 @@ export function providerProjection(
   return fields;
 }
 
+function visibleAnswers(
+  answers: readonly AnswerSnapshot[],
+  details: Record<string, unknown>,
+): AnswerSnapshot[] {
+  return answers.filter(({ key }) => key in details);
+}
+
+const OFFER_ANSWER_TYPES = new Set([
+  'yes_no',
+  'single_choice',
+  'multiple_choice',
+  'number',
+]);
+
 function offerDetails(
   details: Record<string, unknown>,
+  answers: readonly AnswerSnapshot[] = [],
 ): Record<string, unknown> {
+  if (answers.length)
+    return Object.fromEntries(
+      answers
+        .filter(
+          ({ sensitive, type }) => !sensitive && OFFER_ANSWER_TYPES.has(type),
+        )
+        .map(({ key, value }) => [key, value]),
+    );
   const optionKeys = new Set([
     'designType',
     'delivery',

@@ -3,6 +3,10 @@ import type { ActorContext } from '../platform/actor/actor.types';
 import { TimerKinds } from '../platform/timers/timer-kinds';
 import { contactFieldsChanged, IntakeService } from './intake.service';
 import { RequestCommandRunner } from './command-runner';
+import {
+  catalogRows,
+  seededCatalog,
+} from '../platform/catalog/catalog.testkit';
 
 describe('request intake command flows', () => {
   it('replays a completed create with the same idempotency key and response', async () => {
@@ -23,7 +27,10 @@ describe('request intake command flows', () => {
         },
       ),
     };
-    const tx = { $queryRaw: jest.fn().mockResolvedValue([]) };
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      $executeRaw: jest.fn().mockResolvedValue(1),
+    };
     const prisma = {
       $transaction: jest.fn(
         async (callback: (transaction: unknown) => Promise<unknown>) =>
@@ -83,6 +90,8 @@ describe('request intake command flows', () => {
       version: 3,
       title: 'Repair a leaking roof',
       service: 'Construction',
+      serviceId: null,
+      answers: [],
       cityId: 'city-1',
       districtId: 'district-1',
       address: '12 Example Road',
@@ -110,6 +119,9 @@ describe('request intake command flows', () => {
         update: jest.fn().mockResolvedValue(row),
       },
       requestEdit: { create: jest.fn() },
+      catalogService: {
+        findMany: jest.fn().mockResolvedValue(catalogRows(seededCatalog())),
+      },
       location: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'city-1', kind: 'city', parentId: null, active: true },
@@ -452,6 +464,8 @@ describe('request intake command flows', () => {
             ownerId: 'customer-1',
             title: 'Repair a leaking roof',
             service: 'Construction',
+            serviceId: null,
+            answers: [],
             cityId: 'city-1',
             districtId: 'district-1',
             address: '12 Example Road',
@@ -470,6 +484,9 @@ describe('request intake command flows', () => {
         },
         cancellation: {
           create: jest.fn().mockResolvedValue({ id: 'cancellation-1' }),
+        },
+        catalogService: {
+          findMany: jest.fn().mockResolvedValue(catalogRows(seededCatalog())),
         },
         location: {
           findMany: jest.fn().mockResolvedValue([

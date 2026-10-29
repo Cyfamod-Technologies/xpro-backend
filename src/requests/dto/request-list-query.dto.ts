@@ -1,8 +1,15 @@
 import { Transform, Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  Min,
+} from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { REQUEST_STATUSES } from '../domain/statuses';
-import { serviceLines } from '../../platform/catalog/service-lines';
 
 export const REQUEST_STAGES = [
   'intake_review',
@@ -81,10 +88,14 @@ export class RequestListQueryDto {
   @IsOptional()
   @IsIn(REQUEST_STAGES)
   stage?: string;
-  @ApiPropertyOptional({ enum: serviceLines })
+  @ApiPropertyOptional({ description: 'Top-level service name' })
   @IsOptional()
-  @IsIn(serviceLines)
+  @IsString()
   service?: string;
+  @ApiPropertyOptional({ description: 'Top-level catalog service id' })
+  @IsOptional()
+  @IsUUID()
+  serviceRootId?: string;
   @ApiPropertyOptional({ description: 'Search by request id or title' })
   @IsOptional()
   @IsString()

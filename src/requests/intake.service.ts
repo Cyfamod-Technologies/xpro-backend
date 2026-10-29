@@ -30,6 +30,13 @@ import type {
   RequestUpdateDto,
 } from './dto/request-intake.dto';
 import { effectiveDates, jsonObject } from './projections/projection.helpers';
+import { loadCatalog } from '../platform/catalog/catalog.tree';
+import { answerSnapshots, answersByQuestion } from './domain/answers';
+import { storedSkill } from './domain/dispatch-request';
+import {
+  resolveServiceInput,
+  withoutLegacyKeys,
+} from './domain/legacy-service-input';
 import { REQUEST_INCLUDE, type LoadedRequest } from './snapshot.loader';
 import { closeEndedRequestApprovals } from './approval-effects';
 import { REQUEST_ENTITY } from '../uploads/entity-types';
@@ -94,7 +101,8 @@ export class IntakeService {
           where: { active: true },
           select: { id: true, kind: true, parentId: true, active: true },
         });
-        const valid = validateIntake(dto, undefined, locations, now);
+        const resolved = resolveServiceInput(await loadCatalog(tx), dto);
+        const valid = validateIntake(dto, resolved, locations, now);
         const possible = await findPossibleDuplicate(tx, user.id, valid, now);
         if (possible) {
           duplicateRef = formatRequestNumber(possible.number);
@@ -106,6 +114,10 @@ export class IntakeService {
             customerName: actor.displayName,
             title: valid.title,
             service: valid.service,
+            serviceId: valid.serviceId,
+            serviceRootId: valid.serviceRootId,
+            servicePath: valid.servicePath,
+            answers: valid.answers,
             cityId: valid.cityId,
             districtId: valid.districtId,
             address: valid.address,
@@ -214,16 +226,32 @@ export class IntakeService {
           );
 
         const oldDetails = jsonObject(row.details);
+        const oldAnswers = answerSnapshots(row.answers);
+        const serviceId =
+          dto.serviceId ??
+          (dto.service === undefined || dto.service === row.service
+            ? (row.serviceId ?? undefined)
+            : undefined);
         const service = dto.service ?? row.service;
+        const unchanged =
+          serviceId !== undefined
+            ? serviceId === row.serviceId
+            : row.serviceId === null && service === row.service;
+        const answersInput =
+          dto.answers ??
+          (dto.details === undefined &&
+          unchanged &&
+          row.serviceId &&
+          oldAnswers.length
+            ? answersByQuestion(oldAnswers)
+            : undefined);
         const detailsInput =
-          dto.details !== undefined
-            ? dto.details
-            : service === row.service
-              ? oldDetails
-              : {};
+          dto.details ??
+          (answersInput === undefined && unchanged ? oldDetails : {});
         const input: IntakeValidationInput = {
           title: dto.title ?? row.title,
           service,
+          serviceId,
           cityId: dto.cityId ?? row.cityId,
           districtId: dto.districtId ?? row.districtId,
           address: dto.address ?? row.address,
@@ -233,6 +261,7 @@ export class IntakeService {
           budget: dto.budget ?? Number(row.budget),
           startDate: dto.startDate ?? row.startDate ?? undefined,
           details: detailsInput,
+          answers: answersInput,
           preferredProviderId: dto.preferredProviderId,
           providerId: dto.providerId,
           attachments: [],
@@ -241,7 +270,12 @@ export class IntakeService {
           where: { active: true },
           select: { id: true, kind: true, parentId: true, active: true },
         });
-        const valid = validateIntake(input, undefined, locations, context.now);
+        const resolved = resolveServiceInput(
+          await loadCatalog(context.tx),
+          input,
+          { includeInactive: unchanged },
+        );
+        const valid = validateIntake(input, resolved, locations, context.now);
         if (dto.attachments !== undefined && !Array.isArray(dto.attachments))
           throw new AppError(
             422,
@@ -270,9 +304,13 @@ export class IntakeService {
             'A request can hold up to 20 files. Remove one before adding more.',
           );
 
-        const data: Prisma.ServiceRequestUpdateInput = {
+        const data: Prisma.ServiceRequestUncheckedUpdateInput = {
           title: valid.title,
           service: valid.service,
+          serviceId: valid.serviceId,
+          serviceRootId: valid.serviceRootId,
+          servicePath: valid.servicePath,
+          answers: valid.answers,
           cityId: valid.cityId,
           districtId: valid.districtId,
           address: valid.address,
@@ -287,9 +325,17 @@ export class IntakeService {
         const changedFields = changedRequestFields(
           row,
           data,
-          oldDetails,
+          row.serviceId
+            ? oldDetails
+            : withoutLegacyKeys(oldDetails, valid.details),
           valid.details,
         );
+        if (
+          !row.serviceId &&
+          !changedFields.includes('details') &&
+          storedSkill(row, oldDetails) !== valid.skill
+        )
+          changedFields.push('details');
         const newIds = attachmentIds.filter(
           (id) => !row.attachments.some(({ uploadId }) => uploadId === id),
         );
@@ -923,6 +969,7 @@ function fieldLabel(field: string): string {
   const labels: Record<string, string> = {
     title: 'title',
     service: 'service',
+    serviceId: 'service',
     cityId: 'city',
     districtId: 'district',
     address: 'site address',
@@ -939,7 +986,7 @@ function fieldLabel(field: string): string {
 
 function changedRequestFields(
   row: LoadedRequest,
-  data: Prisma.ServiceRequestUpdateInput,
+  data: Prisma.ServiceRequestUncheckedUpdateInput,
   oldDetails: Record<string, unknown>,
   nextDetails: Record<string, unknown>,
 ): string[] {
@@ -961,6 +1008,12 @@ function changedRequestFields(
     if (next !== undefined && (previous ?? null) !== (next ?? null))
       fields.push(field);
   }
+  if (
+    row.serviceId !== null &&
+    data.serviceId !== undefined &&
+    row.serviceId !== data.serviceId
+  )
+    fields.push('serviceId');
   if (!isDeepStrictEqual(oldDetails, nextDetails)) fields.push('details');
   return fields;
 }
@@ -970,24 +1023,20 @@ function hasKeyFieldChanged(
   valid: ValidatedIntake,
   oldDetails: Record<string, unknown>,
 ): boolean {
-  const oldDates = effectiveDates(row.service, row.startDate, oldDetails);
-  const skillKeys: Record<string, string> = {
-    Design: 'designType',
-    Construction: 'workType',
-    Hire: 'trade',
-    Procurement: 'category',
-    'Facility management': 'serviceNeeds',
-    'Waste management': 'wasteType',
-  };
+  const oldDates = effectiveDates(
+    row.service,
+    row.startDate,
+    oldDetails,
+    row.answers,
+  );
   return (
     row.service !== valid.service ||
+    (row.serviceId !== null && row.serviceId !== valid.serviceId) ||
     row.cityId !== valid.cityId ||
     row.districtId !== valid.districtId ||
-    oldDetails[skillKeys[row.service]] !==
-      valid.details[skillKeys[valid.service]] ||
+    storedSkill(row, oldDetails) !== valid.skill ||
     oldDates.effectiveStartDate !== valid.effectiveStartDate ||
-    (row.service === 'Hire' &&
-      oldDates.effectiveEndDate !== valid.effectiveEndDate)
+    oldDates.effectiveEndDate !== valid.effectiveEndDate
   );
 }
 

@@ -114,6 +114,20 @@ export class StorageService {
     );
   }
 
+  /** Signed GET that renders in the browser (e.g. as an <img>) instead of downloading. */
+  async signedViewUrl(key: string, expiresIn = 3600): Promise<string> {
+    this.requireEnabled();
+    return getSignedUrl(
+      this.s3,
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        ResponseContentDisposition: 'inline',
+      }),
+      { expiresIn },
+    );
+  }
+
   publicUrl(key: string): string {
     return `${this.publicBaseUrl}/${key}`;
   }
