@@ -92,4 +92,15 @@ describe('approvals.deadlines defaults', () => {
     expect(defaults.payment_lapsed).toBe(480);
     expect(definition.validate(defaults)).toBeNull();
   });
+
+  it('validates the catalog depth limit and accepts any service names in the mode map', () => {
+    const depth = getSettingDefinition('catalog.maxDepth');
+    expect(depth?.defaultValue).toBe(2);
+    expect(depth?.validate(1)).toBeTruthy();
+    expect(depth?.validate(11)).toBeTruthy();
+    expect(depth?.validate(3)).toBeNull();
+    const modes = getSettingDefinition('assignment.modeByService');
+    expect(modes?.validate({ Roofing: 'manual', Hire: 'auto' })).toBeNull();
+    expect(modes?.validate({ Roofing: 'sometimes' })).toBeTruthy();
+  });
 });
