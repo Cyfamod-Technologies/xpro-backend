@@ -28,6 +28,7 @@ function setup(actor: ActorContext = staff) {
     serviceRequest: {
       findMany: jest.fn((_args: unknown) => Promise.resolve([] as unknown[])),
       count: jest.fn().mockResolvedValue(0),
+      findFirst: jest.fn().mockResolvedValue(null),
       findUnique: jest.fn().mockResolvedValue({ id: REQUEST_ID }),
     },
     $transaction: jest.fn((queries: Array<Promise<unknown>>) =>
@@ -198,5 +199,43 @@ describe('RequestsReadService.activity', () => {
     await expect(
       service.activity({ id: STAFF_ID } as never, REQUEST_ID, { page: 1 }),
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+});
+
+describe('RequestsReadService.pending', () => {
+  it('reports no pending request when the account owns no open one', async () => {
+    const { service } = setup();
+    const result = await service.pending({ id: STAFF_ID } as never);
+    expect(result).toEqual({ hasPending: false });
+    expect(result).not.toHaveProperty('requestId');
+  });
+
+  it('returns the display id of the open request', async () => {
+    const { service, prisma } = setup();
+    prisma.serviceRequest.findFirst.mockResolvedValue({ number: 42 });
+    await expect(service.pending({ id: STAFF_ID } as never)).resolves.toEqual({
+      hasPending: true,
+      requestId: 'XPR-00042',
+    });
+  });
+
+  it('looks only at the owner’s non-terminal requests, newest first', async () => {
+    const { service, prisma } = setup();
+    await service.pending({ id: STAFF_ID } as never);
+    const [args] = prisma.serviceRequest.findFirst.mock.calls[0] as [
+      {
+        where: { ownerId: string; status: { notIn: string[] } };
+        orderBy: unknown;
+        select: unknown;
+      },
+    ];
+    expect(args.where.ownerId).toBe(STAFF_ID);
+    expect([...args.where.status.notIn].sort()).toEqual([
+      'cancelled',
+      'closed',
+      'rejected',
+    ]);
+    expect(args.orderBy).toEqual({ createdAt: 'desc' });
+    expect(args.select).toEqual({ number: true });
   });
 });

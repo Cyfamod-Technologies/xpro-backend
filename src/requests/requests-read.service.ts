@@ -7,7 +7,8 @@ import { ActorService } from '../platform/actor/actor.service';
 import { AppError } from '../platform/errors/app-error';
 import { SettingsService } from '../platform/settings/settings.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { parseRequestId, TERMINAL } from './domain/statuses';
+import { formatRequestId, parseRequestId, TERMINAL } from './domain/statuses';
+import { PendingRequestResponseDto } from './dto/request-pending.dto';
 import {
   deriveStage,
   nextActor,
@@ -175,6 +176,18 @@ export class RequestsReadService {
       page,
       limit,
     );
+  }
+
+  /** Whether the account owns a request that is still open (not closed, cancelled or rejected). */
+  async pending(user: RequestUser): Promise<PendingRequestResponseDto> {
+    const open = await this.prisma.serviceRequest.findFirst({
+      where: { ownerId: user.id, status: { notIn: [...TERMINAL] } },
+      orderBy: { createdAt: 'desc' },
+      select: { number: true },
+    });
+    return open
+      ? { hasPending: true, requestId: formatRequestId(open.number) }
+      : { hasPending: false };
   }
 
   async detail(user: RequestUser, id: string) {

@@ -13,7 +13,12 @@ import {
   Put,
   Req,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Response } from 'express';
 import type { Request } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -21,6 +26,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../common/types/request-user';
 import { RequestListQueryDto } from './dto/request-list-query.dto';
 import { RequestActivityQueryDto } from './dto/request-activity-query.dto';
+import { PendingRequestResponseDto } from './dto/request-pending.dto';
 import { RequestsReadService } from './requests-read.service';
 import { formatEtag } from '../platform/concurrency/etag.util';
 import { IfMatch } from '../platform/concurrency/if-match.decorator';
@@ -374,6 +380,15 @@ export class RequestsController {
     query: RequestListQueryDto,
   ) {
     return this.requests.list(user, query);
+  }
+
+  @Get('pending')
+  @ApiOperation({
+    summary: 'Whether the signed-in account has an open request of its own',
+  })
+  @ApiOkResponse({ type: PendingRequestResponseDto })
+  pending(@CurrentUser() user: RequestUser) {
+    return this.requests.pending(user);
   }
 
   @Get(':id')
