@@ -718,7 +718,8 @@ export class ProvidersService {
     });
     const signups =
       providerReview &&
-      (!query.verification || query.verification === ProviderVerificationStatus.draft)
+      (!query.verification ||
+        query.verification === ProviderVerificationStatus.draft)
         ? await this.prisma.user.findMany({
             where: {
               platformRoles: { some: { role: 'provider' } },
