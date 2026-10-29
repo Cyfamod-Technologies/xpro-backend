@@ -18,7 +18,8 @@ function setup(options: {
     },
   };
   const service = new ProvidersService(
-    ...(Array.from({ length: 7 }, () => ({})) as [
+    ...(Array.from({ length: 8 }, () => ({})) as [
+      never,
       never,
       never,
       never,

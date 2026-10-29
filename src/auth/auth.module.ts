@@ -7,12 +7,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { RedisModule } from '../redis/redis.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
-import { BootstrapAdminController } from './bootstrap-admin.controller';
-import {
-  BOOTSTRAP_ADMIN_CONFIG,
-  bootstrapAdminConfig,
-} from './bootstrap-admin.config';
-import { BootstrapAdminService } from './bootstrap-admin.service';
 import { JwtStrategy } from './jwt.strategy';
 import { RedisAuthService } from './redis-auth.service';
 
@@ -32,14 +26,8 @@ import { RedisAuthService } from './redis-auth.service';
       }),
     }),
   ],
-  controllers: [AuthController, BootstrapAdminController],
-  providers: [
-    AuthService,
-    JwtStrategy,
-    RedisAuthService,
-    BootstrapAdminService,
-    { provide: BOOTSTRAP_ADMIN_CONFIG, useValue: bootstrapAdminConfig },
-  ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtStrategy, RedisAuthService],
   exports: [AuthService, RedisAuthService],
 })
 export class AuthModule {}
