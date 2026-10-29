@@ -3,7 +3,8 @@ import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 
 export class FireTimerDto {
   @ApiProperty({
-    description: 'Request id; the XPR number once requests exist',
+    description:
+      'Request reference: an XPR number (XPR-00042) or the request uuid',
   })
   @IsString()
   @IsNotEmpty()

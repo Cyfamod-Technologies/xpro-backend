@@ -1,18 +1,16 @@
 import { Module } from '@nestjs/common';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 import { OutboxModule } from '../platform/outbox/outbox.module';
 import { PlatformModule } from '../platform/platform.module';
 import { SettingsModule } from '../platform/settings/settings.module';
 import { TimersModule } from '../platform/timers/timers.module';
 import { UploadsModule } from '../uploads/uploads.module';
-import { RequestCommandRunner } from './command-runner';
+import { RequestEventsModule } from './events/request-events.module';
 import { RequestFileAccess } from './request-file-access';
 import { RequestsController } from './requests.controller';
 import { RequestsReadService } from './requests-read.service';
-import { RequestSnapshotLoader } from './snapshot.loader';
+import { RequestListLoader } from './request-list.loader';
 import { IntakeService } from './intake.service';
-import { ApprovalsHooks } from './approvals.hooks';
 import { T6TimerHandlers } from './t6-timer-handlers';
 import { OwnershipService } from './ownership.service';
 import { MessagesService } from './messages.service';
@@ -24,8 +22,8 @@ import { PricingController } from './pricing/pricing.controller';
 import { DispatchTimerHandlers } from './dispatch/dispatch-timer-handlers';
 import { T9TimerHandlers } from './t9-timer-handlers';
 import { PaymentsModule } from '../payments/payments.module';
+import { ProvidersModule } from '../providers/providers.module';
 import { PricingTimerHandlers } from './pricing/pricing-timer-handlers';
-import { ProviderStandingHooks } from './dispatch/provider-standing.hooks';
 import { SchedulesController } from './scheduling/schedules.controller';
 import { SchedulesService } from './scheduling/schedules.service';
 import { HoldsController } from './execution/holds.controller';
@@ -44,6 +42,8 @@ import { IssuesController } from './completion/issues.controller';
 import { IssuesService } from './completion/issues.service';
 import { CancellationController } from './cancellation/cancellation.controller';
 import { CancellationService } from './cancellation/cancellation.service';
+import { CancellationTimerHandlers } from './cancellation/cancellation-timer-handlers';
+import { EscalationsService } from '../approvals/escalations.service';
 import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
 
 @Module({
@@ -55,6 +55,8 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     OutboxModule,
     UploadsModule,
     PaymentsModule,
+    ProvidersModule,
+    RequestEventsModule,
   ],
   controllers: [
     RequestsController,
@@ -70,8 +72,7 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     CancellationController,
   ],
   providers: [
-    RequestSnapshotLoader,
-    RequestCommandRunner,
+    RequestListLoader,
     RequestsReadService,
     IntakeService,
     OwnershipService,
@@ -82,7 +83,6 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     DispatchTimerHandlers,
     T9TimerHandlers,
     PricingTimerHandlers,
-    ProviderStandingHooks,
     SchedulesService,
     HoldsService,
     NoShowService,
@@ -93,12 +93,12 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     ClosureService,
     IssuesService,
     CancellationService,
+    CancellationTimerHandlers,
+    EscalationsService,
     ExecutionTimerHandlers,
-    ApprovalsHooks,
-    NotificationDispatcher,
     RequestFileAccess,
     T6TimerHandlers,
   ],
-  exports: [RequestCommandRunner, RequestSnapshotLoader, ProviderStandingHooks],
+  exports: [RequestEventsModule],
 })
 export class RequestsModule {}

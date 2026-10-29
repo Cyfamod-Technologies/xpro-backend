@@ -43,9 +43,9 @@ production / `'lax'` in development.
   credential you store.
 - `validateEnv` refuses to boot in production with the shipped development key.
 - `JWT_SECRET` must be unique per environment. Rotating it invalidates every token.
-- Tokens and OTPs are generated in `src/common/utils/token.util.ts` and stored
-  **hashed** (`hashToken`) — password reset tokens and email verification codes are
-  never persisted in plaintext.
+- Tokens are generated in `src/common/utils/token.util.ts` and stored **hashed**
+  (`hashToken`) — password reset and email verification tokens are never persisted
+  in plaintext.
 
 ## Passwords
 

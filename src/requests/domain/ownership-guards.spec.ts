@@ -198,4 +198,47 @@ describe('request ownership guards', () => {
     expect(currentOwnerActions).toContain('request.handoff');
     expect(currentOwnerActions).not.toContain('request.claim');
   });
+  it('checks the permission, then the note, then the owner revision (A-31)', () => {
+    const owned = request({ staffOwnerId: 'staff-1' });
+    const stale = { expectedOwnerId: 'staff-2', note: 'no' };
+    expect(
+      check('request.release', owned, { kind: 'staff' }, stale),
+    ).toMatchObject({
+      ok: false,
+      status: 403,
+      message: 'Only the owner or Operations can release this request.',
+    });
+    expect(
+      check(
+        'request.release',
+        owned,
+        { kind: 'staff', userId: 'staff-1' },
+        stale,
+      ),
+    ).toMatchObject({
+      ok: false,
+      status: 422,
+      message: 'Add a note for whoever picks this up.',
+    });
+    const operations: ActorView = {
+      kind: 'staff',
+      userId: 'ops-1',
+      permissions: new Set(['request.reassign']),
+    };
+    expect(check('request.reassign', owned, operations, stale)).toMatchObject({
+      ok: false,
+      status: 422,
+      message: 'Add a reason for reassigning this request.',
+    });
+    expect(
+      check('request.reassign', owned, { kind: 'staff' }, stale),
+    ).toMatchObject({ ok: false, status: 403 });
+    expect(
+      check('request.reassign', owned, operations, {
+        expectedOwnerId: 'staff-2',
+        staffId: 'staff-3',
+        note: 'Rebalance now',
+      }),
+    ).toMatchObject({ ok: false, status: 409 });
+  });
 });

@@ -4,6 +4,7 @@ import {
   ExceptionFilter,
   HttpException,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { discordAlert } from '../utils/discord-alert';
@@ -64,7 +65,10 @@ ${stack}
   private buildErrorBody(exception: unknown, status: number) {
     if (exception instanceof HttpException) {
       const raw = exception.getResponse();
-      if (status >= 500) {
+      if (
+        status >= 500 &&
+        !(exception instanceof ServiceUnavailableException)
+      ) {
         return {
           error: {
             code: 'INTERNAL_ERROR',

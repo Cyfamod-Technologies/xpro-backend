@@ -91,10 +91,37 @@ describe('POST /admin/dev/timers/fire (integration)', () => {
     await disabledApp.close();
   });
 
+  let serviceRequest: { id: string; number: number };
+  const ref = () => `XPR-${String(serviceRequest.number).padStart(5, '0')}`;
+
+  beforeEach(async () => {
+    const owner = await createUser(prisma);
+    serviceRequest = await prisma.serviceRequest.create({
+      data: {
+        ownerId: owner.id,
+        customerName: 'Integration customer',
+        title: 'Dev timer test',
+        service: 'Design',
+        cityId: owner.id,
+        districtId: owner.id,
+        address: '1 Test Street',
+        phone: '+2348012345678',
+        description: 'Integration test request for the dev timer endpoint.',
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await prisma.requestTimer.deleteMany({});
+    await prisma.serviceRequest.deleteMany({
+      where: { id: serviceRequest.id },
+    });
+  });
+
   const seedTimer = () =>
     prisma.requestTimer.create({
       data: {
-        requestId: 'req-1',
+        requestId: serviceRequest.id,
         kind: 'T1.expire',
         dueAt: new Date('2099-01-01T00:00:00Z'),
       },
@@ -106,7 +133,7 @@ describe('POST /admin/dev/timers/fire (integration)', () => {
     await request(server(disabledApp))
       .post('/admin/dev/timers/fire')
       .set('x-user', admin.id)
-      .send({ requestRef: 'req-1', kind: 'T1.expire' })
+      .send({ requestRef: ref(), kind: 'T1.expire' })
       .expect(404);
     expect(addTimersKickJob).not.toHaveBeenCalled();
   });
@@ -119,7 +146,7 @@ describe('POST /admin/dev/timers/fire (integration)', () => {
       await request(server(enabledApp))
         .post('/admin/dev/timers/fire')
         .set('x-user', user.id)
-        .send({ requestRef: 'req-1', kind: 'T1.expire' })
+        .send({ requestRef: ref(), kind: 'T1.expire' })
         .expect(403);
   });
 
@@ -131,7 +158,7 @@ describe('POST /admin/dev/timers/fire (integration)', () => {
     const res = await request(server(enabledApp))
       .post('/admin/dev/timers/fire')
       .set('x-user', admin.id)
-      .send({ requestRef: 'req-1', kind: 'T1.expire' })
+      .send({ requestRef: ref(), kind: 'T1.expire' })
       .expect(200);
 
     expect(res.body).toMatchObject({ data: { fired: 1 } });
@@ -143,17 +170,39 @@ describe('POST /admin/dev/timers/fire (integration)', () => {
     expect(addTimersKickJob).toHaveBeenCalledTimes(1);
   });
 
+  it('accepts the request uuid as well as the XPR number', async () => {
+    const admin = await createStaff(prisma, ['super_admin']);
+    await seedTimer();
+    const res = await request(server(enabledApp))
+      .post('/admin/dev/timers/fire')
+      .set('x-user', admin.id)
+      .send({ requestRef: serviceRequest.id, kind: 'T1.expire' })
+      .expect(200);
+    expect(res.body).toMatchObject({ data: { fired: 1 } });
+  });
+
+  it('is a 404 for an unknown or malformed request reference', async () => {
+    const admin = await createStaff(prisma, ['super_admin']);
+    await seedTimer();
+    for (const requestRef of ['XPR-99999', 'req-1'])
+      await request(server(enabledApp))
+        .post('/admin/dev/timers/fire')
+        .set('x-user', admin.id)
+        .send({ requestRef, kind: 'T1.expire' })
+        .expect(404);
+  });
+
   it('is a 404 when no pending timer matches, and validates the body', async () => {
     const admin = await createStaff(prisma, ['super_admin']);
     await request(server(enabledApp))
       .post('/admin/dev/timers/fire')
       .set('x-user', admin.id)
-      .send({ requestRef: 'req-1', kind: 'T1.expire' })
+      .send({ requestRef: ref(), kind: 'T1.expire' })
       .expect(404);
     await request(server(enabledApp))
       .post('/admin/dev/timers/fire')
       .set('x-user', admin.id)
-      .send({ requestRef: 'req-1' })
+      .send({ requestRef: ref() })
       .expect(400);
     expect(addTimersKickJob).not.toHaveBeenCalled();
   });

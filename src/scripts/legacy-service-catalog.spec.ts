@@ -4,7 +4,7 @@ import {
   serviceLines,
   serviceSkills,
   skillFieldKey,
-} from './service-lines';
+} from './legacy-service-catalog';
 
 describe('service catalogue', () => {
   it('defines all six API service lines and required skill fields', () => {

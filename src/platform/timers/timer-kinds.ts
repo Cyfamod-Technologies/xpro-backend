@@ -16,6 +16,7 @@ export const TimerKinds = {
   T9Reminder24h: 'T9.reminder24h',
   T9Reminder72h: 'T9.reminder72h',
   T9Lapse: 'T9.lapse',
+  PaymentPendingCheck: 'payment.pendingCheck',
   T11Reminder24h: 'T11.reminder24h',
   T11Staff48h: 'T11.staff48h',
   T12Reminder24h: 'T12.reminder24h',

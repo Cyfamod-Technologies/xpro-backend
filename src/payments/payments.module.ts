@@ -6,6 +6,7 @@ import { OutboxModule } from '../platform/outbox/outbox.module';
 import { PlatformModule } from '../platform/platform.module';
 import { TimersModule } from '../platform/timers/timers.module';
 import { UploadsModule } from '../uploads/uploads.module';
+import { RequestEventsModule } from '../requests/events/request-events.module';
 import {
   AdminFinanceController,
   AdminPaymentsController,
@@ -13,8 +14,12 @@ import {
   ProviderEarningsController,
   RequestPaymentsController,
 } from './payments.controller';
+import { GatewayInboxService } from './gateway-inbox.service';
+import { PaymentsFileAccess } from './payments-file-access';
 import { PAYMENT_GATEWAY, PaymentsService } from './payments.service';
+import { PaystackEventsService } from './paystack-events.service';
 import { FinanceService } from './finance.service';
+import { RefundsService } from './refunds.service';
 import { PaystackGateway } from './paystack.gateway';
 import { TestPaymentGateway } from './test-payment.gateway';
 
@@ -25,6 +30,7 @@ import { TestPaymentGateway } from './test-payment.gateway';
     OutboxModule,
     TimersModule,
     UploadsModule,
+    RequestEventsModule,
   ],
   controllers: [
     RequestPaymentsController,
@@ -49,9 +55,13 @@ import { TestPaymentGateway } from './test-payment.gateway';
       },
     },
     PaymentsService,
+    GatewayInboxService,
+    PaystackEventsService,
+    PaymentsFileAccess,
     FinanceService,
+    RefundsService,
     NotificationDispatcher,
   ],
-  exports: [PaymentsService, FinanceService],
+  exports: [PaymentsService, FinanceService, RefundsService],
 })
 export class PaymentsModule {}

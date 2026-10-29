@@ -1,3 +1,4 @@
+import { isOwner } from './guards/common';
 import type { DomainGuard, GuardResult } from './guards/types';
 
 const allowed = (): GuardResult => ({ ok: true });
@@ -70,7 +71,7 @@ export const canReject: DomainGuard<unknown> = (snap, actor) => {
 };
 
 export const canFreeCancel: DomainGuard<unknown> = (snap, actor) => {
-  if (actor.kind !== 'customer' || actor.userId !== snap.ownerId)
+  if (!isOwner(snap, actor))
     return {
       ok: false,
       status: 403,
@@ -95,5 +96,4 @@ export const INTAKE_GUARDS = {
   'request.clarify': canClarify,
   'request.review': canReview,
   'request.reject': canReject,
-  'request.cancel': canFreeCancel,
 } satisfies Record<string, DomainGuard<unknown>>;

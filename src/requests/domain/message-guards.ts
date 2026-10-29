@@ -1,4 +1,5 @@
 import type { ActorView, RequestSnapshot } from './snapshot';
+import { isCurrentProvider, isOwner } from './guards/common';
 import type { DomainGuard } from './guards/types';
 
 const TERMINAL = new Set(['closed', 'cancelled', 'rejected']);
@@ -17,13 +18,8 @@ export const canSendMessage: DomainGuard<unknown> = (
     };
   const messageInput = isMessageInput(input) ? input : null;
   if (!messageInput) {
-    if (actor.kind === 'customer' && actor.userId === snap.ownerId)
-      return { ok: true };
-    if (
-      actor.kind === 'provider' &&
-      snap.currentProviderUserId === actor.userId
-    )
-      return { ok: true };
+    if (isOwner(snap, actor)) return { ok: true };
+    if (isCurrentProvider(snap, actor)) return { ok: true };
     if (
       actor.kind === 'staff' &&
       ['message.customer', 'message.provider', 'message.internal'].some(
@@ -38,16 +34,11 @@ export const canSendMessage: DomainGuard<unknown> = (
       message: 'Choose a conversation available to your account.',
     };
   }
-  if (
-    actor.kind === 'customer' &&
-    messageInput.channel === 'customer' &&
-    actor.userId === snap.ownerId
-  )
+  if (messageInput.channel === 'customer' && isOwner(snap, actor))
     return { ok: true };
   if (
-    actor.kind === 'provider' &&
     messageInput.channel === 'provider' &&
-    snap.currentProviderUserId === actor.userId &&
+    isCurrentProvider(snap, actor) &&
     snap.accessibleProviderUserIds?.includes(actor.userId ?? '')
   )
     return { ok: true };

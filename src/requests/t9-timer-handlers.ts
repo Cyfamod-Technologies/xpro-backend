@@ -1,66 +1,81 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import type { RequestTimer } from '@prisma/client';
-import { NotificationDispatcher } from '../notifications/notification-dispatcher';
-import { OutboxService } from '../platform/outbox/outbox.service';
-import { TimersService } from '../platform/timers/timers.service';
 import { TimerRegistry } from '../platform/timers/timer-registry';
-import { PrismaService } from '../prisma/prisma.service';
+import {
+  PENDING_ATTEMPT_WINDOW_MS,
+  isFreshPendingAttempt,
+  newestPendingAttempt,
+} from '../payments/domain/pending-attempt';
 import { PaymentsService } from '../payments/payments.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { RequestCommandRunner } from './command-runner';
 
 @Injectable()
 export class T9TimerHandlers {
   constructor(
     registry: TimerRegistry,
     private readonly prisma: PrismaService,
-    private readonly timers: TimersService,
-    private readonly notifications: NotificationDispatcher,
-    private readonly outbox: OutboxService,
+    private readonly runner: RequestCommandRunner,
     private readonly payments: PaymentsService,
   ) {
     registry.register('T9.reminder24h', (timer) => this.remind(timer));
     registry.register('T9.reminder72h', (timer) => this.remind(timer));
     registry.register('T9.lapse', (timer) => this.lapse(timer));
+    registry.register('payment.pendingCheck', (timer) =>
+      this.pendingCheck(timer),
+    );
+  }
+
+  /** 05 §8: 30 minutes after checkout starts, ask Paystack what became of the attempt. */
+  private async pendingCheck(timer: RequestTimer) {
+    const result = await this.payments.recheckPending(timer.refId);
+    if (result !== 'pending') return;
+    await this.runner.runSystem(
+      'timer.payment.pendingCheck',
+      timer.requestId,
+      async (ctx) => {
+        if (ctx.snap.status !== 'awaiting_payment') return { changed: false };
+        const attempt = await ctx.tx.payment.findFirst({
+          where: { id: timer.refId, status: 'pending' },
+          select: { id: true },
+        });
+        if (!attempt) return { changed: false };
+        ctx.timers.start(
+          'payment.pendingCheck',
+          new Date(ctx.now.getTime() + PENDING_ATTEMPT_WINDOW_MS),
+          attempt.id,
+        );
+        return { bumpVersion: false };
+      },
+      { bumpVersion: false },
+    );
   }
 
   private async remind(timer: RequestTimer) {
-    const row = await this.prisma.quote.findFirst({
-      where: {
-        id: timer.refId,
-        requestId: timer.requestId,
-        status: 'accepted',
-      },
-      include: {
-        request: {
-          select: { id: true, number: true, ownerId: true, status: true },
-        },
-      },
-    });
-    if (
-      !row ||
-      row.request.status !== 'awaiting_payment' ||
-      !row.paymentDueAt ||
-      row.paymentDueAt <= new Date()
-    )
-      return;
-    await this.prisma.$transaction((tx) =>
-      this.notifications.dispatch(
-        tx,
-        'payment.reminder',
-        {
-          requestCode: format(row.request.number),
-          dueDate: row.paymentDueAt!.toLocaleDateString('en-NG', {
+    await this.runner.runSystem(
+      `timer.${timer.kind}`,
+      timer.requestId,
+      async (ctx) => {
+        if (ctx.snap.status !== 'awaiting_payment') return { changed: false };
+        const quote = await ctx.tx.quote.findFirst({
+          where: {
+            id: timer.refId,
+            requestId: ctx.snap.id,
+            status: 'accepted',
+          },
+        });
+        if (!quote?.paymentDueAt || quote.paymentDueAt <= ctx.now)
+          return { changed: false };
+        ctx.notify('payment.reminder', {
+          requestCode: ctx.snap.number,
+          amount: Number(quote.total),
+          dueDate: quote.paymentDueAt.toLocaleDateString('en-NG', {
             timeZone: 'Africa/Lagos',
           }),
-        },
-        {
-          requestId: row.request.id,
-          ownerId: row.request.ownerId,
-          actorId: null,
-        },
-      ),
+        });
+      },
+      { bumpVersion: false },
     );
-    await this.outbox.kick();
   }
 
   private async lapse(timer: RequestTimer) {
@@ -73,84 +88,55 @@ export class T9TimerHandlers {
       },
       select: { id: true },
     });
-    if (pending && (await this.payments.recheckPending(pending.id))) return;
-    const result = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw(
-        Prisma.sql`SELECT id FROM service_requests WHERE id = ${timer.requestId}::uuid FOR UPDATE`,
-      );
-      const quote = await tx.quote.findFirst({
-        where: {
-          id: timer.refId,
-          requestId: timer.requestId,
-          status: 'accepted',
-        },
-        include: {
-          request: {
-            select: { id: true, number: true, ownerId: true, status: true },
+    if (
+      pending &&
+      (await this.payments.recheckPending(pending.id)) === 'settled'
+    )
+      return;
+    await this.runner.runSystem(
+      'timer.T9.lapse',
+      timer.requestId,
+      async (ctx) => {
+        if (ctx.snap.status !== 'awaiting_payment') return { changed: false };
+        const quote = await ctx.tx.quote.findFirst({
+          where: {
+            id: timer.refId,
+            requestId: ctx.snap.id,
+            status: 'accepted',
           },
-        },
-      });
-      const now = new Date();
-      if (
-        !quote ||
-        quote.request.status !== 'awaiting_payment' ||
-        !quote.paymentDueAt ||
-        quote.paymentDueAt > now
-      )
-        return null;
-      const pending = await tx.payment.findFirst({
-        where: {
-          requestId: quote.requestId,
-          quoteId: quote.id,
-          status: 'pending',
-        },
-        select: { id: true },
-      });
-      const timerPayload =
-        timer.payload && typeof timer.payload === 'object'
-          ? (timer.payload as Record<string, unknown>)
-          : {};
-      if (pending && timerPayload.retried !== true) {
-        await this.timers.start(tx, {
-          requestId: quote.requestId,
-          kind: 'T9.lapse',
-          dueAt: new Date(now.getTime() + 30 * 60 * 1000),
-          refId: quote.id,
-          payload: { retried: true },
         });
-        return null;
-      }
-      await tx.quote.update({
-        where: { id: quote.id },
-        data: { status: 'expired' },
-      });
-      await tx.serviceRequest.update({
-        where: { id: quote.requestId },
-        data: { status: 'matched', version: { increment: 1 }, updatedAt: now },
-      });
-      await tx.auditLog.create({
-        data: {
-          actorType: 'system',
-          entityType: 'service_request',
-          entityId: quote.requestId,
-          action: 'Payment window lapsed',
-          metadata: { quoteId: quote.id },
-        },
-      });
-      await this.notifications.dispatch(
-        tx,
-        'payment.lapsed',
-        { requestCode: format(quote.request.number) },
-        {
-          requestId: quote.request.id,
-          ownerId: quote.request.ownerId,
-          actorId: null,
-        },
-      );
-      return quote.request.id;
-    });
-    if (result) await this.outbox.kick();
+        if (!quote?.paymentDueAt || quote.paymentDueAt > ctx.now)
+          return { changed: false };
+        // 04 §6.12: a pending attempt younger than 30 minutes defers the lapse; an older one does not.
+        const attempts = await ctx.tx.payment.findMany({
+          where: {
+            requestId: quote.requestId,
+            quoteId: quote.id,
+            status: 'pending',
+            method: 'paystack',
+          },
+          select: { status: true, method: true, createdAt: true },
+        });
+        if (isFreshPendingAttempt(newestPendingAttempt(attempts), ctx.now)) {
+          ctx.timers.start(
+            'T9.lapse',
+            new Date(ctx.now.getTime() + PENDING_ATTEMPT_WINDOW_MS),
+            quote.id,
+          );
+          return { bumpVersion: false };
+        }
+        await ctx.tx.quote.update({
+          where: { id: quote.id },
+          data: { status: 'expired' },
+        });
+        await ctx.tx.serviceRequest.update({
+          where: { id: quote.requestId },
+          data: { status: 'matched' },
+        });
+        ctx.audit('Payment window lapsed', { changes: { quoteId: quote.id } });
+        ctx.approvals.open('payment_lapsed', quote.id);
+        ctx.notify('payment.lapsed', { requestCode: ctx.snap.number });
+      },
+    );
   }
 }
-
-const format = (number: number) => `XPR-${String(number).padStart(5, '0')}`;

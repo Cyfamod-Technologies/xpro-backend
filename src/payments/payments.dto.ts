@@ -20,19 +20,27 @@ export class OfflinePaymentDto {
     'bank_transfer' | 'cash' | 'cheque';
   @IsString() @MinLength(1) @MaxLength(200) reference!: string;
   @IsISO8601() paidAt!: string;
-  @IsString() proofFileId!: string;
+  // A missing proof is refused by the payment.recordOffline guard with the 05 §6.2 message.
+  @IsOptional() @IsString() @MaxLength(100) proofFileId?: string;
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
+// The guards give blank notes and reasons their 05 §6.2 messages.
 export class PaymentNoteDto {
-  @IsString() @MinLength(3) @MaxLength(1000) note!: string;
+  @IsString() @MaxLength(1000) note!: string;
 }
 export class RejectPaymentDto {
-  @IsString() @MinLength(3) @MaxLength(1000) reason!: string;
+  @IsString() @MaxLength(1000) reason!: string;
 }
+// The refund rules give a blank reason its message (05 §6.4), so there is no MinLength here.
 export class RefundDecisionDto {
   @IsBoolean() approve!: boolean;
   @IsOptional() @IsInt() @Min(0) @Max(Number.MAX_SAFE_INTEGER) amount?: number;
-  @IsString() @MinLength(3) @MaxLength(1000) reason!: string;
+  @IsString() @MaxLength(1000) reason!: string;
+}
+// Kobo. Leaving the amount out asks for the whole refundable balance.
+export class RefundRequestDto {
+  @IsOptional() @IsInt() @Min(0) @Max(Number.MAX_SAFE_INTEGER) amount?: number;
+  @IsString() @MaxLength(1000) reason!: string;
 }
 export class PayoutDecisionDto {
   @IsOptional() @IsString() @MaxLength(1000) note?: string;

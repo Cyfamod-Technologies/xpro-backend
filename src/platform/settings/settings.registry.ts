@@ -49,27 +49,16 @@ const validWeights = (value: unknown): string | null => {
     : UNSPECIFIED_SETTING_MESSAGE;
 };
 const validModeByService = (value: unknown): string | null => {
-  const lines = [
-    'Design',
-    'Construction',
-    'Hire',
-    'Procurement',
-    'Facility management',
-    'Waste management',
-  ];
-  if (
-    !value ||
-    typeof value !== 'object' ||
-    Array.isArray(value) ||
-    Object.keys(value).length !== lines.length ||
-    !lines.every((line) =>
-      ['auto', 'manual'].includes(
-        String((value as Record<string, unknown>)[line]),
-      ),
-    )
-  )
+  if (!value || typeof value !== 'object' || Array.isArray(value))
     return UNSPECIFIED_SETTING_MESSAGE;
-  return null;
+  const modes = Object.entries(value);
+  return modes.length > 0 &&
+    modes.every(
+      ([service, mode]) =>
+        service.trim().length > 0 && (mode === 'auto' || mode === 'manual'),
+    )
+    ? null
+    : UNSPECIFIED_SETTING_MESSAGE;
 };
 const deadlineDefaults: Record<string, number> = {
   unclaimed: 120,
@@ -81,6 +70,8 @@ const deadlineDefaults: Record<string, number> = {
   quote_build: 480,
   quote_approval: 480,
   quote_followup: 480,
+  quote_expired: 480,
+  payment_lapsed: 480,
   schedule_needed: 480,
   schedule_change: 240,
   progress: 480,
@@ -164,6 +155,11 @@ export const SETTINGS_REGISTRY = {
     },
     'Assignment mode by service',
     validModeByService,
+  ),
+  'catalog.maxDepth': operational(
+    2,
+    'Service catalog depth',
+    integerRange(2, 10, UNSPECIFIED_SETTING_MESSAGE),
   ),
   'assignment.offerExpiryHours': operational(
     24,

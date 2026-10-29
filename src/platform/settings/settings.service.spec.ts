@@ -20,7 +20,7 @@ const staffActor: ActorContext = {
 
 function serviceHarness(setting: unknown = null) {
   const tx = {
-    $queryRaw: jest.fn().mockResolvedValue([]),
+    $executeRaw: jest.fn().mockResolvedValue(1),
     setting: {
       findUnique: jest.fn().mockResolvedValue(setting),
       upsert: jest

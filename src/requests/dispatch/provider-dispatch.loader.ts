@@ -1,15 +1,15 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { DispatchProvider } from '../domain/eligibility';
+import { countCommittedJobs } from '../domain/committed-jobs';
 import type { TimeOff } from '../../platform/calendar/provider-calendar';
+import { loadCatalog } from '../../platform/catalog/catalog.tree';
+import { profileSkillIds } from '../../platform/catalog/provider-skills';
 
-const COMMITTED_REQUEST_STATUSES = new Set([
-  'ready_to_schedule',
-  'scheduled',
-  'in_progress',
-  'blocked',
-  'completion_pending',
-]);
+/** The Prisma client or a transaction on it; a command passes its `tx` so the data is read inside the lock. */
+type Db = PrismaService | Prisma.TransactionClient;
+
 const strings = (value: unknown): string[] =>
   Array.isArray(value)
     ? value.filter((item): item is string => typeof item === 'string')
@@ -35,9 +35,33 @@ const timeOffEntries = (value: unknown): TimeOff[] =>
 export class ProviderDispatchLoader {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(now: Date, requestId: string): Promise<DispatchProvider[]> {
+  list(
+    now: Date,
+    requestId: string,
+    db: Db = this.prisma,
+  ): Promise<DispatchProvider[]> {
+    return this.load(db, now, requestId);
+  }
+
+  /** One provider, loaded fresh (used after `SELECT … FOR UPDATE` on the profile, 04 §6.6 capacity locking). */
+  async one(
+    providerId: string,
+    now: Date,
+    requestId: string,
+    db: Db = this.prisma,
+  ): Promise<DispatchProvider | null> {
+    return (await this.load(db, now, requestId, providerId))[0] ?? null;
+  }
+
+  private async load(
+    db: Db,
+    now: Date,
+    requestId: string,
+    providerId?: string,
+  ): Promise<DispatchProvider[]> {
     const since = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-    const profiles = await this.prisma.providerProfile.findMany({
+    const profiles = await db.providerProfile.findMany({
+      ...(providerId ? { where: { id: providerId } } : {}),
       include: {
         user: {
           select: { id: true, firstName: true, lastName: true, status: true },
@@ -46,12 +70,13 @@ export class ProviderDispatchLoader {
       },
     });
     const profileIds = profiles.map(({ id }) => id);
-    const [assignments, events] = await Promise.all([
-      this.prisma.assignment.findMany({
+    const [catalog, assignments, events] = await Promise.all([
+      loadCatalog(db),
+      db.assignment.findMany({
         where: { providerId: { in: profileIds } },
         include: { request: { select: { id: true, status: true } } },
       }),
-      this.prisma.providerReliabilityEvent.findMany({
+      db.providerReliabilityEvent.findMany({
         where: { providerId: { in: profileIds }, occurredAt: { gte: since } },
       }),
     ]);
@@ -59,18 +84,14 @@ export class ProviderDispatchLoader {
       const providerAssignments = assignments.filter(
         ({ providerId }) => providerId === profile.id,
       );
-      const committedJobs = new Set(
-        providerAssignments
-          .filter(
-            (assignment) =>
-              assignment.requestId !== requestId &&
-              (assignment.status === 'offered' ||
-                assignment.status === 'pending_approval' ||
-                (assignment.status === 'accepted' &&
-                  COMMITTED_REQUEST_STATUSES.has(assignment.request.status))),
-          )
-          .map(({ requestId }) => requestId),
-      ).size;
+      const committedJobs = countCommittedJobs(
+        providerAssignments.map((assignment) => ({
+          requestId: assignment.requestId,
+          status: assignment.status,
+          requestStatus: assignment.request.status,
+        })),
+        requestId,
+      );
       const providerEvents = events.filter(
         ({ providerId }) => providerId === profile.id,
       );
@@ -88,12 +109,7 @@ export class ProviderDispatchLoader {
           kind === 'expired' ||
           (kind === 'no_show_confirmed' && !voided.has(sourceId)),
       );
-      const skills = Object.fromEntries(
-        Object.entries(object(profile.skills)).map(([key, value]) => [
-          key,
-          strings(value),
-        ]),
-      );
+      const { serviceIds, skillIds } = profileSkillIds(catalog, profile);
       const providerName = [profile.user.firstName, profile.user.lastName]
         .filter(Boolean)
         .join(' ')
@@ -106,11 +122,10 @@ export class ProviderDispatchLoader {
         name: profile.businessName || providerName || profile.trade,
         verification: profile.verification,
         userStatus: profile.user.status,
-        delisted: profile.verification === 'delisted',
-        services: strings(profile.services),
-        skills,
+        reliabilityStatus: profile.reliabilityStatus,
+        serviceIds,
+        skillIds,
         serviceAreaIds: areas,
-        cityId: profile.cityId,
         available: profile.available,
         capacity: profile.capacity,
         committedJobs,

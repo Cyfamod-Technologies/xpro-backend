@@ -1,6 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { Prisma, UploadPurpose, UploadStatus } from '@prisma/client';
 import { UploadsService } from './uploads.service';
+import { REQUEST_ENTITY } from './entity-types';
 
 describe('UploadsService.attach', () => {
   const readyUpload = {
@@ -47,7 +48,7 @@ describe('UploadsService.attach', () => {
         ['upload-id'],
         'owner-id',
         UploadPurpose.request_attachment,
-        'request',
+        REQUEST_ENTITY,
         'request-id',
       ),
     ).rejects.toThrow(
@@ -70,7 +71,7 @@ describe('UploadsService.attach', () => {
       ['upload-id'],
       'owner-id',
       UploadPurpose.request_attachment,
-      'request',
+      REQUEST_ENTITY,
       'request-id',
     );
     expect(updateMany).toHaveBeenCalledWith(
@@ -80,7 +81,7 @@ describe('UploadsService.attach', () => {
         }) as unknown,
         data: expect.objectContaining({
           status: UploadStatus.attached,
-          entityType: 'request',
+          entityType: REQUEST_ENTITY,
           entityId: 'request-id',
         }) as unknown,
       }),
@@ -99,7 +100,7 @@ describe('UploadsService.attach', () => {
         ['upload-id', 'upload-id'],
         'owner-id',
         UploadPurpose.request_attachment,
-        'request',
+        REQUEST_ENTITY,
         'request-id',
       ),
     ).rejects.toBeInstanceOf(ConflictException);

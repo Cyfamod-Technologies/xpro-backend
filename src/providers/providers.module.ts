@@ -3,12 +3,17 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { PlatformModule } from '../platform/platform.module';
 import { LocationsModule } from '../platform/locations/locations.module';
 import { StorageModule } from '../storage/storage.module';
-import { RequestsModule } from '../requests/requests.module';
+import { RequestEventsModule } from '../requests/events/request-events.module';
 import {
   ProvidersController,
   ProviderReviewController,
 } from './providers.controller';
 import { ProvidersService } from './providers.service';
+import {
+  FeaturedProvidersAdminController,
+  FeaturedProvidersController,
+} from './featured-providers.controller';
+import { FeaturedProvidersService } from './featured-providers.service';
 
 @Module({
   imports: [
@@ -16,9 +21,15 @@ import { ProvidersService } from './providers.service';
     AuditLogsModule,
     StorageModule,
     LocationsModule,
-    RequestsModule,
+    RequestEventsModule,
   ],
-  controllers: [ProvidersController, ProviderReviewController],
-  providers: [ProvidersService],
+  controllers: [
+    ProvidersController,
+    ProviderReviewController,
+    FeaturedProvidersController,
+    FeaturedProvidersAdminController,
+  ],
+  providers: [ProvidersService, FeaturedProvidersService],
+  exports: [ProvidersService],
 })
 export class ProvidersModule {}

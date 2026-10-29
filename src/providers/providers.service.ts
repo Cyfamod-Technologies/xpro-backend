@@ -2,12 +2,15 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { Redis } from 'ioredis';
 import {
   Prisma,
   ProviderBankStatus,
@@ -23,8 +26,23 @@ import { hasExpectedSignature, validateFile } from '../storage/file-validation';
 import type { StaffPermission } from '../staff/staff-permissions';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
+import { AppError } from '../platform/errors/app-error';
+import { loadCatalog } from '../platform/catalog/catalog.tree';
+import type { CatalogIndex } from '../platform/catalog/catalog.types';
+import {
+  idsFromNames,
+  namesFromIds,
+  profileSkillIds,
+  rootByName,
+  skillEntries,
+  type ProviderIds,
+} from '../platform/catalog/provider-skills';
+import { confirmedJobConflictMessage } from '../requests/domain/schedule-checks';
 import { LocationsService } from '../platform/locations/locations.service';
-import { ProviderStandingHooks } from '../requests/dispatch/provider-standing.hooks';
+import {
+  RequestEventsService,
+  type HoursConflict,
+} from '../requests/events/request-events.service';
 import { intervalFits } from '../platform/calendar/provider-calendar';
 import {
   ProviderAvailabilityDto,
@@ -42,10 +60,16 @@ import {
 const PROVIDER_REVIEW_DENIED =
   'You do not have permission to review provider details.';
 
+const BANKS_CACHE_KEY = 'paystack:banks:ng';
+const BANKS_CACHE_TTL_SECONDS = 60 * 60;
+const RESOLVE_CACHE_TTL_SECONDS = 30 * 60;
+
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 
 @Injectable()
 export class ProvidersService {
+  private readonly logger = new Logger(ProvidersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogsService,
@@ -53,7 +77,8 @@ export class ProvidersService {
     private readonly storage: StorageService,
     private readonly actors: ActorService,
     private readonly locations: LocationsService,
-    private readonly standingHooks: ProviderStandingHooks,
+    private readonly requestEvents: RequestEventsService,
+    @Inject('REDIS_CLIENT') private readonly redis: Redis,
   ) {}
 
   async recordReliabilityEvent(
@@ -67,10 +92,11 @@ export class ProvidersService {
       confirmedBy?: string;
       note?: string;
     },
-  ): Promise<void> {
-    try {
-      await tx.providerReliabilityEvent.create({
-        data: {
+  ): Promise<'review_due' | 'cleared' | null> {
+    // createMany + skipDuplicates is ON CONFLICT DO NOTHING; a caught P2002 would abort the caller's interactive transaction.
+    const created = await tx.providerReliabilityEvent.createMany({
+      data: [
+        {
           providerId: input.providerId,
           kind: input.kind,
           sourceId: input.sourceId,
@@ -79,15 +105,14 @@ export class ProvidersService {
           confirmedBy: input.confirmedBy,
           note: input.note,
         },
-      });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      )
-        return;
-      throw error;
-    }
+      ],
+      skipDuplicates: true,
+    });
+    if (
+      !created.count ||
+      (input.kind !== 'no_show_confirmed' && input.kind !== 'no_show_voided')
+    )
+      return null;
 
     const since = new Date(
       input.occurredAt.getTime() - 90 * 24 * 60 * 60 * 1000,
@@ -114,7 +139,17 @@ export class ProvidersService {
         where: { id: input.providerId },
         data: { reliabilityStatus: 'review_due' },
       });
+      return 'review_due';
     }
+    if (input.kind === 'no_show_voided') {
+      // 03 §6.3: a void closes a review that is not yet decided once the count drops below the threshold.
+      const cleared = await tx.providerProfile.updateMany({
+        where: { id: input.providerId, reliabilityStatus: 'review_due' },
+        data: { reliabilityStatus: 'normal' },
+      });
+      return cleared.count > 0 ? 'cleared' : null;
+    }
+    return null;
   }
 
   async myProfile(userId: string) {
@@ -127,7 +162,7 @@ export class ProvidersService {
       },
     });
     return profile
-      ? this.project(profile, true)
+      ? this.project(await loadCatalog(this.prisma), profile, true)
       : { verification: 'draft', profile: null };
   }
 
@@ -136,28 +171,7 @@ export class ProvidersService {
     const secret = this.config.get<string>('PAYSTACK_SECRET_KEY');
     if (!secret)
       throw new ServiceUnavailableException('Bank lookup is not configured.');
-    let response: Response;
-    try {
-      response = await fetch(
-        'https://api.paystack.co/bank?country=nigeria&perPage=100',
-        {
-          headers: { Authorization: `Bearer ${secret}` },
-          signal: AbortSignal.timeout(8000),
-        },
-      );
-    } catch {
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    }
-    if (!response.ok)
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    const result = (await response.json()) as {
-      data?: { code: string; name: string }[];
-    };
-    return (result.data ?? []).map(({ code, name }) => ({ code, name }));
+    return this.paystackBanks(secret);
   }
 
   async resolveBankForProvider(userId: string, dto: ProviderBankResolveDto) {
@@ -306,10 +320,15 @@ export class ProvidersService {
       throw new ForbiddenException(
         'Verify your email before submitting your provider profile.',
       );
-    const normalized = this.validateSubmission(dto);
+    const normalized = await this.validateSubmission(dto);
     const locationValues = await this.locations.resolveProviderLocationIds(dto);
     await this.verifyAttachments(userId, dto);
-    const resolved = await this.resolveBank(dto.bankCode, dto.accountNumber);
+    const bankCode = dto.bankCode ?? '';
+    const accountNumber = dto.accountNumber ?? '';
+    const bankDetailsProvided = Boolean(bankCode || accountNumber);
+    const resolved = bankDetailsProvided
+      ? await this.resolveBank(bankCode, accountNumber)
+      : null;
     const current = await this.prisma.providerProfile.findUnique({
       where: { userId },
     });
@@ -333,11 +352,13 @@ export class ProvidersService {
       const proposed = {
         trade: dto.trade.trim(),
         services: normalized.services,
+        serviceIds: normalized.serviceIds,
         city: locationValues.cityName,
         cityId: locationValues.cityId,
         serviceAreas: locationValues.serviceAreaNames,
         serviceAreaIds: locationValues.serviceAreaIds,
         skills: normalized.skills,
+        skillIds: normalized.skillIds,
         capacity: dto.capacity,
         documents: dto.documents,
         photo: dto.photo,
@@ -378,9 +399,11 @@ export class ProvidersService {
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || undefined,
             services: json(normalized.services),
+            serviceIds: json(normalized.serviceIds),
             serviceAreas: json(locationValues.serviceAreaNames),
             serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
+            skillIds: json(normalized.skillIds),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
             experience: dto.experience,
@@ -398,9 +421,11 @@ export class ProvidersService {
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || null,
             services: json(normalized.services),
+            serviceIds: json(normalized.serviceIds),
             serviceAreas: json(locationValues.serviceAreaNames),
             serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
+            skillIds: json(normalized.skillIds),
             capacity: dto.capacity,
             workingHours: json(dto.workingHours),
             experience: dto.experience,
@@ -425,27 +450,29 @@ export class ProvidersService {
         where: { providerId: profile.id, state: ProviderBankStatus.verified },
       });
       if (
+        bankDetailsProvided &&
         pendingBank &&
-        (pendingBank.bankCode !== dto.bankCode ||
-          decryptSecret(pendingBank.accountNumberEnc) !== dto.accountNumber)
+        (pendingBank.bankCode !== bankCode ||
+          decryptSecret(pendingBank.accountNumberEnc) !== accountNumber)
       ) {
         throw new ConflictException(
           'Your previous bank change is still awaiting XPro review.',
         );
       }
       const sameVerifiedBank =
+        bankDetailsProvided &&
         verifiedBank &&
-        verifiedBank.bankCode === dto.bankCode &&
-        decryptSecret(verifiedBank.accountNumberEnc) === dto.accountNumber;
-      if (!pendingBank && !sameVerifiedBank)
+        verifiedBank.bankCode === bankCode &&
+        decryptSecret(verifiedBank.accountNumberEnc) === accountNumber;
+      if (bankDetailsProvided && !pendingBank && !sameVerifiedBank && resolved)
         await tx.providerBankAccount.create({
           data: {
             providerId: profile.id,
-            bankCode: dto.bankCode,
+            bankCode,
             bankName: resolved.bankName,
-            accountNumberEnc: encryptSecret(dto.accountNumber),
+            accountNumberEnc: encryptSecret(accountNumber),
             accountNameEnc: encryptSecret(resolved.accountName),
-            last4: dto.accountNumber.slice(-4),
+            last4: accountNumber.slice(-4),
             state: ProviderBankStatus.pending,
           },
         });
@@ -560,10 +587,7 @@ export class ProvidersService {
       metadata: { available: dto.available },
     });
     if (!dto.available)
-      await this.standingHooks.onProviderUnavailable(
-        updated.id,
-        'Provider turned availability off.',
-      );
+      await this.requestEvents.onProviderUnavailable(updated.id);
     return this.myProfile(userId);
   }
 
@@ -576,7 +600,9 @@ export class ProvidersService {
         'Submit your provider profile before setting working hours.',
       );
     this.validateCalendar(dto.workingHours, dto.timeOff ?? []);
+    const conflicts: HoursConflict[] = [];
     const updated = await this.prisma.$transaction(async (tx) => {
+      conflicts.length = 0;
       await tx.$queryRaw(
         Prisma.sql`SELECT id FROM provider_profiles WHERE id = ${profile.id} FOR UPDATE`,
       );
@@ -607,12 +633,15 @@ export class ProvidersService {
           schedule.endAt,
           displayName,
         );
-        if (problem) {
-          const date = schedule.startAt.toISOString().slice(0, 10);
-          throw new ConflictException(
-            `You have a confirmed job on ${date} (${schedule.request.number}). Ask XPro to move it before changing these hours.`,
+        if (problem)
+          throw new AppError(
+            409,
+            'STATE_CONFLICT',
+            confirmedJobConflictMessage(
+              schedule.startAt,
+              schedule.request.number,
+            ),
           );
-        }
       }
       const proposed = await tx.schedule.findMany({
         where: { providerId: profile.id, status: 'proposed' },
@@ -627,12 +656,9 @@ export class ProvidersService {
           displayName,
         );
         if (problem)
-          await tx.schedule.update({
-            where: { id: schedule.id },
-            data: {
-              status: 'changes_requested',
-              responses: { push: 'Provider: working hours changed' },
-            },
+          conflicts.push({
+            scheduleId: schedule.id,
+            requestId: schedule.requestId,
           });
       }
       return tx.providerProfile.update({
@@ -644,6 +670,7 @@ export class ProvidersService {
         },
       });
     });
+    await this.requestEvents.onProviderHoursChanged(profile.id, conflicts);
     this.audit.record({
       actorType: 'user',
       actorId: userId,
@@ -689,8 +716,31 @@ export class ProvidersService {
       },
       orderBy: { updatedAt: 'asc' },
     });
-    return rows.map((row) => {
-      const payout = this.project(row, false, bankReview).payout;
+    const signups =
+      providerReview &&
+      (!query.verification ||
+        query.verification === ProviderVerificationStatus.draft)
+        ? await this.prisma.user.findMany({
+            where: {
+              platformRoles: { some: { role: 'provider' } },
+              providerProfile: null,
+              deletedAt: null,
+              status: { notIn: ['deleted', 'archived'] },
+            },
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              status: true,
+              createdAt: true,
+            },
+            orderBy: { createdAt: 'asc' },
+          })
+        : [];
+    const catalog = await loadCatalog(this.prisma);
+    const profiles = rows.map((row) => {
+      const payout = this.project(catalog, row, false, bankReview).payout;
       if (!providerReview) {
         return {
           id: row.id,
@@ -707,12 +757,25 @@ export class ProvidersService {
         };
       }
       return {
-        ...this.project(row, false, bankReview),
+        ...this.project(catalog, row, false, bankReview),
         firstName: row.user.firstName,
         lastName: row.user.lastName,
         email: row.user.email,
       };
     });
+    return [
+      ...profiles,
+      ...signups.map((user) => ({
+        id: user.id,
+        userId: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        profileStarted: false as const,
+        accountStatus: user.status,
+        registeredAt: user.createdAt.toISOString(),
+      })),
+    ];
   }
 
   async reviewProfile(
@@ -766,11 +829,11 @@ export class ProvidersService {
       metadata: { version: updated.version, note: dto.note?.trim() },
     });
     if (dto.decision !== 'approved')
-      await this.standingHooks.onProviderUnavailable(
+      await this.requestEvents.onProviderStandingChanged(
         profile.id,
         'Provider verification was rejected.',
       );
-    return this.project(updated, false);
+    return this.project(await loadCatalog(this.prisma), updated, false);
   }
 
   async reviewChanges(
@@ -804,6 +867,9 @@ export class ProvidersService {
             ? {
                 trade,
                 services: json(changes.services),
+                serviceIds: Array.isArray(changes.serviceIds)
+                  ? json(changes.serviceIds)
+                  : Prisma.DbNull,
                 serviceAreas: json(changes.serviceAreas),
                 ...(typeof changes.city === 'string'
                   ? { city: changes.city }
@@ -815,6 +881,12 @@ export class ProvidersService {
                   ? { serviceAreaIds: changes.serviceAreaIds as string[] }
                   : {}),
                 skills: json(changes.skills),
+                skillIds:
+                  changes.skillIds &&
+                  typeof changes.skillIds === 'object' &&
+                  !Array.isArray(changes.skillIds)
+                    ? json(changes.skillIds)
+                    : Prisma.DbNull,
                 capacity: Number(changes.capacity),
                 documents: json(changes.documents),
                 photo: json(changes.photo),
@@ -928,7 +1000,7 @@ export class ProvidersService {
       },
     });
     if (!profile) throw new NotFoundException('Provider profile not found.');
-    return this.project(profile, false);
+    return this.project(await loadCatalog(this.prisma), profile, false);
   }
 
   private async requireProvider(userId: string) {
@@ -953,9 +1025,17 @@ export class ProvidersService {
     });
   }
 
-  private validateSubmission(dto: ProviderProfileSubmissionDto) {
-    if (!dto.services.length)
+  private async validateSubmission(dto: ProviderProfileSubmissionDto) {
+    const catalog = await loadCatalog(this.prisma);
+    const requested = this.requestedSkills(catalog, dto);
+    if (!requested.serviceIds.length)
       throw new BadRequestException('Choose at least one service.');
+    const roots = [...new Set(requested.serviceIds)].map((id) => {
+      const root = catalog.roots.find((item) => item.id === id && item.active);
+      if (!root)
+        throw new BadRequestException('Choose services from the list.');
+      return root;
+    });
     if (!dto.serviceAreaIds?.length && !dto.serviceAreas?.length)
       throw new BadRequestException('Add at least one service area.');
     if (!dto.documents.length)
@@ -967,23 +1047,67 @@ export class ProvidersService {
       !['image/png', 'image/jpeg', 'image/webp'].includes(dto.photo.type)
     )
       throw new BadRequestException('Add a clear face photo.');
-    if (!/^\d{10}$/.test(dto.accountNumber))
+    if (Boolean(dto.bankCode) !== Boolean(dto.accountNumber))
+      throw new BadRequestException(
+        'Provide both bank details or leave them blank for now.',
+      );
+    if (dto.accountNumber && !/^\d{10}$/.test(dto.accountNumber))
       throw new BadRequestException('Enter a 10-digit account number.');
-    for (const service of dto.services)
-      if (!Array.isArray(dto.skills?.[service]) || !dto.skills[service].length)
+    const skillIds: Record<string, string[]> = {};
+    for (const root of roots) {
+      const chosen: unknown = requested.skillIds[root.id] ?? [];
+      const offered = skillEntries(root, { activeOnly: true });
+      if (
+        !Array.isArray(chosen) ||
+        chosen.some(
+          (id) =>
+            typeof id !== 'string' || !offered.some((entry) => entry.id === id),
+        )
+      )
         throw new BadRequestException(
-          `Choose at least one skill for ${service}.`,
+          `Choose ${root.name} skills from the list.`,
         );
+      if (offered.length && !chosen.length)
+        throw new BadRequestException(
+          `Choose at least one skill for ${root.name}.`,
+        );
+      skillIds[root.id] = [...new Set(chosen as string[])];
+    }
     this.validateCalendar(dto.workingHours, []);
+    const serviceIds = roots.map(({ id }) => id);
     return {
-      services: [...new Set(dto.services)],
+      serviceIds,
+      skillIds,
+      ...namesFromIds(catalog, serviceIds, skillIds),
       serviceAreas: [
         ...new Set(
           (dto.serviceAreas ?? []).map((area) => area.trim()).filter(Boolean),
         ),
       ],
-      skills: dto.skills,
     };
+  }
+
+  /** The submitted ids, or the ids that an older client's names resolve to. */
+  private requestedSkills(
+    catalog: CatalogIndex,
+    dto: ProviderProfileSubmissionDto,
+  ): ProviderIds {
+    if (dto.serviceIds)
+      return { serviceIds: dto.serviceIds, skillIds: dto.skillIds ?? {} };
+    const services = dto.services ?? [];
+    const unknown = services.find((name) => !rootByName(catalog, name));
+    if (unknown !== undefined)
+      throw new BadRequestException(`${unknown} is not a service XPro offers.`);
+    const { serviceIds, skillIds, unmatched } = idsFromNames(
+      catalog,
+      services,
+      dto.skills,
+    );
+    if (unmatched.length)
+      throw new BadRequestException(
+        `Choose ${unmatched[0].split(' › ')[0]} skills from the list.`,
+      );
+    return { serviceIds, skillIds };
   }
 
   private async verifyAttachments(
@@ -1073,31 +1197,21 @@ export class ProvidersService {
       throw new ServiceUnavailableException(
         'Bank account verification is not configured.',
       );
-    let bankResponse: Response;
-    try {
-      bankResponse = await fetch(
-        'https://api.paystack.co/bank?country=nigeria&perPage=100',
-        {
-          headers: { Authorization: `Bearer ${secret}` },
-          signal: AbortSignal.timeout(8000),
-        },
-      );
-    } catch {
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    }
-    if (!bankResponse.ok)
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    const bankPayload = (await bankResponse.json()) as {
-      data?: { code: string; name: string }[];
-    };
-    const bankName = bankPayload.data?.find(
-      (bank) => bank.code === bankCode,
-    )?.name;
+    const banks = await this.paystackBanks(secret);
+    const bankName = banks.find((bank) => bank.code === bankCode)?.name;
     if (!bankName) throw new BadRequestException('Choose a valid bank.');
+    const redacted = `bank ${bankCode} account ending ${accountNumber.slice(-4)}`;
+    const cacheKey = `paystack:resolve:${createHash('sha256')
+      .update(`${bankCode}:${accountNumber}`)
+      .digest('hex')}`;
+    const cached = await this.cacheGet(cacheKey);
+    if (cached) {
+      try {
+        return { bankName, accountName: decryptSecret(cached) };
+      } catch {
+        this.logger.warn(`Ignoring unreadable resolve cache for ${redacted}`);
+      }
+    }
     let resolveResponse: Response;
     try {
       resolveResponse = await fetch(
@@ -1112,20 +1226,117 @@ export class ProvidersService {
         'Bank lookup is temporarily unavailable.',
       );
     }
-    if (!resolveResponse.ok)
+    if (!resolveResponse.ok) {
+      const failure = (await resolveResponse.json().catch(() => null)) as {
+        message?: string;
+        code?: string;
+      } | null;
+      this.logger.warn(
+        `Paystack resolve failed: status ${resolveResponse.status} code ${failure?.code ?? 'n/a'} message "${failure?.message ?? 'n/a'}" for ${redacted}`,
+      );
+      if (
+        resolveResponse.status === 429 &&
+        /daily limit/i.test(failure?.message ?? '')
+      )
+        throw new ServiceUnavailableException(
+          'Bank verification has reached its daily limit. Try again tomorrow.',
+        );
+      if (resolveResponse.status === 429 || resolveResponse.status >= 500)
+        throw new ServiceUnavailableException(
+          'Bank verification is busy right now. Try again in a few minutes.',
+        );
+      if (resolveResponse.status === 401 || resolveResponse.status === 403)
+        throw new ServiceUnavailableException(
+          'Bank account verification is not configured.',
+        );
       throw new BadRequestException('We could not verify these bank details.');
+    }
     const result = (await resolveResponse.json()) as {
       data?: { account_name?: string; account_number?: string };
     };
     if (
       result.data?.account_number !== accountNumber ||
       !result.data.account_name
-    )
+    ) {
+      this.logger.warn(
+        `Paystack resolve returned an unusable body for ${redacted}`,
+      );
       throw new BadRequestException('We could not verify these bank details.');
-    return { bankName, accountName: result.data.account_name };
+    }
+    const accountName = result.data.account_name;
+    await this.cacheSet(
+      cacheKey,
+      () => encryptSecret(accountName),
+      RESOLVE_CACHE_TTL_SECONDS,
+    );
+    return { bankName, accountName };
+  }
+
+  private async paystackBanks(
+    secret: string,
+  ): Promise<{ code: string; name: string }[]> {
+    const cached = await this.cacheGet(BANKS_CACHE_KEY);
+    if (cached) {
+      try {
+        return JSON.parse(cached) as { code: string; name: string }[];
+      } catch {
+        this.logger.warn('Ignoring unreadable bank list cache');
+      }
+    }
+    let response: Response;
+    try {
+      response = await fetch(
+        'https://api.paystack.co/bank?country=nigeria&perPage=100',
+        {
+          headers: { Authorization: `Bearer ${secret}` },
+          signal: AbortSignal.timeout(8000),
+        },
+      );
+    } catch {
+      throw new ServiceUnavailableException(
+        'Bank lookup is temporarily unavailable.',
+      );
+    }
+    if (!response.ok)
+      throw new ServiceUnavailableException(
+        'Bank lookup is temporarily unavailable.',
+      );
+    const result = (await response.json()) as {
+      data?: { code: string; name: string }[];
+    };
+    const banks = (result.data ?? []).map(({ code, name }) => ({ code, name }));
+    if (banks.length)
+      await this.cacheSet(
+        BANKS_CACHE_KEY,
+        () => JSON.stringify(banks),
+        BANKS_CACHE_TTL_SECONDS,
+      );
+    return banks;
+  }
+
+  private async cacheGet(key: string): Promise<string | null> {
+    try {
+      return await this.redis.get(key);
+    } catch (error) {
+      this.logger.warn(
+        `Redis get failed for ${key.split(':').slice(0, 2).join(':')}: ${String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private async cacheSet(key: string, value: () => string, ttlSeconds: number) {
+    try {
+      await this.redis.set(key, value(), 'EX', ttlSeconds);
+    } catch (error) {
+      this.logger.warn(
+        `Redis set failed for ${key.split(':').slice(0, 2).join(':')}: ${String(error)}`,
+      );
+    }
   }
 
   private project(
+    catalog: CatalogIndex,
     profile: {
       id: string;
       userId: string;
@@ -1135,9 +1346,11 @@ export class ProvidersService {
       cityId?: string | null;
       businessName?: string | null;
       services: Prisma.JsonValue;
+      serviceIds?: Prisma.JsonValue | null;
       serviceAreas: Prisma.JsonValue;
       serviceAreaIds?: string[];
       skills: Prisma.JsonValue;
+      skillIds?: Prisma.JsonValue | null;
       capacity: number;
       workingHours: Prisma.JsonValue;
       timeOff: Prisma.JsonValue;
@@ -1190,10 +1403,9 @@ export class ProvidersService {
       city: profile.city,
       cityId: profile.cityId,
       businessName: profile.businessName,
-      services: profile.services,
+      ...currentSkills(catalog, profile),
       serviceAreas: profile.serviceAreas,
       serviceAreaIds: profile.serviceAreaIds,
-      skills: profile.skills,
       capacity: profile.capacity,
       workingHours: profile.workingHours,
       timeOff: profile.timeOff,
@@ -1205,7 +1417,15 @@ export class ProvidersService {
       verification: profile.verification,
       available: profile.available,
       reviewNote: owner ? profile.reviewNote : undefined,
-      pendingChanges: profile.pendingChanges,
+      pendingChanges:
+        profile.pendingChanges &&
+        typeof profile.pendingChanges === 'object' &&
+        !Array.isArray(profile.pendingChanges)
+          ? {
+              ...profile.pendingChanges,
+              ...currentSkills(catalog, profile.pendingChanges),
+            }
+          : profile.pendingChanges,
       changesReview: profile.changesReview,
       version: profile.version,
       payout: {
@@ -1224,4 +1444,13 @@ export class ProvidersService {
       })),
     };
   }
+}
+
+/** The stored ids, with the services and skills names taken from the catalog now, so a rename shows at once. */
+function currentSkills(catalog: CatalogIndex, stored: object) {
+  const ids = profileSkillIds(catalog, stored);
+  return {
+    ...ids,
+    ...namesFromIds(catalog, ids.serviceIds, ids.skillIds),
+  };
 }

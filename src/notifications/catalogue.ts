@@ -10,6 +10,10 @@ export type NotificationAudience =
   | { kind: 'staff:pricing' }
   | { kind: 'staff:recipient' }
   | { kind: 'staff:holders'; permission: StaffPermission }
+  /** Every active super admin (02 §6.10: an escalation `to: super_admin`). */
+  | { kind: 'staff:super_admins' }
+  /** Every active holder of the permission, super admins included, for mandatory money alerts (05 §9). */
+  | { kind: 'staff:all_holders'; permission: StaffPermission }
   | { kind: 'message:participants' };
 
 export interface CatalogueEntry<P> {
@@ -29,6 +33,13 @@ function entry<P>(definition: CatalogueEntry<P>): CatalogueEntry<P> {
 type RequestParams = { requestCode: string };
 type RequestUpdateParams = { requestCode: string; fields?: string[] };
 type RequestReasonParams = { requestCode: string; reason: string };
+type EscalationParams = RequestParams & { title: string; note: string };
+type ApprovalNoticeParams = {
+  label: string;
+  code: string;
+  title: string;
+  link: string;
+};
 type OwnershipNoticeParams = {
   recipientId: string;
   requestCode: string;
@@ -46,7 +57,15 @@ type AssignmentNoticeParams = RequestParams & {
   district: string;
   skill?: string;
 };
+type PayoutProviderParams = RequestParams & {
+  assignmentId: string;
+  providerUserId: string;
+};
 type QuoteNoticeParams = RequestParams & { note?: string };
+type QuoteAcceptedParams = RequestParams & { amount: number; dueDate: string };
+
+const naira = (kobo: number) =>
+  (kobo / 100).toLocaleString('en-NG', { maximumFractionDigits: 2 });
 
 /**
  * Titles and messages come from 04 §6 and §9. Wording marked "new message" is
@@ -108,6 +127,53 @@ export const NOTIFICATION_CATALOGUE = {
     message: ({ requestCode, note }) => `${requestCode}: ${note}`,
     link: () => '/admin/requests',
   }),
+  'escalation.raised': entry<EscalationParams>({
+    key: 'escalation.raised',
+    audience: { kind: 'staff:gated', permission: 'request.escalation.resolve' },
+    mandatory: false,
+    title: () => 'Escalation raised',
+    // new message: the spec supplies the title and the body pattern.
+    message: ({ requestCode, title, note }) =>
+      `${requestCode} · ${title}: ${note}`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  'escalation.raised_super_admin': entry<EscalationParams>({
+    key: 'escalation.raised_super_admin',
+    audience: { kind: 'staff:super_admins' },
+    mandatory: false,
+    title: () => 'Escalation raised',
+    // new message: the spec supplies the title and the body pattern.
+    message: ({ requestCode, title, note }) =>
+      `${requestCode} · ${title}: ${note}`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  'escalation.resolved': entry<OwnershipNoticeParams>({
+    key: 'escalation.resolved',
+    audience: { kind: 'staff:recipient' },
+    mandatory: false,
+    title: () => 'Escalation resolved',
+    // new message: the spec supplies the title and says the note is included.
+    message: ({ requestCode, note }) => `${requestCode}: ${note}`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  'approval.reminder': entry<ApprovalNoticeParams & { due: string }>({
+    key: 'approval.reminder',
+    audience: { kind: 'staff:recipient' },
+    mandatory: false,
+    title: ({ label, due }) => `Reminder: ${label} due in ${due}`,
+    // new message: the spec supplies the title only.
+    message: ({ code, title }) => `${code} · ${title}`,
+    link: ({ link }) => link,
+  }),
+  'approval.overdue': entry<ApprovalNoticeParams>({
+    key: 'approval.overdue',
+    audience: { kind: 'staff:recipient' },
+    mandatory: false,
+    title: ({ label, code, title }) => `Overdue: ${label} · ${code} · ${title}`,
+    // new message: the spec supplies the title only.
+    message: ({ code, title }) => `${code} · ${title}`,
+    link: ({ link }) => link,
+  }),
   'request.submitted': entry<RequestParams>({
     key: 'request.submitted',
     audience: { kind: 'staff:unclaimed' },
@@ -136,14 +202,19 @@ export const NOTIFICATION_CATALOGUE = {
   }),
   // new message: not in spec
   'request.offer_withdrawn': entry<
-    RequestParams & { assignmentId: string; service: string; district: string }
+    RequestParams & {
+      assignmentId: string;
+      service: string;
+      district: string;
+      skill?: string;
+    }
   >({
     key: 'request.offer_withdrawn',
     audience: { kind: 'provider:assignment' },
     mandatory: false,
     title: () => 'Offer withdrawn',
-    message: ({ service, district }) =>
-      `${service} in ${district}: the request changed. XPro may send you a new offer.`,
+    message: ({ service, skill, district }) =>
+      `${skill || service} in ${district}: the request changed. XPro may send you a new offer.`,
     link: () => null,
   }),
   // new message: not in spec
@@ -328,6 +399,41 @@ export const NOTIFICATION_CATALOGUE = {
     message: ({ requestCode }) => `The offer for ${requestCode} has expired.`,
     link: () => null,
   }),
+  'assignment.not_confirmed': entry<
+    RequestParams & {
+      assignmentId: string;
+      providerUserId: string;
+      note: string;
+    }
+  >({
+    key: 'assignment.not_confirmed',
+    audience: { kind: 'provider:assignment' },
+    mandatory: false,
+    title: () => 'Assignment not confirmed',
+    // 04 §6.9: the staff note; no link, the provider loses access to the request.
+    message: ({ note }) => note,
+    link: () => null,
+  }),
+  // new message: not in spec
+  'assignment.replaced_customer': entry<RequestParams>({
+    key: 'assignment.replaced_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Your provider is being replaced',
+    message: ({ requestCode }) =>
+      `XPro is assigning a new provider for ${requestCode}. Your quote and payment stay as they are.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec
+  'assignment.replaced_provider': entry<AssignmentNoticeParams>({
+    key: 'assignment.replaced_provider',
+    audience: { kind: 'provider:assignment' },
+    mandatory: false,
+    title: () => 'Assignment ended',
+    message: ({ skill, service, district }) =>
+      `${skill || service} in ${district}: XPro has replaced you on this job.`,
+    link: () => null,
+  }),
   // new message: not in spec
   'quote.contribution_submitted': entry<RequestParams>({
     key: 'quote.contribution_submitted',
@@ -378,6 +484,52 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: ${note ?? 'The customer asked for changes.'}`,
     link: ({ requestCode }) => `/admin/requests/${requestCode}`,
   }),
+  // new message: not in spec (04 §6.11 names the notification, not its body)
+  'quote.payment_due': entry<QuoteAcceptedParams>({
+    key: 'quote.payment_due',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Payment due',
+    message: ({ requestCode, amount, dueDate }) =>
+      `Pay ₦${naira(amount)} for ${requestCode} by ${dueDate} to book your date.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (04 §6.11 names the notification, not its body)
+  'quote.accepted': entry<QuoteAcceptedParams>({
+    key: 'quote.accepted',
+    audience: { kind: 'staff:gated', permission: 'payment.record' },
+    mandatory: false,
+    title: () => 'Quote accepted, awaiting payment',
+    message: ({ requestCode, dueDate }) =>
+      `${requestCode}: the customer accepted the quote. Payment is due by ${dueDate}.`,
+    link: ({ requestCode }) => `/admin/requests/${requestCode}`,
+  }),
+  'quote.accepted_provider': entry<RequestParams>({
+    key: 'quote.accepted_provider',
+    audience: { kind: 'provider:current' },
+    mandatory: false,
+    title: () => 'Customer accepted the quote',
+    message: () => 'XPro will confirm the date once the customer has paid.',
+    link: ({ requestCode }) => `/provider/requests/${requestCode}`,
+  }),
+  'quote.changes_requested_provider': entry<RequestParams>({
+    key: 'quote.changes_requested_provider',
+    audience: { kind: 'provider:current' },
+    mandatory: false,
+    title: () => 'Customer asked for changes',
+    message: () => 'XPro may ask you to update your costing.',
+    link: ({ requestCode }) => `/provider/requests/${requestCode}`,
+  }),
+  // new message: not in spec (04 §6.11 names the notification, not its body)
+  'quote.declined': entry<RequestParams>({
+    key: 'quote.declined',
+    audience: { kind: 'staff:gated', permission: 'request.cancel' },
+    mandatory: false,
+    title: () => 'Quote declined — cancellation requested',
+    message: ({ requestCode }) =>
+      `${requestCode}: the customer declined the quote and asked to cancel.`,
+    link: ({ requestCode }) => `/admin/requests/${requestCode}`,
+  }),
   // new message: not in spec
   'quote.costing_reminder': entry<RequestParams>({
     key: 'quote.costing_reminder',
@@ -408,44 +560,66 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: your quote is available until ${dueDate}.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
-  // new message: not in spec
-  'quote.expired': entry<RequestParams>({
+  // 04 §6.11 T8 copy.
+  'quote.expired': entry<RequestParams & { version: number }>({
     key: 'quote.expired',
     audience: { kind: 'customer' },
     mandatory: false,
     title: () => 'Quote expired',
-    message: ({ requestCode }) =>
-      `${requestCode}: the quote validity window ended. XPro will follow up.`,
+    message: ({ requestCode, version }) =>
+      `Quote v${version} for ${requestCode} has expired. XPro will send you an updated quote.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
   // new message: not in spec
   'payment.late': entry<RequestParams & { reference: string }>({
     key: 'payment.late',
     audience: { kind: 'staff:holders', permission: 'payment.record' },
-    mandatory: false,
+    mandatory: true,
     title: () => 'Late payment needs a refund',
     message: ({ requestCode }) =>
       `${requestCode} received payment after payment was no longer due. Review the refund.`,
     link: ({ requestCode }) => `/admin/requests/${requestCode}`,
   }),
-  // new message: not in spec
-  'payment.reminder': entry<RequestParams & { dueDate: string }>({
+  // 04 §6.12 T9 copy.
+  'payment.reminder': entry<
+    RequestParams & { amount: number; dueDate: string }
+  >({
     key: 'payment.reminder',
     audience: { kind: 'customer' },
     mandatory: false,
-    title: () => 'Payment due',
-    message: ({ requestCode, dueDate }) =>
-      `${requestCode}: your payment is due by ${dueDate}.`,
+    title: () => 'Payment reminder',
+    message: ({ requestCode, amount, dueDate }) =>
+      `Pay ₦${naira(amount)} for ${requestCode} by ${dueDate} to book your date.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
-  // new message: not in spec
+  // 04 §6.12 T9 copy.
   'payment.lapsed': entry<RequestParams>({
     key: 'payment.lapsed',
     audience: { kind: 'customer' },
     mandatory: false,
-    title: () => 'Quote expired',
+    title: () => 'Payment window closed',
     message: ({ requestCode }) =>
-      `${requestCode}: the payment window closed. XPro will send you an updated quote.`,
+      `Your quote for ${requestCode} expired because payment wasn't received. XPro will contact you.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names "Payment failed" for the customer, not its body)
+  'payment.failed_customer': entry<RequestParams>({
+    key: 'payment.failed_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Payment not completed',
+    message: ({ requestCode }) =>
+      `${requestCode}: your payment was not completed. You can try again from your request.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names "late payment refunded" for the customer, not its body)
+  'payment.late_customer': entry<RequestParams>({
+    key: 'payment.late_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Payment received late',
+    message: ({ requestCode }) =>
+      `${requestCode}: we received your payment after the request was no longer awaiting payment. XPro is arranging a refund.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
   // new message: not in spec
@@ -467,6 +641,61 @@ export const NOTIFICATION_CATALOGUE = {
     message: ({ requestCode }) =>
       `${requestCode} is paid. XPro will confirm the schedule.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // 04 §6.12 names the title; the body is new.
+  'payment.settled_staff': entry<RequestParams>({
+    key: 'payment.settled_staff',
+    audience: { kind: 'staff:gated', permission: 'schedule.manage' },
+    mandatory: false,
+    title: () => 'Paid — schedule it',
+    // new message: not in spec
+    message: ({ requestCode }) =>
+      `${requestCode} is paid and ready to schedule.`,
+    link: ({ requestCode }) => `/admin/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names the event, not its wording)
+  'payment.offline_recorded': entry<RequestParams>({
+    key: 'payment.offline_recorded',
+    audience: { kind: 'staff:holders', permission: 'payment.record' },
+    mandatory: true,
+    title: () => 'Offline payment to reconcile',
+    message: ({ requestCode }) =>
+      `${requestCode}: an offline payment was recorded. Another Finance member must reconcile it.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §7 asks for a critical Finance/security alert)
+  'payment.quarantined': entry<
+    RequestParams & { reference: string; reason: string }
+  >({
+    key: 'payment.quarantined',
+    audience: { kind: 'staff:all_holders', permission: 'payment.record' },
+    mandatory: true,
+    title: () => 'Payment needs manual reconciliation',
+    message: ({ requestCode, reference, reason }) =>
+      `${requestCode}: payment ${reference} was quarantined. ${reason} The request stays locked until Finance reconciles it.`,
+    link: ({ requestCode }) => `/admin/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §7 asks for a critical Finance/security alert)
+  'payment.quarantined_unmatched': entry<{ reference: string; reason: string }>(
+    {
+      key: 'payment.quarantined_unmatched',
+      audience: { kind: 'staff:all_holders', permission: 'payment.record' },
+      mandatory: true,
+      title: () => 'Payment needs manual reconciliation',
+      message: ({ reference, reason }) =>
+        `A Paystack payment (${reference}) matches no XPro payment and was quarantined. ${reason}`,
+      link: () => '/admin/payments',
+    },
+  ),
+  // new message: not in spec (05 §8 asks for a dead-letter alert)
+  'gateway.event_dead_lettered': entry<{ event: string; reference: string }>({
+    key: 'gateway.event_dead_lettered',
+    audience: { kind: 'staff:all_holders', permission: 'payment.record' },
+    mandatory: true,
+    title: () => 'Payment event could not be processed',
+    message: ({ event, reference }) =>
+      `Paystack event ${event} (${reference}) failed after repeated attempts. Reconcile it manually.`,
+    link: () => '/admin/payments',
   }),
   'schedule.proposed_customer': entry<
     RequestParams & { startAt: string; endAt: string }
@@ -695,6 +924,16 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: XPro approved rework. You can submit a rework update.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
+  // new message: not in spec
+  'issue.resolved': entry<RequestParams>({
+    key: 'issue.resolved',
+    audience: { kind: 'provider:current' },
+    mandatory: false,
+    title: () => 'Issue resolved',
+    message: ({ requestCode }) =>
+      `${requestCode}: XPro resolved the reported issue.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
   'progress.review_needed': entry<RequestParams>({
     key: 'progress.review_needed',
     audience: { kind: 'staff:holders', permission: 'progress.review' },
@@ -795,6 +1034,16 @@ export const NOTIFICATION_CATALOGUE = {
       `${requestCode}: the customer requested cancellation.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
   }),
+  // new message: not in spec (04 §8 T19 routes the follow-up per 02 but gives no copy)
+  'cancellation.followup': entry<RequestParams>({
+    key: 'cancellation.followup',
+    audience: { kind: 'staff:holders', permission: 'request.cancel' },
+    mandatory: false,
+    title: () => 'Cancellation request waiting',
+    message: ({ requestCode }) =>
+      `${requestCode}: a cancellation request is still waiting for a decision.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
   'cancellation.rejected': entry<RequestParams>({
     key: 'cancellation.rejected',
     audience: { kind: 'customer' },
@@ -812,6 +1061,255 @@ export const NOTIFICATION_CATALOGUE = {
     message: ({ requestCode }) =>
       `${requestCode}: your cancellation was approved.`,
     link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (04 §2.1 gives staff a direct cancel but no customer copy)
+  'cancellation.staff_cancelled': entry<RequestParams>({
+    key: 'cancellation.staff_cancelled',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Request cancelled by XPro',
+    message: ({ requestCode }) =>
+      `${requestCode}: XPro cancelled this request. Open it to see the reason.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names "Refund requested" for Finance, not its body)
+  'refund.requested': entry<RequestParams & { amount: number }>({
+    key: 'refund.requested',
+    audience: { kind: 'staff:holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund to decide',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: a refund of ₦${naira(amount)} is waiting for a decision.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §6.4: a rejected refund needs a new valid decision)
+  'refund.rejected': entry<RequestParams>({
+    key: 'refund.rejected',
+    audience: { kind: 'staff:holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund rejected',
+    message: ({ requestCode }) =>
+      `${requestCode}: the refund was rejected. Request a new refund to finish the cancellation.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Refund decided" for Finance and Super admin, not its body)
+  'refund.decided': entry<
+    RequestParams & {
+      outcome: 'approved' | 'rejected' | 'waived' | 'awaiting_second_approval';
+      amount: number;
+    }
+  >({
+    key: 'refund.decided',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: ({ outcome }) =>
+      outcome === 'approved'
+        ? 'Refund approved'
+        : outcome === 'rejected'
+          ? 'Refund rejected'
+          : outcome === 'waived'
+            ? 'Refund waived'
+            : 'Refund needs a second approval',
+    message: ({ requestCode, outcome, amount }) =>
+      `${requestCode}: ${
+        outcome === 'approved'
+          ? `the refund of ₦${naira(amount)} was approved.`
+          : outcome === 'rejected'
+            ? 'the refund was rejected.'
+            : outcome === 'waived'
+              ? 'the refund was waived.'
+              : `the refund of ₦${naira(amount)} was approved after work started. A Super admin must give the second approval.`
+      }`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Refund completed" for Finance and Super admin, not its body)
+  'refund.completed': entry<RequestParams & { amount: number }>({
+    key: 'refund.completed',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund completed',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: the refund of ₦${naira(amount)} was completed.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names the customer's refund status, not its body)
+  'refund.approved_customer': entry<RequestParams & { amount: number }>({
+    key: 'refund.approved_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Refund approved',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your refund of ₦${naira(amount)} was approved and is being processed.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 names the customer's refund receipt, not its body)
+  'refund.completed_customer': entry<RequestParams & { amount: number }>({
+    key: 'refund.completed_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Refund completed',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your refund of ₦${naira(amount)} has been completed.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (05 §9 asks for a reconciliation mismatch alert to Finance and Super admin)
+  'refund.mismatch': entry<
+    RequestParams & { approvedAmount: number; reportedAmount: number }
+  >({
+    key: 'refund.mismatch',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund needs manual reconciliation',
+    message: ({ requestCode, approvedAmount, reportedAmount }) =>
+      `${requestCode}: Paystack reports a refund of ₦${naira(reportedAmount)} but XPro approved ₦${naira(approvedAmount)}. It was not applied. Reconcile it before any retry.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §6.4: a gateway failure leaves a Finance item)
+  'refund.failed': entry<RequestParams & { amount: number; detail: string }>({
+    key: 'refund.failed',
+    audience: { kind: 'staff:all_holders', permission: 'refund.manage' },
+    mandatory: true,
+    title: () => 'Refund needs attention',
+    message: ({ requestCode, amount, detail }) =>
+      `${requestCode}: the refund of ₦${naira(amount)} did not complete. ${detail} Check it and retry.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Payout created/due" for Finance, not its body)
+  'payout.created': entry<
+    RequestParams & { amount: number; dueDate: string; onHold: boolean }
+  >({
+    key: 'payout.created',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: () => 'Payout to approve',
+    message: ({ requestCode, amount, dueDate, onHold }) =>
+      onHold
+        ? `${requestCode}: a payout of ₦${naira(amount)} was created on hold. Release it when the hold clears.`
+        : `${requestCode}: a payout of ₦${naira(amount)} is ready for first approval by ${dueDate}.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "second approval" for the eligible second approver, not its body)
+  'payout.second_approval_needed': entry<RequestParams & { amount: number }>({
+    key: 'payout.second_approval_needed',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: () => 'Payout needs a second approval',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: the payout of ₦${naira(amount)} was approved once and needs a second approval.`,
+    link: () => '/admin/approvals',
+  }),
+  // new message: not in spec (05 §9 names "Payout held" for the provider with a safe reason, not its body)
+  'payout.held': entry<PayoutProviderParams & { reason: string }>({
+    key: 'payout.held',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout on hold',
+    message: ({ requestCode, reason }) => `${requestCode}: ${reason}`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 names "Payout released" for the provider, not its body)
+  'payout.released': entry<PayoutProviderParams>({
+    key: 'payout.released',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout back in review',
+    message: ({ requestCode }) =>
+      `${requestCode}: your payout is no longer on hold. XPro Finance will approve it next.`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 names "Payout paid" for the provider, not its body)
+  'payout.paid': entry<PayoutProviderParams & { amount: number }>({
+    key: 'payout.paid',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout sent',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your payout of ₦${naira(amount)} has been sent to your bank account.`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 names "Payout failed" for the provider, not its body)
+  'payout.failed': entry<PayoutProviderParams>({
+    key: 'payout.failed',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout delayed',
+    message: ({ requestCode }) =>
+      `${requestCode}: your payout could not be completed yet. XPro Finance is looking into it.`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 names "Payout reversed" for the provider, not its body)
+  'payout.reversed': entry<PayoutProviderParams & { amount: number }>({
+    key: 'payout.reversed',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Payout returned',
+    message: ({ requestCode, amount }) =>
+      `${requestCode}: your payout of ₦${naira(amount)} was returned by the bank. XPro Finance will contact you.`,
+    link: () => '/earnings',
+  }),
+  // new message: not in spec (05 §9 lists Finance and the owner for paid/failed/reversed/held/released)
+  'payout.finance_update': entry<
+    RequestParams & {
+      amount: number;
+      outcome: 'paid' | 'failed' | 'reversed' | 'held' | 'released';
+    }
+  >({
+    key: 'payout.finance_update',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: ({ outcome }) =>
+      ({
+        paid: 'Payout paid',
+        failed: 'Payout failed',
+        reversed: 'Payout reversed',
+        held: 'Payout held',
+        released: 'Payout released',
+      })[outcome],
+    message: ({ requestCode, amount, outcome }) =>
+      `${requestCode}: the payout of ₦${naira(amount)} ${
+        {
+          paid: 'was paid.',
+          failed: 'failed. Check it and retry.',
+          reversed: 'was reversed. Check it and retry.',
+          held: 'was put on hold.',
+          released: 'was released from hold.',
+        }[outcome]
+      }`,
+    link: () => '/admin/payouts',
+  }),
+  // new message: not in spec (05 §6.6 asks for urgent Finance review of a transfer that cannot be stopped)
+  'payout.needs_attention': entry<
+    RequestParams & { amount: number; detail: string }
+  >({
+    key: 'payout.needs_attention',
+    audience: { kind: 'staff:all_holders', permission: 'payout.approve' },
+    mandatory: true,
+    title: () => 'Payout needs attention',
+    message: ({ requestCode, amount, detail }) =>
+      `${requestCode}: the payout of ₦${naira(amount)} needs a Finance check. ${detail}`,
+    link: () => '/admin/payouts',
+  }),
+  // new message: not in spec (04 §6.21 gives the transition, not the copy)
+  'cancellation.completed_customer': entry<RequestParams>({
+    key: 'cancellation.completed_customer',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Request cancelled',
+    message: ({ requestCode }) =>
+      `${requestCode}: your cancellation is complete.`,
+    link: ({ requestCode }) => `/requests/${requestCode}`,
+  }),
+  // new message: not in spec (04 §6.21 gives the transition, not the copy)
+  'cancellation.completed_provider': entry<
+    RequestParams & { assignmentId: string; providerUserId: string }
+  >({
+    key: 'cancellation.completed_provider',
+    audience: { kind: 'provider:assignment' },
+    mandatory: true,
+    title: () => 'Request cancelled',
+    message: ({ requestCode }) =>
+      `${requestCode}: this request was cancelled. You no longer have access to it.`,
+    link: () => null,
   }),
 } as const;
 

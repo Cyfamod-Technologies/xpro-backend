@@ -82,3 +82,25 @@ describe('settings registry', () => {
     }
   });
 });
+
+describe('approvals.deadlines defaults', () => {
+  it('include quote_expired and payment_lapsed at 8 working hours, and validate as a whole', () => {
+    const definition = getSettingDefinition('approvals.deadlines')!;
+    const defaults = definition.defaultValue as Record<string, number>;
+
+    expect(defaults.quote_expired).toBe(480);
+    expect(defaults.payment_lapsed).toBe(480);
+    expect(definition.validate(defaults)).toBeNull();
+  });
+
+  it('validates the catalog depth limit and accepts any service names in the mode map', () => {
+    const depth = getSettingDefinition('catalog.maxDepth');
+    expect(depth?.defaultValue).toBe(2);
+    expect(depth?.validate(1)).toBeTruthy();
+    expect(depth?.validate(11)).toBeTruthy();
+    expect(depth?.validate(3)).toBeNull();
+    const modes = getSettingDefinition('assignment.modeByService');
+    expect(modes?.validate({ Roofing: 'manual', Hire: 'auto' })).toBeNull();
+    expect(modes?.validate({ Roofing: 'sometimes' })).toBeTruthy();
+  });
+});

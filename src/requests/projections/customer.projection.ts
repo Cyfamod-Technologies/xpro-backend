@@ -9,15 +9,15 @@ import {
   scheduleProjection,
   type ProjectionContext,
 } from './projection.helpers';
+import { answerSnapshots } from '../domain/answers';
+import { customerCurrentQuote, customerQuoteView } from './quote.projection';
 
 export function customerProjection(
   context: ProjectionContext,
 ): RequestDetailDto {
   const { row } = context;
   const dto = commonProjection(context);
-  const acceptedQuote = row.quotes.find(
-    (quote) => quote.status === 'sent' || quote.status === 'accepted',
-  );
+  const currentQuote = customerCurrentQuote(row.quotes);
   const assignment = row.assignments
     .filter((item) => item.status === 'accepted' || item.status === 'completed')
     .at(-1);
@@ -28,6 +28,7 @@ export function customerProjection(
     row.service,
     row.startDate,
     jsonObject(row.details),
+    row.answers,
   );
   return {
     ...dto,
@@ -45,6 +46,8 @@ export function customerProjection(
     startDate: row.startDate,
     ...dates,
     details: jsonObject(row.details),
+    servicePath: row.servicePath,
+    answers: answerSnapshots(row.answers),
     customerName: row.customerName,
     intake: {
       state: row.intakeState,
@@ -56,16 +59,7 @@ export function customerProjection(
       context.snapshot.currentAssignment?.status === 'completed')
       ? { provider: providerCard(context.snapshot.providerCard) }
       : {}),
-    quote: acceptedQuote
-      ? {
-          version: acceptedQuote.version,
-          status: acceptedQuote.status,
-          total: Number(acceptedQuote.total),
-          items: acceptedQuote.items,
-          validUntil: acceptedQuote.validUntil,
-          paymentDueAt: acceptedQuote.paymentDueAt,
-        }
-      : null,
+    quote: currentQuote ? customerQuoteView(currentQuote) : null,
     schedule: schedule
       ? {
           id: schedule.id,

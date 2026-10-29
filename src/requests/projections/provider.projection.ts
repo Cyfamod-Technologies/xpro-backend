@@ -1,14 +1,19 @@
 import type { RequestDetailDto } from '../dto/request-detail.dto';
+import { answerSnapshots, type AnswerSnapshot } from '../domain/answers';
 import {
   commonProjection,
   effectiveDates,
   completionProjection,
-  jsonArray,
   jsonObject,
   issueProjection,
   scheduleProjection,
   type ProjectionContext,
 } from './projection.helpers';
+import {
+  providerContributionView,
+  providerCurrentQuote,
+  providerQuoteView,
+} from './quote.projection';
 
 export function providerProjection(
   context: ProjectionContext,
@@ -27,7 +32,13 @@ export function providerProjection(
 
   const dto = commonProjection(context);
   const details = jsonObject(row.details);
-  const dates = effectiveDates(row.service, row.startDate, details);
+  const dates = effectiveDates(
+    row.service,
+    row.startDate,
+    details,
+    row.answers,
+  );
+  const answers = answerSnapshots(row.answers);
   const locked = row.schedules.some(
     (schedule) =>
       schedule.status === 'confirmed' &&
@@ -36,21 +47,10 @@ export function providerProjection(
   const accepted =
     assignment.status === 'accepted' || assignment.status === 'completed';
   const schedules = scheduleProjection(context, assignment.id);
-  const quote =
-    row.quotes.find((item) => item.status === 'accepted') ??
-    row.quotes.find((item) => item.status === 'sent');
+  const quote = providerCurrentQuote(row.quotes);
   const ownContribution = row.contributions.find(
     (item) => item.assignmentId === assignment.id,
   );
-  const ownPayout =
-    quote?.payoutAssignmentId === assignment.id ? quote.payoutAmount : null;
-  const scope = quote
-    ? jsonArray(quote.items).map((item) => ({
-        description:
-          typeof item.description === 'string' ? item.description : '',
-        quantity: Number(item.quantity ?? 0),
-      }))
-    : undefined;
 
   if (assignment.status === 'offered') {
     return {
@@ -61,7 +61,9 @@ export function providerProjection(
       cityName: snapshot.cityName,
       districtName: snapshot.districtName,
       ...dates,
-      details: offerDetails(details),
+      details: offerDetails(details, answers),
+      servicePath: row.servicePath,
+      answers: visibleAnswers(answers, offerDetails(details, answers)),
       assignment: {
         id: assignment.id,
         status: assignment.status,
@@ -78,6 +80,12 @@ export function providerProjection(
       ? shared.fields.filter((key): key is string => typeof key === 'string')
       : [],
   );
+  const visibleDetails = locked
+    ? details
+    : {
+        ...offerDetails(details, answers),
+        ...safeSharedDetails(details, shared),
+      };
   const fields: RequestDetailDto = {
     ...dto,
     service: row.service,
@@ -86,8 +94,15 @@ export function providerProjection(
     cityName: snapshot.cityName,
     districtName: snapshot.districtName,
     ...dates,
-    details: locked ? details : safeSharedDetails(details, shared),
-    assignment: { status: assignment.status },
+    details: visibleDetails,
+    servicePath: row.servicePath,
+    answers: visibleAnswers(answers, visibleDetails),
+    assignment: {
+      id: assignment.id,
+      status: assignment.status,
+      note: assignment.note,
+      offerBrief: row.offerBrief,
+    },
     schedules,
     schedule:
       schedules.find((item) => item.status === 'confirmed') ??
@@ -112,14 +127,9 @@ export function providerProjection(
         }),
         sharedWithProvider,
       })),
-    quote: scope
-      ? {
-          scope,
-          ...(ownPayout === null ? {} : { payoutAmount: Number(ownPayout) }),
-        }
-      : null,
+    quote: quote ? providerQuoteView(quote, [assignment.id]) : null,
     contributions: ownContribution
-      ? [{ items: ownContribution.items, note: ownContribution.note }]
+      ? [providerContributionView(ownContribution)]
       : [],
   };
   if (accepted) fields.title = row.title;
@@ -129,9 +139,32 @@ export function providerProjection(
   return fields;
 }
 
+function visibleAnswers(
+  answers: readonly AnswerSnapshot[],
+  details: Record<string, unknown>,
+): AnswerSnapshot[] {
+  return answers.filter(({ key }) => key in details);
+}
+
+const OFFER_ANSWER_TYPES = new Set([
+  'yes_no',
+  'single_choice',
+  'multiple_choice',
+  'number',
+]);
+
 function offerDetails(
   details: Record<string, unknown>,
+  answers: readonly AnswerSnapshot[] = [],
 ): Record<string, unknown> {
+  if (answers.length)
+    return Object.fromEntries(
+      answers
+        .filter(
+          ({ sensitive, type }) => !sensitive && OFFER_ANSWER_TYPES.has(type),
+        )
+        .map(({ key, value }) => [key, value]),
+    );
   const optionKeys = new Set([
     'designType',
     'delivery',

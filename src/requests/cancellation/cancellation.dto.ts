@@ -1,28 +1,21 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  Allow,
   IsBoolean,
   IsIn,
   IsOptional,
   IsString,
   MaxLength,
-  MinLength,
 } from 'class-validator';
+import { CANCELLATION_REASON_CODES } from '../domain/cancellation-rules';
 
-export class RequestCancellationDto {
-  @IsIn([
-    'customer_changed_mind',
-    'quote_declined',
-    'no_response',
-    'payment_lapsed',
-    'no_provider',
-    'provider_no_show',
-    'provider_suspended',
-    'customer_suspended',
-    'scope_dispute',
-    'duplicate',
-    'other',
-  ])
-  reasonCode!: string;
-  @IsString() @MinLength(5) @MaxLength(1000) note!: string;
+/** `POST /requests/:id/cancel` (04 §11.2). The note's length and the staff-only `reasonCode` requirement are checked by the guards (plan C.7). */
+export class CancelRequestDto {
+  @ApiProperty({ maxLength: 1000 }) @Allow() note!: string;
+  @ApiPropertyOptional({ enum: CANCELLATION_REASON_CODES })
+  @IsOptional()
+  @IsIn(CANCELLATION_REASON_CODES)
+  reasonCode?: string;
 }
 
 export class DecideCancellationDto {

@@ -65,7 +65,7 @@ describe('RequestCommandRunner idempotency', () => {
           transactionCount += 1;
           let release: (() => void) | undefined;
           const tx = {
-            $queryRaw: jest.fn(async () => {
+            $executeRaw: jest.fn(async () => {
               if (transactionCount === 2) secondLockStarted();
               release = await acquireLock();
               return [];
@@ -93,6 +93,7 @@ describe('RequestCommandRunner idempotency', () => {
       {} as never,
       { kick: jest.fn() } as never,
       { kick: jest.fn() } as never,
+      {} as never,
     );
     const projected = jest.fn((loadedRow: typeof row) => ({
       id: 'XPR-00042',
@@ -117,6 +118,7 @@ describe('RequestCommandRunner idempotency', () => {
     });
     const options = {
       command: 'request.review',
+      guard: null,
       actor,
       requestRef: 'XPR-00042',
       idempotencyKey: 'same-key-1234',

@@ -6,19 +6,36 @@ import {
 } from '../../platform/actor/actor.guards';
 import { AppError } from '../../platform/errors/app-error';
 import { hashRequest } from '../../platform/idempotency/idempotency.service';
+import { PROGRESS_UPDATE_ENTITY } from '../../uploads/entity-types';
 import { UploadsService } from '../../uploads/uploads.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { RequestUser } from '../../common/types/request-user';
-import { RequestCommandRunner } from '../command-runner';
+import { RequestCommandRunner, type CommandContext } from '../command-runner';
 import {
+  checkProgressAdd,
   deriveProgressKind,
-  progressEvidenceSatisfied,
+  PROGRESS_STALE_MESSAGE,
+  type ProgressAddCheck,
+  type ProgressInputStatus,
 } from '../domain/progress-rules';
+import { resolveRequestId } from '../request-ref';
+import {
+  applyApprovedEffects,
+  hasApprovedAssignmentEvidence,
+  hasAttachedEvidence,
+  reviewItemKind,
+} from './progress-effects';
+
+type AttachmentRef = { id: string };
+type AddInput = {
+  status: ProgressInputStatus;
+  note: string;
+  attachments?: AttachmentRef[];
+  issueId?: string;
+};
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
-const invalid = (message: string) =>
-  new AppError(422, 'VALIDATION_ERROR', message);
 
 @Injectable()
 export class ProgressService {
@@ -29,13 +46,16 @@ export class ProgressService {
     private readonly uploads: UploadsService,
   ) {}
 
-  async list(user: RequestUser, requestId: string) {
+  async list(user: RequestUser, requestRef: string) {
     const actor = await this.actors.resolve(user.id);
-    const request = await this.prisma.serviceRequest.findUnique({
-      where: { id: requestId },
-      select: { id: true, ownerId: true },
-    });
-    if (!request)
+    const requestId = await resolveRequestId(this.prisma, requestRef);
+    const request = requestId
+      ? await this.prisma.serviceRequest.findUnique({
+          where: { id: requestId },
+          select: { id: true, ownerId: true },
+        })
+      : null;
+    if (!request || !requestId)
       throw new AppError(
         404,
         'NOT_FOUND',
@@ -74,7 +94,7 @@ export class ProgressService {
     const uploads = rows.length
       ? await this.prisma.upload.findMany({
           where: {
-            entityType: 'progress_update',
+            entityType: PROGRESS_UPDATE_ENTITY,
             entityId: { in: rows.map((row) => row.id) },
             purpose: 'progress_evidence',
             status: 'attached',
@@ -95,10 +115,8 @@ export class ProgressService {
       note: row.note,
       state: row.state,
       createdAt: row.createdAt.toISOString(),
-      reviewNote:
-        row.state === 'pending' && actor.kind !== 'staff'
-          ? null
-          : row.reviewNote,
+      // Review text is staff-to-provider; the customer allow-list leaves it out (Plan A.2 #6).
+      ...(actor.kind === 'customer' ? {} : { reviewNote: row.reviewNote }),
       attachments: uploads
         .filter((upload) => upload.entityId === row.id)
         .map((upload) => ({
@@ -113,13 +131,8 @@ export class ProgressService {
   async add(
     userId: string,
     requestId: string,
-    dto: {
-      status: 'in_progress' | 'blocked' | 'completion_pending';
-      note: string;
-      attachments: string[];
-      issueId?: string;
-    },
-    version: number,
+    dto: AddInput,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -131,6 +144,7 @@ export class ProgressService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -146,148 +160,61 @@ export class ProgressService {
             status: 'accepted',
           },
           orderBy: { createdAt: 'desc' },
+          select: { id: true },
         });
-        if (!assignment)
-          throw conflict(
-            'Accept the current assignment before updating this job.',
-          );
-        if (ctx.snap.status === 'blocked' && ctx.snap.hold)
-          throw conflict(
-            'XPro has paused this job. Message XPro Dispatch before continuing.',
-          );
-        if (
-          [
-            'closed',
-            'cancelled',
-            'rejected',
-            'cancelling',
-            'acknowledged',
-          ].includes(ctx.snap.status)
-        )
-          throw conflict('This job is not open for execution updates.');
-        const issue = dto.issueId
-          ? await ctx.tx.issue.findFirst({
-              where: { id: dto.issueId, requestId: ctx.snap.id },
-            })
-          : await ctx.tx.issue.findFirst({
-              where: {
-                requestId: ctx.snap.id,
-                status: { in: ['open', 'rework', 'disputed'] },
-              },
-              orderBy: { cycle: 'desc' },
-            });
-        if (issue && ['open', 'disputed'].includes(issue.status))
-          throw conflict(
-            'XPro is resolving the issue reported at completion. You can update the job once it is resolved.',
-          );
-        const kind = deriveProgressKind({
-          status: dto.status,
-          requestStatus: ctx.snap.status,
-          issueStatus: issue?.status,
-          issueId: dto.issueId,
+        const check = await this.checkAdd(ctx, assignment?.id ?? null, dto, {
+          staffOverride: false,
         });
-        if (!kind) {
-          if (dto.status === 'completion_pending')
-            throw conflict('Resume or start work before reporting completion.');
-          if (dto.status === 'blocked')
-            throw conflict('Start the job before reporting a blocker.');
-          if (ctx.snap.status === 'scheduled')
-            throw conflict('Confirm the schedule before starting work.');
-          throw conflict('This job is not open for execution updates.');
-        }
-        if (kind === 'start') {
-          const schedule = await ctx.tx.schedule.findFirst({
+        if (check.replacesPending) {
+          const replaced = await ctx.tx.progressUpdate.findMany({
             where: {
               requestId: ctx.snap.id,
-              assignmentId: assignment.id,
-              status: 'confirmed',
+              assignmentId: assignment!.id,
+              state: 'pending',
             },
-            orderBy: { proposedAt: 'desc' },
+            select: { id: true, kind: true },
           });
-          if (!schedule)
-            throw conflict('Confirm the schedule before starting work.');
-          if (ctx.now.getTime() < schedule.startAt.getTime() - 2 * 60 * 60_000)
-            throw conflict(
-              `You can start this job from ${schedule.startAt.toLocaleTimeString('en-NG', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit' })} WAT.`,
-            );
-        }
-        const pending = await ctx.tx.progressUpdate.findMany({
-          where: {
-            requestId: ctx.snap.id,
-            assignmentId: assignment.id,
-            state: 'pending',
-          },
-          orderBy: { createdAt: 'asc' },
-        });
-        if (
-          pending.length &&
-          kind === 'blocker' &&
-          pending.every((item) =>
-            ['start', 'progress', 'resume', 'rework'].includes(item.kind),
-          )
-        ) {
           await ctx.tx.progressUpdate.updateMany({
-            where: { id: { in: pending.map((item) => item.id) } },
+            where: {
+              id: { in: replaced.map(({ id }) => id) },
+              state: 'pending',
+            },
             data: {
               state: 'rejected',
               systemReason: 'replaced_by_blocker',
               reviewNote: 'Replaced by your blocker report.',
             },
           });
-        } else if (pending.length)
-          throw conflict('Wait for XPro to review your previous update.');
+          for (const item of replaced)
+            ctx.approvals.close(
+              reviewItemKind(item.kind),
+              item.id,
+              'replaced_by_blocker',
+            );
+        }
+        const { kind } = check;
         const row = await ctx.tx.progressUpdate.create({
           data: {
             requestId: ctx.snap.id,
-            assignmentId: assignment.id,
+            assignmentId: assignment!.id,
             authorId: userId,
             kind,
             target: dto.status,
             note: dto.note.trim(),
-            issueId: issue?.id ?? null,
+            issueId: check.issueId,
           },
         });
-        const uploads = await this.uploads.attach(
+        await this.uploads.attach(
           ctx.tx,
-          dto.attachments,
+          attachmentIds(dto),
           userId,
           'progress_evidence',
-          'progress_update',
+          PROGRESS_UPDATE_ENTITY,
           row.id,
         );
-        if (kind === 'completion' || kind === 'rework_completion') {
-          const prior = await ctx.tx.progressUpdate.findMany({
-            where: {
-              requestId: ctx.snap.id,
-              assignmentId: assignment.id,
-              state: 'approved',
-            },
-            select: { id: true },
-          });
-          const priorEvidence = prior.length
-            ? await ctx.tx.upload.count({
-                where: {
-                  entityType: 'progress_update',
-                  entityId: { in: prior.map((item) => item.id) },
-                  purpose: 'progress_evidence',
-                  status: 'attached',
-                },
-              })
-            : 0;
-          if (
-            !progressEvidenceSatisfied({
-              hasCurrentAttachments: uploads.length > 0,
-              hasApprovedCurrentAssignmentEvidence: priorEvidence > 0,
-            })
-          )
-            throw conflict('Attach work evidence before reporting completion.');
-        }
-        const hours = kind === 'blocker' ? 1 : 8;
-        ctx.timers.start(
-          kind === 'blocker' ? 'T16.review' : 'T15.stale',
-          new Date(ctx.now.getTime() + hours * 60 * 60_000),
-          row.id,
-        );
+        // 02 §6.11: the update waits for progress.review as a queue item (8 h routine, 1 h blocker, 4 h completion), not as a stale-job timer.
+        ctx.approvals.open(reviewItemKind(kind), row.id);
+        ctx.approvals.close('progress', ctx.snap.id, 'update_submitted');
         ctx.audit('Progress update submitted', {
           resourceType: 'progress_update',
           resourceId: row.id,
@@ -310,20 +237,19 @@ export class ProgressService {
     requestId: string,
     updateId: string,
     dto: { approve: boolean; note?: string },
-    version: number,
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'progress.review');
-    if (!dto.approve && !dto.note?.trim())
-      throw invalid('Explain why the update is not approved.');
     return this.runner.run(
       {
         command: 'progress.review',
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -337,151 +263,22 @@ export class ProgressService {
         });
         if (!update || update.state !== 'pending')
           throw conflict('This update is no longer awaiting review.');
-        const assignment = await ctx.tx.assignment.findFirst({
-          where: {
-            id: update.assignmentId,
-            requestId: ctx.snap.id,
-            status: 'accepted',
-          },
-        });
-        if (!assignment && dto.approve)
-          throw conflict(
-            'This update came from a provider who is no longer on the job. Reject it instead.',
-          );
-        if (dto.approve && assignment) {
-          const providerUser = await ctx.tx.user.findUnique({
-            where: { id: assignment.providerUserId },
-            select: { status: true },
-          });
-          if (providerUser?.status !== 'active')
-            throw conflict(
-              'This provider is suspended. Reject the update or replace the provider.',
-            );
-        }
-        if (ctx.snap.hold && dto.approve)
-          throw conflict(
-            'XPro has paused this job. Message XPro Dispatch before continuing.',
-          );
-        if (
-          dto.approve &&
-          ['completion', 'rework_completion'].includes(update.kind)
-        ) {
-          const evidence = await ctx.tx.upload.count({
-            where: {
-              entityType: 'progress_update',
-              entityId: update.id,
-              purpose: 'progress_evidence',
-              status: 'attached',
-            },
-          });
-          if (!evidence)
-            throw conflict(
-              'Work evidence is required before completion can be approved.',
-            );
-        }
-        const state = dto.approve ? 'approved' : 'rejected';
+        if (dto.approve) await this.assertApprovable(ctx, update);
         await ctx.tx.progressUpdate.update({
           where: { id: update.id },
           data: {
-            state,
+            state: dto.approve ? 'approved' : 'rejected',
             reviewedBy: userId,
             reviewedAt: ctx.now,
             reviewNote: dto.note?.trim() || null,
           },
         });
-        ctx.timers.stop(['T15.stale', 'T15.escalate', 'T16.review'], update.id);
-        if (dto.approve) {
-          if (update.kind === 'start') {
-            await ctx.tx.assignment.update({
-              where: { id: update.assignmentId },
-              data: { workStarted: true },
-            });
-            await ctx.tx.serviceRequest.update({
-              where: { id: ctx.snap.id },
-              data: { status: 'in_progress' },
-            });
-            ctx.timers.stop('T13.noShowCheck');
-            ctx.timers.start(
-              'T15.stale',
-              new Date(ctx.now.getTime() + 3 * 86_400_000),
-            );
-            ctx.timers.start(
-              'T15.escalate',
-              new Date(ctx.now.getTime() + 5 * 86_400_000),
-            );
-            ctx.notify('progress.started', { requestCode: ctx.snap.number });
-          } else if (update.kind === 'blocker') {
-            await ctx.tx.serviceRequest.update({
-              where: { id: ctx.snap.id },
-              data: { status: 'blocked' },
-            });
-            ctx.timers.start(
-              'T16.review',
-              new Date(ctx.now.getTime() + 8 * 60 * 60_000),
-            );
-            ctx.notify('progress.blocker_approved', {
-              requestCode: ctx.snap.number,
-            });
-          } else if (update.kind === 'resume') {
-            await ctx.tx.serviceRequest.update({
-              where: { id: ctx.snap.id },
-              data: { status: 'in_progress' },
-            });
-            ctx.timers.stop('T16.review');
-            ctx.timers.start(
-              'T15.stale',
-              new Date(ctx.now.getTime() + 3 * 86_400_000),
-            );
-            ctx.notify('progress.resumed', { requestCode: ctx.snap.number });
-          } else if (
-            update.kind === 'completion' ||
-            update.kind === 'rework_completion'
-          ) {
-            if (update.kind === 'rework_completion' && update.issueId)
-              await ctx.tx.issue.update({
-                where: { id: update.issueId },
-                data: {
-                  status: 'resolved',
-                  resolvedBy: userId,
-                  resolvedAt: ctx.now,
-                  resolvedWith: 'rework',
-                  evidenceUpdateIds: { push: update.id },
-                },
-              });
-            const hours = Number(ctx.settings['completion.windowHours'] ?? 72);
-            const dueAt = new Date(ctx.now.getTime() + hours * 60 * 60_000);
-            await ctx.tx.serviceRequest.update({
-              where: { id: ctx.snap.id },
-              data: {
-                status: 'completion_pending',
-                reportApprovedAt: ctx.now,
-                confirmDueAt: dueAt,
-              },
-            });
-            ctx.timers.stop('T15.stale');
-            ctx.timers.start(
-              'T17.reminder24h',
-              new Date(ctx.now.getTime() + 24 * 60 * 60_000),
-            );
-            ctx.timers.start(
-              'T17.reminder48h',
-              new Date(ctx.now.getTime() + 48 * 60 * 60_000),
-            );
-            ctx.timers.start('T17.autoConfirm', dueAt);
-            ctx.notify('progress.completion_approved', {
-              requestCode: ctx.snap.number,
-            });
-          } else {
-            ctx.timers.start(
-              'T15.stale',
-              new Date(ctx.now.getTime() + 3 * 86_400_000),
-            );
-            ctx.timers.start(
-              'T15.escalate',
-              new Date(ctx.now.getTime() + 5 * 86_400_000),
-            );
-          }
-        }
+        ctx.approvals.close(
+          reviewItemKind(update.kind),
+          update.id,
+          dto.approve ? 'approved' : 'rejected',
+        );
+        if (dto.approve) await applyApprovedEffects(ctx, update, userId);
         ctx.audit(
           dto.approve ? 'Progress update approved' : 'Progress update rejected',
           {
@@ -498,14 +295,8 @@ export class ProgressService {
   async addOnBehalf(
     userId: string,
     requestId: string,
-    dto: {
-      status: 'in_progress' | 'blocked' | 'completion_pending';
-      note: string;
-      reportedVia: string;
-      attachments: string[];
-      issueId?: string;
-    },
-    version: number,
+    dto: AddInput & { reportedVia: string },
+    version: number | undefined,
     url: string,
     key?: string,
   ) {
@@ -517,6 +308,7 @@ export class ProgressService {
         actor,
         requestRef: requestId,
         expectedVersion: version,
+        input: dto,
         ...(key
           ? {
               idempotencyKey: key,
@@ -528,143 +320,170 @@ export class ProgressService {
         const assignment = await ctx.tx.assignment.findFirst({
           where: { requestId: ctx.snap.id, status: 'accepted' },
           orderBy: { createdAt: 'desc' },
+          select: { id: true },
         });
-        if (!assignment)
-          throw conflict(
-            'Accept the current assignment before updating this job.',
-          );
-        const issue = dto.issueId
-          ? await ctx.tx.issue.findFirst({
-              where: {
-                id: dto.issueId,
-                requestId: ctx.snap.id,
-                status: 'rework',
-              },
-            })
-          : null;
-        const kind = deriveProgressKind({
-          status: dto.status,
-          requestStatus: ctx.snap.status,
-          issueStatus: issue?.status,
-          issueId: dto.issueId,
+        const check = await this.checkAdd(ctx, assignment?.id ?? null, dto, {
+          staffOverride: true,
         });
-        if (!kind)
-          throw conflict('This job is not open for execution updates.');
-        if (ctx.snap.hold)
-          throw conflict(
-            'XPro has paused this job. Message XPro Dispatch before continuing.',
-          );
         const row = await ctx.tx.progressUpdate.create({
           data: {
             requestId: ctx.snap.id,
-            assignmentId: assignment.id,
+            assignmentId: assignment!.id,
             authorId: userId,
-            kind,
+            kind: check.kind,
             target: dto.status,
             note: dto.note.trim(),
-            issueId: issue?.id ?? null,
+            issueId: check.issueId,
             state: 'approved',
             reviewedBy: userId,
             reviewedAt: ctx.now,
             onBehalf: {
+              staffId: userId,
+              note: dto.note.trim(),
               reportedVia: dto.reportedVia.trim(),
-              recordedBy: userId,
             },
           },
         });
-        const files = await this.uploads.attach(
+        await this.uploads.attach(
           ctx.tx,
-          dto.attachments,
+          attachmentIds(dto),
           userId,
           'progress_evidence',
-          'progress_update',
+          PROGRESS_UPDATE_ENTITY,
           row.id,
         );
-        if (
-          (kind === 'completion' || kind === 'rework_completion') &&
-          !progressEvidenceSatisfied({
-            hasCurrentAttachments: files.length > 0,
-            hasApprovedCurrentAssignmentEvidence: false,
-          })
-        )
-          throw conflict(
-            'Work evidence is required before completion can be approved.',
-          );
-        if (kind === 'start') {
-          await ctx.tx.assignment.update({
-            where: { id: assignment.id },
-            data: { workStarted: true },
-          });
-          await ctx.tx.serviceRequest.update({
-            where: { id: ctx.snap.id },
-            data: { status: 'in_progress' },
-          });
-          ctx.timers.stop('T13.noShowCheck');
-          ctx.timers.start(
-            'T15.stale',
-            new Date(ctx.now.getTime() + 3 * 86_400_000),
-          );
-          ctx.timers.start(
-            'T15.escalate',
-            new Date(ctx.now.getTime() + 5 * 86_400_000),
-          );
-        } else if (kind === 'blocker') {
-          await ctx.tx.serviceRequest.update({
-            where: { id: ctx.snap.id },
-            data: { status: 'blocked' },
-          });
-          ctx.timers.start(
-            'T16.review',
-            new Date(ctx.now.getTime() + 8 * 60 * 60_000),
-          );
-        } else if (kind === 'resume') {
-          await ctx.tx.serviceRequest.update({
-            where: { id: ctx.snap.id },
-            data: { status: 'in_progress' },
-          });
-          ctx.timers.stop('T16.review');
-          ctx.timers.start(
-            'T15.stale',
-            new Date(ctx.now.getTime() + 3 * 86_400_000),
-          );
-          ctx.timers.start(
-            'T15.escalate',
-            new Date(ctx.now.getTime() + 5 * 86_400_000),
-          );
-        } else if (kind === 'completion' || kind === 'rework_completion') {
-          const dueAt = new Date(
-            ctx.now.getTime() +
-              Number(ctx.settings['completion.windowHours'] ?? 72) *
-                60 *
-                60_000,
-          );
-          await ctx.tx.serviceRequest.update({
-            where: { id: ctx.snap.id },
-            data: {
-              status: 'completion_pending',
-              reportApprovedAt: ctx.now,
-              confirmDueAt: dueAt,
-            },
-          });
-          ctx.timers.stop('T15.stale');
-          ctx.timers.start(
-            'T17.reminder24h',
-            new Date(ctx.now.getTime() + 24 * 60 * 60_000),
-          );
-          ctx.timers.start(
-            'T17.reminder48h',
-            new Date(ctx.now.getTime() + 48 * 60 * 60_000),
-          );
-          ctx.timers.start('T17.autoConfirm', dueAt);
-        }
+        await applyApprovedEffects(ctx, row, userId);
         ctx.audit('Progress update recorded on behalf of provider', {
           resourceType: 'progress_update',
           resourceId: row.id,
           note: dto.note,
-          changes: { kind, reportedVia: dto.reportedVia },
+          changes: { kind: check.kind, reportedVia: dto.reportedVia },
         });
         ctx.notify('progress.on_behalf', { requestCode: ctx.snap.number });
       },
     );
   }
+
+  /** Loads the rows the 04 §6.14 add table reads and runs it; the guard already ran the snapshot rows. */
+  private async checkAdd(
+    ctx: CommandContext,
+    assignmentId: string | null,
+    dto: AddInput,
+    options: { staffOverride: boolean },
+  ): Promise<Extract<ProgressAddCheck, { ok: true }>> {
+    const schedule = assignmentId
+      ? await ctx.tx.schedule.findFirst({
+          where: {
+            requestId: ctx.snap.id,
+            assignmentId,
+            status: 'confirmed',
+          },
+          orderBy: { proposedAt: 'desc' },
+          select: { startAt: true },
+        })
+      : null;
+    const issues = await ctx.tx.issue.findMany({
+      where: {
+        requestId: ctx.snap.id,
+        status: { in: ['open', 'rework', 'disputed'] },
+      },
+      select: { id: true, status: true },
+    });
+    const pending = assignmentId
+      ? await ctx.tx.progressUpdate.findMany({
+          where: {
+            requestId: ctx.snap.id,
+            assignmentId,
+            state: 'pending',
+          },
+          select: { kind: true },
+        })
+      : [];
+    const approvedEvidence =
+      assignmentId && dto.status === 'completion_pending'
+        ? await hasApprovedAssignmentEvidence(ctx.tx, ctx.snap.id, assignmentId)
+        : false;
+    const result = checkProgressAdd({
+      status: dto.status,
+      note: dto.note,
+      issueId: dto.issueId,
+      requestStatus: ctx.snap.status,
+      assignmentAccepted: assignmentId !== null,
+      confirmedStartAt: schedule?.startAt ?? null,
+      onHold: !!ctx.snap.hold,
+      unresolvedIssues: issues,
+      hasCurrentAttachments: attachmentIds(dto).length > 0,
+      hasApprovedCurrentAssignmentEvidence: approvedEvidence,
+      pendingKinds: pending.map(({ kind }) => kind),
+      now: ctx.now,
+      staffOverride: options.staffOverride,
+    });
+    if (!result.ok)
+      throw new AppError(result.status, result.code, result.message);
+    return result;
+  }
+
+  /** 04 §6.14 review table, approve rows 3 to 6 (the runner guard checked the rest). */
+  private async assertApprovable(
+    ctx: CommandContext,
+    update: {
+      id: string;
+      kind: string;
+      target: ProgressInputStatus;
+      assignmentId: string;
+      issueId: string | null;
+    },
+  ) {
+    const assignment = await ctx.tx.assignment.findFirst({
+      where: {
+        id: update.assignmentId,
+        requestId: ctx.snap.id,
+        status: 'accepted',
+      },
+    });
+    if (!assignment)
+      throw conflict(
+        'This update came from a provider who is no longer on the job. Reject it instead.',
+      );
+    const linked = update.issueId
+      ? await ctx.tx.issue.findFirst({
+          where: { id: update.issueId, requestId: ctx.snap.id },
+          select: { status: true },
+        })
+      : await ctx.tx.issue.findFirst({
+          where: { requestId: ctx.snap.id, status: 'rework' },
+          select: { status: true },
+        });
+    const currentKind = deriveProgressKind({
+      status: update.target,
+      requestStatus: ctx.snap.status,
+      issueStatus: linked?.status,
+      issueId: update.issueId ?? undefined,
+    });
+    if (currentKind !== update.kind) throw conflict(PROGRESS_STALE_MESSAGE);
+    if (update.kind === 'completion' || update.kind === 'rework_completion') {
+      const satisfied =
+        (await hasAttachedEvidence(ctx.tx, [update.id])) ||
+        (await hasApprovedAssignmentEvidence(
+          ctx.tx,
+          ctx.snap.id,
+          update.assignmentId,
+        ));
+      if (!satisfied)
+        throw conflict(
+          'Work evidence is required before completion can be approved.',
+        );
+    }
+    const providerUser = await ctx.tx.user.findUnique({
+      where: { id: assignment.providerUserId },
+      select: { status: true },
+    });
+    if (providerUser?.status !== 'active')
+      throw conflict(
+        'This provider is suspended. Reject the update or replace the provider.',
+      );
+  }
 }
+
+const attachmentIds = (dto: { attachments?: AttachmentRef[] }) =>
+  (dto.attachments ?? []).map(({ id }) => id);

@@ -27,19 +27,22 @@ export function renderPasswordReset(
   });
   const greeting = payload.firstName ? `Hi ${payload.firstName}, ` : '';
   const content = [
-    renderHeading('Reset your password'),
+    renderHeading('Reset your password', 'center'),
     renderParagraph(
       `${greeting}we received a request to reset your ${context.appName} password. Use the secure link below to choose a new password.`,
+      18,
+      'center',
     ),
     renderButton('Reset password', resetUrl),
     renderFallbackUrl(resetUrl),
     renderNoticePanel(
-      'Security notice',
-      'This password reset link expires in 1 hour and can be used only once.',
+      'Keep this link private',
+      'This link expires in 1 hour and can only be used once.',
     ),
     renderParagraph(
       "If you didn't request a password reset, no action is required. Your password will remain unchanged.",
       24,
+      'center',
     ),
   ].join('');
   const text = [

@@ -44,9 +44,9 @@ export class RegisterDto {
   @IsEmail()
   email: string;
 
-  @ApiProperty({ format: 'password', minLength: 12 })
+  @ApiProperty({ format: 'password', minLength: 8 })
   @IsString()
-  @MinLength(12)
+  @MinLength(8)
   password: string;
 
   @ApiProperty({ enum: ['customer', 'provider'] })
@@ -77,36 +77,6 @@ export class VerifyEmailTokenDto {
   @ApiProperty()
   @IsString()
   token: string;
-}
-
-export class SignupDto {
-  @ApiProperty({ type: String, example: 'Alex' })
-  @IsString()
-  firstName: string;
-
-  @ApiProperty({ type: String, example: 'Johnson' })
-  @IsString()
-  lastName: string;
-
-  @ApiProperty({ type: String, format: 'email' })
-  @IsEmail()
-  email: string;
-
-  @ApiProperty({ type: String, format: 'password', minLength: 8 })
-  @IsString()
-  @MinLength(8)
-  password: string;
-}
-
-export class VerifyEmailDto {
-  @ApiProperty({ type: String, format: 'email' })
-  @IsEmail()
-  email: string;
-
-  @ApiProperty({ type: String, example: '123456' })
-  @IsString()
-  @Matches(/^\d{6}$/, { message: 'Verification code must be 6 digits' })
-  code: string;
 }
 
 export class ResendVerificationDto {

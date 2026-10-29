@@ -80,8 +80,9 @@ export class SettingsService {
     reason: string,
     reauthToken?: string,
     sessionId?: string,
+    permission: StaffPermission = 'settings.manage',
   ) {
-    requirePermission(actor, 'settings.manage');
+    requirePermission(actor, permission);
     if (
       !reason.trim() ||
       reason.trim().length < 5 ||
@@ -124,7 +125,7 @@ export class SettingsService {
         a.key.localeCompare(b.key),
       );
       for (const change of lockedKeys) {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${change.key}, 0))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${change.key}, 0))`;
       }
 
       const oldValues = new Map<string, unknown>();

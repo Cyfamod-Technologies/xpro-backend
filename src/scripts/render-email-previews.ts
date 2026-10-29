@@ -13,7 +13,7 @@ const fixtures: {
   welcome: { firstName: 'Ada' },
   email_verification: {
     firstName: 'Ada',
-    code: '123456',
+    token: 'preview-verification-token',
   },
   password_reset: {
     firstName: 'Ada',

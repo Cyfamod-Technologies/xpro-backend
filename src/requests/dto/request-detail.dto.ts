@@ -1,5 +1,6 @@
-import type { RequestStage, NextActor } from '../domain/stage';
+import type { RequestStage, NextActor, ViewerNextActor } from '../domain/stage';
 import type { RequestStatus } from '../domain/statuses';
+import type { AnswerSnapshot } from '../domain/answers';
 
 export type RequestRole = 'customer' | 'provider' | 'staff';
 export interface RequestScheduleView {
@@ -31,6 +32,8 @@ export interface RequestNoShowView {
   id: string;
   scheduleId: string;
   status: string;
+  /** The no-show row version the decision and correction commands require. */
+  version: number;
   note: string;
   createdAt: Date;
 }
@@ -40,7 +43,8 @@ export interface RequestDetailDto {
   status: RequestStatus;
   stage: RequestStage;
   statusLabel: string | null;
-  nextActor: NextActor;
+  /** Raw for staff; `customer`, `provider`, `xpro` or `none` for the other roles (A-22). */
+  nextActor: NextActor | ViewerNextActor;
   allowedActions: string[];
   overlays: {
     cancellation: string | null;
@@ -62,6 +66,8 @@ export interface RequestDetailDto {
   effectiveStartDate?: string | null;
   effectiveEndDate?: string | null;
   details?: Record<string, unknown>;
+  servicePath?: unknown;
+  answers?: Array<Partial<AnswerSnapshot>>;
   customerName?: string;
   ownerId?: string;
   staffOwnerId?: string | null;
@@ -69,6 +75,7 @@ export interface RequestDetailDto {
   unclaimedSince?: Date | null;
   ownershipVersion?: number;
   intake?: { state: string; clarificationCount: number };
+  /** Staff only (04 §10: flags are never shown to customers or providers). */
   contactInBrief?: boolean;
   attachments?: Array<{
     id: string;
