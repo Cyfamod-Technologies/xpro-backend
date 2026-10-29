@@ -323,7 +323,12 @@ export class ProvidersService {
     const normalized = await this.validateSubmission(dto);
     const locationValues = await this.locations.resolveProviderLocationIds(dto);
     await this.verifyAttachments(userId, dto);
-    const resolved = await this.resolveBank(dto.bankCode, dto.accountNumber);
+    const bankCode = dto.bankCode ?? '';
+    const accountNumber = dto.accountNumber ?? '';
+    const bankDetailsProvided = Boolean(bankCode || accountNumber);
+    const resolved = bankDetailsProvided
+      ? await this.resolveBank(bankCode, accountNumber)
+      : null;
     const current = await this.prisma.providerProfile.findUnique({
       where: { userId },
     });
@@ -445,27 +450,29 @@ export class ProvidersService {
         where: { providerId: profile.id, state: ProviderBankStatus.verified },
       });
       if (
+        bankDetailsProvided &&
         pendingBank &&
-        (pendingBank.bankCode !== dto.bankCode ||
-          decryptSecret(pendingBank.accountNumberEnc) !== dto.accountNumber)
+        (pendingBank.bankCode !== bankCode ||
+          decryptSecret(pendingBank.accountNumberEnc) !== accountNumber)
       ) {
         throw new ConflictException(
           'Your previous bank change is still awaiting XPro review.',
         );
       }
       const sameVerifiedBank =
+        bankDetailsProvided &&
         verifiedBank &&
-        verifiedBank.bankCode === dto.bankCode &&
-        decryptSecret(verifiedBank.accountNumberEnc) === dto.accountNumber;
-      if (!pendingBank && !sameVerifiedBank)
+        verifiedBank.bankCode === bankCode &&
+        decryptSecret(verifiedBank.accountNumberEnc) === accountNumber;
+      if (bankDetailsProvided && !pendingBank && !sameVerifiedBank && resolved)
         await tx.providerBankAccount.create({
           data: {
             providerId: profile.id,
-            bankCode: dto.bankCode,
+            bankCode,
             bankName: resolved.bankName,
-            accountNumberEnc: encryptSecret(dto.accountNumber),
+            accountNumberEnc: encryptSecret(accountNumber),
             accountNameEnc: encryptSecret(resolved.accountName),
-            last4: dto.accountNumber.slice(-4),
+            last4: accountNumber.slice(-4),
             state: ProviderBankStatus.pending,
           },
         });
@@ -1005,7 +1012,11 @@ export class ProvidersService {
       !['image/png', 'image/jpeg', 'image/webp'].includes(dto.photo.type)
     )
       throw new BadRequestException('Add a clear face photo.');
-    if (!/^\d{10}$/.test(dto.accountNumber))
+    if (Boolean(dto.bankCode) !== Boolean(dto.accountNumber))
+      throw new BadRequestException(
+        'Provide both bank details or leave them blank for now.',
+      );
+    if (dto.accountNumber && !/^\d{10}$/.test(dto.accountNumber))
       throw new BadRequestException('Enter a 10-digit account number.');
     const skillIds: Record<string, string[]> = {};
     for (const root of roots) {

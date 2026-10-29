@@ -168,15 +168,18 @@ export class ProviderProfileSubmissionDto {
   @Type(() => ProviderAttachmentDto)
   portfolio?: ProviderAttachmentDto[];
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  bankCode: string;
+  @MinLength(1)
+  bankCode?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   @MinLength(10)
   @MaxLength(10)
-  accountNumber: string;
+  accountNumber?: string;
 }
 
 export class ProviderBankUpdateDto {
