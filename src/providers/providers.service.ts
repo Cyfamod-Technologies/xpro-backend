@@ -2,12 +2,15 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { Redis } from 'ioredis';
 import {
   Prisma,
   ProviderBankStatus,
@@ -47,10 +50,16 @@ import {
 const PROVIDER_REVIEW_DENIED =
   'You do not have permission to review provider details.';
 
+const BANKS_CACHE_KEY = 'paystack:banks:ng';
+const BANKS_CACHE_TTL_SECONDS = 60 * 60;
+const RESOLVE_CACHE_TTL_SECONDS = 30 * 60;
+
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 
 @Injectable()
 export class ProvidersService {
+  private readonly logger = new Logger(ProvidersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogsService,
@@ -59,6 +68,7 @@ export class ProvidersService {
     private readonly actors: ActorService,
     private readonly locations: LocationsService,
     private readonly requestEvents: RequestEventsService,
+    @Inject('REDIS_CLIENT') private readonly redis: Redis,
   ) {}
 
   async recordReliabilityEvent(
@@ -151,28 +161,7 @@ export class ProvidersService {
     const secret = this.config.get<string>('PAYSTACK_SECRET_KEY');
     if (!secret)
       throw new ServiceUnavailableException('Bank lookup is not configured.');
-    let response: Response;
-    try {
-      response = await fetch(
-        'https://api.paystack.co/bank?country=nigeria&perPage=100',
-        {
-          headers: { Authorization: `Bearer ${secret}` },
-          signal: AbortSignal.timeout(8000),
-        },
-      );
-    } catch {
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    }
-    if (!response.ok)
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    const result = (await response.json()) as {
-      data?: { code: string; name: string }[];
-    };
-    return (result.data ?? []).map(({ code, name }) => ({ code, name }));
+    return this.paystackBanks(secret);
   }
 
   async resolveBankForProvider(userId: string, dto: ProviderBankResolveDto) {
@@ -1088,31 +1077,21 @@ export class ProvidersService {
       throw new ServiceUnavailableException(
         'Bank account verification is not configured.',
       );
-    let bankResponse: Response;
-    try {
-      bankResponse = await fetch(
-        'https://api.paystack.co/bank?country=nigeria&perPage=100',
-        {
-          headers: { Authorization: `Bearer ${secret}` },
-          signal: AbortSignal.timeout(8000),
-        },
-      );
-    } catch {
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    }
-    if (!bankResponse.ok)
-      throw new ServiceUnavailableException(
-        'Bank lookup is temporarily unavailable.',
-      );
-    const bankPayload = (await bankResponse.json()) as {
-      data?: { code: string; name: string }[];
-    };
-    const bankName = bankPayload.data?.find(
-      (bank) => bank.code === bankCode,
-    )?.name;
+    const banks = await this.paystackBanks(secret);
+    const bankName = banks.find((bank) => bank.code === bankCode)?.name;
     if (!bankName) throw new BadRequestException('Choose a valid bank.');
+    const redacted = `bank ${bankCode} account ending ${accountNumber.slice(-4)}`;
+    const cacheKey = `paystack:resolve:${createHash('sha256')
+      .update(`${bankCode}:${accountNumber}`)
+      .digest('hex')}`;
+    const cached = await this.cacheGet(cacheKey);
+    if (cached) {
+      try {
+        return { bankName, accountName: decryptSecret(cached) };
+      } catch {
+        this.logger.warn(`Ignoring unreadable resolve cache for ${redacted}`);
+      }
+    }
     let resolveResponse: Response;
     try {
       resolveResponse = await fetch(
@@ -1127,17 +1106,113 @@ export class ProvidersService {
         'Bank lookup is temporarily unavailable.',
       );
     }
-    if (!resolveResponse.ok)
+    if (!resolveResponse.ok) {
+      const failure = (await resolveResponse.json().catch(() => null)) as {
+        message?: string;
+        code?: string;
+      } | null;
+      this.logger.warn(
+        `Paystack resolve failed: status ${resolveResponse.status} code ${failure?.code ?? 'n/a'} message "${failure?.message ?? 'n/a'}" for ${redacted}`,
+      );
+      if (
+        resolveResponse.status === 429 &&
+        /daily limit/i.test(failure?.message ?? '')
+      )
+        throw new ServiceUnavailableException(
+          'Bank verification has reached its daily limit. Try again tomorrow.',
+        );
+      if (resolveResponse.status === 429 || resolveResponse.status >= 500)
+        throw new ServiceUnavailableException(
+          'Bank verification is busy right now. Try again in a few minutes.',
+        );
+      if (resolveResponse.status === 401 || resolveResponse.status === 403)
+        throw new ServiceUnavailableException(
+          'Bank account verification is not configured.',
+        );
       throw new BadRequestException('We could not verify these bank details.');
+    }
     const result = (await resolveResponse.json()) as {
       data?: { account_name?: string; account_number?: string };
     };
     if (
       result.data?.account_number !== accountNumber ||
       !result.data.account_name
-    )
+    ) {
+      this.logger.warn(
+        `Paystack resolve returned an unusable body for ${redacted}`,
+      );
       throw new BadRequestException('We could not verify these bank details.');
-    return { bankName, accountName: result.data.account_name };
+    }
+    const accountName = result.data.account_name;
+    await this.cacheSet(
+      cacheKey,
+      () => encryptSecret(accountName),
+      RESOLVE_CACHE_TTL_SECONDS,
+    );
+    return { bankName, accountName };
+  }
+
+  private async paystackBanks(
+    secret: string,
+  ): Promise<{ code: string; name: string }[]> {
+    const cached = await this.cacheGet(BANKS_CACHE_KEY);
+    if (cached) {
+      try {
+        return JSON.parse(cached) as { code: string; name: string }[];
+      } catch {
+        this.logger.warn('Ignoring unreadable bank list cache');
+      }
+    }
+    let response: Response;
+    try {
+      response = await fetch(
+        'https://api.paystack.co/bank?country=nigeria&perPage=100',
+        {
+          headers: { Authorization: `Bearer ${secret}` },
+          signal: AbortSignal.timeout(8000),
+        },
+      );
+    } catch {
+      throw new ServiceUnavailableException(
+        'Bank lookup is temporarily unavailable.',
+      );
+    }
+    if (!response.ok)
+      throw new ServiceUnavailableException(
+        'Bank lookup is temporarily unavailable.',
+      );
+    const result = (await response.json()) as {
+      data?: { code: string; name: string }[];
+    };
+    const banks = (result.data ?? []).map(({ code, name }) => ({ code, name }));
+    if (banks.length)
+      await this.cacheSet(
+        BANKS_CACHE_KEY,
+        () => JSON.stringify(banks),
+        BANKS_CACHE_TTL_SECONDS,
+      );
+    return banks;
+  }
+
+  private async cacheGet(key: string): Promise<string | null> {
+    try {
+      return await this.redis.get(key);
+    } catch (error) {
+      this.logger.warn(
+        `Redis get failed for ${key.split(':').slice(0, 2).join(':')}: ${String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  private async cacheSet(key: string, value: () => string, ttlSeconds: number) {
+    try {
+      await this.redis.set(key, value(), 'EX', ttlSeconds);
+    } catch (error) {
+      this.logger.warn(
+        `Redis set failed for ${key.split(':').slice(0, 2).join(':')}: ${String(error)}`,
+      );
+    }
   }
 
   private project(
