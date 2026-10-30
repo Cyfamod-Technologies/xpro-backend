@@ -921,7 +921,11 @@ export class ProvidersService {
           ]
             .filter((value) => value !== undefined && value !== null)
             .map((value) =>
-              Array.isArray(value) ? value.join(' ') : String(value),
+              Array.isArray(value)
+                ? value.join(' ')
+                : typeof value === 'string'
+                  ? value
+                  : '',
             )
             .join(' ')
             .toLocaleLowerCase()

@@ -19,9 +19,19 @@ export class PlatformSettingsService {
     return this.settings.snapshot();
   }
 
-  async save(user: RequestUser, dto: SavePlatformSettingsDto, reauthToken?: string) {
+  async save(
+    user: RequestUser,
+    dto: SavePlatformSettingsDto,
+    reauthToken?: string,
+  ) {
     const actor = await this.actors.resolve(user.id);
-    return this.settings.save(actor, dto.changes, dto.reason, reauthToken, user.sid);
+    return this.settings.save(
+      actor,
+      dto.changes,
+      dto.reason,
+      reauthToken,
+      user.sid,
+    );
   }
 
   async history(userId: string, query: PlatformSettingsHistoryQueryDto) {

@@ -9,7 +9,9 @@ const key = 'phone-test-encryption-key-32-characters';
 
 describe('phone verification', () => {
   const users: string[] = [];
-  const queued = jest.fn().mockResolvedValue({});
+  const queued = jest
+    .fn<Promise<unknown>, [{ verificationId: string; encryptedCode: string }]>()
+    .mockResolvedValue({});
   const audit = { record: jest.fn() };
   const sms = { requireConfigured: jest.fn() };
   const service = new PhoneVerificationService(
