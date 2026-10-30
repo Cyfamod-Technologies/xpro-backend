@@ -1,12 +1,12 @@
 # Object Storage
 
-Storage is **opt-in**. Out of the box `STORAGE_DRIVER=none`, nothing is validated,
-`StorageModule` is not imported, and the app boots without any bucket.
+Storage is **opt-in**. Out of the box `STORAGE_DRIVER=none`; storage settings
+are not validated and storage operations return `503` until a driver is enabled.
 
 | Guide | When |
 | --- | --- |
-| [r2.md](r2.md) | Cloudflare R2 — the implemented driver |
-| [s3.md](s3.md) | AWS S3 — what to change to switch |
+| [r2.md](r2.md) | Cloudflare R2 |
+| [s3.md](s3.md) | AWS S3 |
 
 ## Design
 
@@ -15,12 +15,12 @@ and one set of provider-neutral environment variables:
 
 | Variable | Meaning |
 | --- | --- |
-| `STORAGE_DRIVER` | `none` (default) or `r2` |
+| `STORAGE_DRIVER` | `none` (default), `r2`, or `s3` |
 | `STORAGE_BUCKET` | Bucket name |
 | `STORAGE_REGION` | `auto` for R2, a real region for S3 |
 | `STORAGE_ENDPOINT` | R2 account endpoint; omitted for S3 |
-| `STORAGE_ACCESS_KEY_ID` | Access key |
-| `STORAGE_SECRET_ACCESS_KEY` | Secret key |
+| `STORAGE_ACCESS_KEY_ID` | Access key; optional for S3 when using an AWS role |
+| `STORAGE_SECRET_ACCESS_KEY` | Secret key; optional for S3 when using an AWS role |
 | `STORAGE_PUBLIC_URL` | Base URL objects are served from |
 
 Because the names are provider-neutral, switching providers changes values and a
@@ -40,8 +40,8 @@ so it cannot block startup. `resolveStorageConfig()` is the only place env is re
 
 ## Turning it on
 
-1. Follow [r2.md](r2.md) to create the bucket and credentials.
-2. Set `STORAGE_DRIVER=r2` and the rest of the `STORAGE_*` block in `.env.local`.
+1. Follow [r2.md](r2.md) or [s3.md](s3.md) to create the bucket and credentials.
+2. Set `STORAGE_DRIVER` to `r2` or `s3` and provide that provider's `STORAGE_*` values in the environment where the API runs.
 3. Import `StorageModule` in whichever feature module needs it:
 
    ```ts
@@ -64,8 +64,10 @@ so it cannot block startup. `resolveStorageConfig()` is the only place env is re
 
 Importing `StorageModule` while `STORAGE_DRIVER=none` is allowed so the API can
 boot without optional uploads configured. Storage operations return a clear
-service-unavailable response until a driver is enabled. Set `STORAGE_DRIVER=r2`
-and configure the required credentials before using provider document uploads.
+service-unavailable response until a driver is enabled. Set `STORAGE_DRIVER=s3`
+and configure the required S3 settings in production before using provider
+document uploads. Changing local `.env` files does not update a deployed server;
+update the production service's environment and restart or redeploy it.
 
 ## API
 
