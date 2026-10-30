@@ -28,13 +28,16 @@ import { StorageService } from './storage.service';
       useFactory: (storage: StorageConfig) =>
         new S3Client({
           region: storage.region ?? 'auto',
-          endpoint: storage.endpoint,
-          // R2 requires path-style addressing.
-          forcePathStyle: true,
-          credentials: {
-            accessKeyId: storage.accessKeyId ?? '',
-            secretAccessKey: storage.secretAccessKey ?? '',
-          },
+          ...(storage.endpoint ? { endpoint: storage.endpoint } : {}),
+          forcePathStyle: storage.driver === 'r2',
+          ...(storage.accessKeyId && storage.secretAccessKey
+            ? {
+                credentials: {
+                  accessKeyId: storage.accessKeyId,
+                  secretAccessKey: storage.secretAccessKey,
+                },
+              }
+            : {}),
           // The AWS SDK sends CRC32 integrity headers by default since
           // v3.729. R2 rejects them, so only send a checksum when the
           // operation actually requires one. Harmless on real S3.
