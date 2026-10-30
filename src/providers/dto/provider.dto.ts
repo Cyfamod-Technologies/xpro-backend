@@ -72,6 +72,13 @@ export class ProviderProfileSubmissionDto {
   @MaxLength(80)
   trade: string;
 
+  @ApiPropertyOptional({
+    description: 'Nigerian state, as in the built-in list. Needed with city.',
+  })
+  @IsOptional()
+  @IsString()
+  state?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

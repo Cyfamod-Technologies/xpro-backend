@@ -9,6 +9,11 @@ import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SaveLocationDto } from './locations.dto';
 import { matchLocationName } from './location-matching';
+import {
+  findBuiltInArea,
+  findBuiltInCity,
+  findBuiltInState,
+} from './builtin-locations';
 
 export type LocationValue = {
   id: string;
@@ -79,7 +84,12 @@ export class LocationsService {
     );
   }
 
+  /**
+   * Providers choose a state and city from the built-in Nigeria list, so no admin setup is needed. A city or area that
+   * is also a managed location keeps its id, which is what dispatch matches on; anything else is saved by name only.
+   */
   async resolveProviderLocationIds(input: {
+    state?: string;
     cityId?: string;
     city?: string;
     serviceAreaIds?: string[];
@@ -91,20 +101,25 @@ export class LocationsService {
       if (!name?.trim()) return undefined;
       return matchLocationName(name, locations, kind);
     };
-    const city = input.cityId
+    const managedCity = input.cityId
       ? cities.find((location) => location.id === input.cityId)
       : findNamed(input.city, 'city');
-    if (input.cityId && !city)
+    if (input.cityId && !managedCity)
       // new message: not in spec.
       throw new BadRequestException('Choose an active city from the list.');
-    if (!city) {
+    const builtInCity = managedCity
+      ? undefined
+      : findBuiltInCity(input.state, input.city);
+    if (!managedCity && !builtInCity) {
       // new message: not in spec.
       throw new BadRequestException(
-        'Choose your city from the active location list.',
+        'Choose your state and city from the list.',
       );
     }
+    const state = findBuiltInState(input.state)?.name ?? builtInCity?.state;
 
     let areaIds: string[];
+    let areaNames: string[];
     if (input.serviceAreaIds?.length) {
       const validIds = new Set(locations.map(({ id }) => id));
       if (input.serviceAreaIds.some((id) => !validIds.has(id)))
@@ -113,28 +128,36 @@ export class LocationsService {
           'Choose active service areas from the list.',
         );
       areaIds = [...new Set(input.serviceAreaIds)];
+      areaNames = locations
+        .filter(({ id }) => areaIds.includes(id))
+        .map(({ name }) => name);
     } else {
-      const mappedAreas = (input.serviceAreas ?? []).map(
-        (name) => findNamed(name, 'city') ?? findNamed(name, 'district'),
-      );
-      if (mappedAreas.some((location) => !location)) {
+      const named = (input.serviceAreas ?? []).map((name) => {
+        const managed = findNamed(name, 'city') ?? findNamed(name, 'district');
+        return {
+          id: managed?.id,
+          name: managed?.name ?? findBuiltInArea(name),
+        };
+      });
+      if (named.some((area) => !area.name)) {
         // new message: not in spec.
         throw new BadRequestException(
-          'Choose active service areas from the location list.',
+          'Choose service areas from the location list.',
         );
       }
-      areaIds = mappedAreas.map((location) => location!.id);
-      areaIds = [...new Set(areaIds)];
+      areaIds = [
+        ...new Set(named.flatMap((area) => (area.id ? [area.id] : []))),
+      ];
+      areaNames = [...new Set(named.map((area) => area.name!))];
     }
 
-    const areaLocations = locations.filter(({ id }) => areaIds.includes(id));
-    const areaNames = areaLocations.map(({ name }) => name);
-    if (!areaIds.length)
+    if (!areaNames.length)
       throw new BadRequestException('Add at least one service area.');
     return {
-      cityId: city?.id,
+      cityId: managedCity?.id,
+      state,
       serviceAreaIds: areaIds,
-      cityName: city?.name ?? input.city?.trim() ?? '',
+      cityName: managedCity?.name ?? builtInCity!.city,
       serviceAreaNames: areaNames,
     };
   }
