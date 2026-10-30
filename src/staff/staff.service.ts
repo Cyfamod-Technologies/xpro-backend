@@ -1180,12 +1180,19 @@ export class StaffService {
 
   async invitePreview(token: string) {
     const invite = await this.findInvite(token);
+    // The accept call must name the current staff policy, so the page learns its version here.
+    const policy = await this.prisma.legalDocument.findFirst({
+      where: { kind: 'staff_policy' },
+      orderBy: { publishedAt: 'desc' },
+      select: { version: true, url: true },
+    });
     return {
       firstName: invite.staffMember.user.firstName,
       lastName: invite.staffMember.user.lastName,
       email: invite.staffMember.user.email,
       roles: invite.staffMember.roles.map(({ role }) => role),
       expiresAt: invite.expiresAt,
+      policy,
     };
   }
 
