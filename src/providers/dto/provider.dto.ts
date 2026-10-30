@@ -160,6 +160,7 @@ export class ProviderProfileSubmissionDto {
   documents: ProviderAttachmentDto[];
 
   @ApiProperty()
+  @IsObject()
   @Type(() => ProviderAttachmentDto)
   photo: ProviderAttachmentDto;
 
