@@ -23,6 +23,15 @@ function setup() {
       active: true,
       sort: 1,
     },
+    {
+      id: '00000000-0000-4000-8000-000000000005',
+      kind: 'district',
+      name: 'Wuse II',
+      parentId: ABUJA,
+      aliases: ['Wuse 2'],
+      active: true,
+      sort: 2,
+    },
   ];
   const prisma = { location: { findMany: jest.fn().mockResolvedValue(rows) } };
   return new LocationsService(prisma as never, {} as never, {} as never);
@@ -61,7 +70,26 @@ describe('LocationsService.resolveProviderLocationIds', () => {
     });
   });
 
-  it('rejects a city that is not in the chosen state, or sent without a state', async () => {
+  it('works out the state when only one state has the city', async () => {
+    await expect(
+      setup().resolveProviderLocationIds({
+        city: 'Alimosho',
+        serviceAreas: ['Alimosho', 'Wuse'],
+      }),
+    ).resolves.toMatchObject({ state: 'Lagos', cityName: 'Alimosho' });
+  });
+
+  it('treats an empty state like a missing one', async () => {
+    await expect(
+      setup().resolveProviderLocationIds({
+        state: '',
+        city: 'Alimosho',
+        serviceAreas: ['Alimosho', 'Wuse', 'Wuse II'],
+      }),
+    ).resolves.toMatchObject({ state: 'Lagos', cityName: 'Alimosho' });
+  });
+
+  it('rejects a city that is not in the chosen state, or is ambiguous without a state', async () => {
     const message = 'Choose your state and city from the list.';
     await expect(
       setup().resolveProviderLocationIds({
@@ -72,7 +100,7 @@ describe('LocationsService.resolveProviderLocationIds', () => {
     ).rejects.toThrow(message);
     await expect(
       setup().resolveProviderLocationIds({
-        city: 'Ajeromi-Ifelodun',
+        city: 'Irepodun',
         serviceAreas: ['Ikeja'],
       }),
     ).rejects.toThrow(message);
