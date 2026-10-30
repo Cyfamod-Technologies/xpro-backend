@@ -9,8 +9,10 @@ create states or cities, so a provider anywhere in Nigeria can submit a profile.
 
 - **City:** a managed city (the `locations` table, today Abuja) keeps its id in
   `provider_profiles.city_id`. Any other city must be a valid LGA or capital of the chosen
-  state, is stored by name, and leaves `city_id` null. A city sent without its state, or
-  with the wrong state, fails with `Choose your state and city from the list.` Apply the
+  state, is stored by name, and leaves `city_id` null. If the state is missing, it is worked
+  out from the city when exactly one state has that name (a few LGAs such as Obi and
+  Irepodun repeat across states). A city with the wrong state, or an ambiguous one with no
+  state, fails with `Choose your state and city from the list.` Apply the
   `20261030120000_provider_state` migration; existing profiles have a null `state`.
 - **Service areas:** a managed city or district keeps its id in `service_area_ids`. Any
   other area must be a built-in LGA, state capital or state and is stored by name only.
