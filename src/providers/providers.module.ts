@@ -25,9 +25,10 @@ import { FeaturedProvidersService } from './featured-providers.service';
   ],
   controllers: [
     ProvidersController,
-    ProviderReviewController,
+    // Declared before ProviderReviewController: its `GET admin/providers/:id` would otherwise take `featured` as an id.
     FeaturedProvidersController,
     FeaturedProvidersAdminController,
+    ProviderReviewController,
   ],
   providers: [ProvidersService, FeaturedProvidersService],
   exports: [ProvidersService],
