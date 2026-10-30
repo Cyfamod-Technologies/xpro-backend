@@ -1,6 +1,23 @@
 import { getSettingDefinition, SETTINGS_REGISTRY } from './settings.registry';
 
 describe('settings registry', () => {
+  it('makes provider phone verification optional by default and accepts only booleans', () => {
+    const definition = getSettingDefinition(
+      'provider.requirePhoneVerification',
+    )!;
+    expect(definition.defaultValue).toBe(false);
+    expect(definition.validate(true)).toBeNull();
+    expect(definition.validate(false)).toBeNull();
+    expect(definition.validate('true')).toBeTruthy();
+  });
+  it('requires provider email verification by default and accepts only booleans', () => {
+    const definition = getSettingDefinition(
+      'provider.requireEmailVerification',
+    )!;
+    expect(definition.defaultValue).toBe(true);
+    expect(definition.validate(false)).toBeNull();
+    expect(definition.validate('false')).toBeTruthy();
+  });
   it('has a valid default for every registered setting', () => {
     for (const [key, definition] of Object.entries(SETTINGS_REGISTRY)) {
       if (key !== 'payment.offlineInstructions')

@@ -19,6 +19,13 @@ import {
   ProviderVerificationStatus,
 } from '@prisma/client';
 import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
+import { normalizeAccountPhone } from '../common/utils/phone.util';
+import {
+  PROVIDER_EMAIL_VERIFICATION_SETTING,
+  PROVIDER_PHONE_VERIFICATION_SETTING,
+  requiresProviderEmailVerification,
+  requiresProviderPhoneVerification,
+} from './phone-verification-policy';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -314,11 +321,44 @@ export class ProvidersService {
     return { deleted: true };
   }
 
+  async onboardingPolicy(userId: string) {
+    await this.requireProvider(userId);
+    return {
+      phoneVerificationRequired: await requiresProviderPhoneVerification(
+        this.prisma,
+      ),
+      emailVerificationRequired: await requiresProviderEmailVerification(
+        this.prisma,
+      ),
+    };
+  }
+
   async submit(userId: string, dto: ProviderProfileSubmissionDto) {
     const user = await this.requireProvider(userId);
-    if (!user.emailVerifiedAt)
+    if (
+      !user.emailVerifiedAt &&
+      (await requiresProviderEmailVerification(this.prisma))
+    )
       throw new ForbiddenException(
         'Verify your email before submitting your provider profile.',
+      );
+    const phone = normalizeAccountPhone(dto.phone);
+    if (!phone)
+      throw new AppError(
+        422,
+        'VALIDATION_ERROR',
+        'Enter a valid Nigerian phone number.',
+        { field: 'phone' },
+      );
+    if (
+      (await requiresProviderPhoneVerification(this.prisma)) &&
+      (!user.phoneVerifiedAt || user.phoneE164 !== phone)
+    )
+      throw new AppError(
+        422,
+        'VALIDATION_ERROR',
+        'Verify your phone number before submitting your profile.',
+        { field: 'phone' },
       );
     const normalized = await this.validateSubmission(dto);
     const locationValues = await this.locations.resolveProviderLocationIds(dto);
@@ -346,6 +386,38 @@ export class ProvidersService {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Use the same lock as settings saves so a concurrent toggle cannot bypass the requirement.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended(${PROVIDER_PHONE_VERIFICATION_SETTING}, 0))`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtextextended(${PROVIDER_EMAIL_VERIFICATION_SETTING}, 0))`;
+      await tx.$queryRaw`SELECT id FROM users WHERE id = ${userId} FOR UPDATE`;
+      const account = await tx.user.findUnique({ where: { id: userId } });
+      if (
+        !account?.emailVerifiedAt &&
+        (await requiresProviderEmailVerification(tx))
+      )
+        throw new ForbiddenException(
+          'Verify your email before submitting your provider profile.',
+        );
+      if (
+        (await requiresProviderPhoneVerification(tx)) &&
+        (!account?.phoneVerifiedAt || account.phoneE164 !== phone)
+      )
+        throw new AppError(
+          422,
+          'VALIDATION_ERROR',
+          'Verify your phone number before submitting your profile.',
+          { field: 'phone' },
+        );
+      if (account?.phoneE164 !== phone) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { phoneE164: phone, phoneVerifiedAt: null },
+        });
+        await tx.phoneVerification.updateMany({
+          where: { userId, consumedAt: null },
+          data: { consumedAt: new Date() },
+        });
+      }
       const live = await tx.providerProfile.findUnique({ where: { userId } });
       const approved =
         live?.verification === ProviderVerificationStatus.approved;
@@ -368,7 +440,7 @@ export class ProvidersService {
         profile = await tx.providerProfile.update({
           where: { userId },
           data: {
-            phone: dto.phone.trim(),
+            phone,
             city: locationValues.cityName,
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || undefined,
@@ -393,7 +465,7 @@ export class ProvidersService {
           where: { userId },
           create: {
             userId,
-            phone: dto.phone.trim(),
+            phone,
             trade: dto.trade.trim(),
             city: locationValues.cityName,
             cityId: locationValues.cityId ?? null,
@@ -415,7 +487,7 @@ export class ProvidersService {
             version: 1,
           },
           update: {
-            phone: dto.phone.trim(),
+            phone,
             trade: dto.trade.trim(),
             city: locationValues.cityName,
             cityId: locationValues.cityId ?? null,
@@ -1009,7 +1081,12 @@ export class ProvidersService {
         status: 'active',
         platformRoles: { some: { role: 'provider' } },
       },
-      select: { id: true, emailVerifiedAt: true },
+      select: {
+        id: true,
+        emailVerifiedAt: true,
+        phoneE164: true,
+        phoneVerifiedAt: true,
+      },
     });
     if (!user)
       throw new ForbiddenException('An active provider account is required.');

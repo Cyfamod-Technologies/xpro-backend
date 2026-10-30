@@ -1,4 +1,5 @@
 export const QUEUE_NAMES = [
+  'sms',
   // email — NestJS publishes; consumed by EmailProcessor
   'email',
   // audit-logs — NestJS publishes; consumed by AuditLogsProcessor

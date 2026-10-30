@@ -40,6 +40,12 @@ export class ProvidersController {
     return this.providers.myProfile(user.id);
   }
 
+  @Get('me/onboarding-policy')
+  @ApiOperation({ summary: 'Read the provider phone verification requirement' })
+  onboardingPolicy(@CurrentUser() user: RequestUser) {
+    return this.providers.onboardingPolicy(user.id);
+  }
+
   @Get('banks')
   banks(@CurrentUser() user: RequestUser) {
     return this.providers.listBanks(user.id);

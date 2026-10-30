@@ -1,6 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bullmq';
+import type { PhoneSmsJob } from './processors/sms.processor';
 import type { EmailJobData } from '../email/email.types';
 import {
   OUTBOX_SWEEP_INTERVAL_MS,
@@ -25,6 +26,7 @@ export class JobsService implements OnModuleInit {
     @InjectQueue('platform') private readonly platformQueue: Queue,
     @InjectQueue('outbox') private readonly outboxQueue: Queue,
     @InjectQueue('timers') private readonly timersQueue: Queue,
+    @InjectQueue('sms') private readonly smsQueue: Queue,
   ) {}
 
   async onModuleInit() {
@@ -54,6 +56,15 @@ export class JobsService implements OnModuleInit {
     return this.emailQueue.add(name, data);
   }
 
+  addSmsJob(data: PhoneSmsJob) {
+    return this.smsQueue.add('phone.verify', data, {
+      jobId: data.verificationId,
+      attempts: 3,
+      removeOnComplete: true,
+      removeOnFail: true,
+    });
+  }
+
   addAuditLogJob(data: Record<string, unknown>) {
     return this.auditLogsQueue.add('write', data, { attempts: 5 });
   }
@@ -75,6 +86,7 @@ export class JobsService implements OnModuleInit {
       platform: this.platformQueue,
       outbox: this.outboxQueue,
       timers: this.timersQueue,
+      sms: this.smsQueue,
     };
     return queues[name] ?? null;
   }

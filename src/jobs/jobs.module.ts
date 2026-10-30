@@ -11,11 +11,14 @@ import { AuditLogsProcessor } from './processors/audit-logs.processor';
 import { EmailProcessor } from './processors/email.processor';
 import { PlatformProcessor } from './processors/platform.processor';
 import { UploadsModule } from '../uploads/uploads.module';
+import { SmsModule } from '../sms/sms.module';
+import { SmsProcessor } from './processors/sms.processor';
 
 @Module({
   imports: [
     ...QUEUE_NAMES.map((name) => BullModule.registerQueue({ name })),
     ConfigModule,
+    SmsModule,
     EmailModule,
     PlatformModule,
     PrismaModule,
@@ -26,6 +29,7 @@ import { UploadsModule } from '../uploads/uploads.module';
     FailedJobsService,
     AuditLogsProcessor,
     EmailProcessor,
+    SmsProcessor,
     PlatformProcessor,
   ],
   exports: [JobsService, FailedJobsService],

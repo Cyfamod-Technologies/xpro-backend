@@ -27,6 +27,7 @@ import { UploadsModule } from './uploads/uploads.module';
 import { RequestsModule } from './requests/requests.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { PaymentsModule } from './payments/payments.module';
+import { PhoneModule } from './phone/phone.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { PaymentsModule } from './payments/payments.module';
     }),
     RedisModule,
     AuthModule,
+    PhoneModule,
     StaffModule,
     ProvidersModule,
     UploadsModule,

@@ -23,7 +23,7 @@ function submission(
   over: Partial<ProviderProfileSubmissionDto> = {},
 ): ProviderProfileSubmissionDto {
   return {
-    phone: '08000000000',
+    phone: '08031234567',
     trade: 'Builder',
     serviceAreaIds: ['district-1'],
     capacity: 2,
@@ -43,6 +43,9 @@ function setup(
     catalog?: CatalogIndex;
     live?: Record<string, unknown> | null;
     stubProfile?: boolean;
+    requirePhoneVerification?: boolean;
+    requireEmailVerification?: boolean;
+    emailVerified?: boolean;
   } = {},
 ) {
   const catalog = options.catalog ?? seededCatalog();
@@ -51,7 +54,30 @@ function setup(
     version: 1,
     ...data,
   });
+  const settingLookup = ({ where }: { where: { key: string } }) => {
+    if (where.key === 'provider.requirePhoneVerification')
+      return Promise.resolve(
+        options.requirePhoneVerification ? { value: true } : null,
+      );
+    if (where.key === 'provider.requireEmailVerification')
+      return Promise.resolve(
+        options.requireEmailVerification === false ? { value: false } : null,
+      );
+    return Promise.resolve(null);
+  };
   const tx = {
+    $queryRaw: jest.fn().mockResolvedValue([]),
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    setting: { findUnique: jest.fn(settingLookup) },
+    phoneVerification: { updateMany: jest.fn() },
+    user: {
+      update: jest.fn(),
+      findUnique: jest.fn().mockResolvedValue({
+        emailVerifiedAt: options.emailVerified === false ? null : new Date(),
+        phoneE164: '+2348031234567',
+        phoneVerifiedAt: new Date(),
+      }),
+    },
     providerProfile: {
       findUnique: jest.fn().mockResolvedValue(options.live ?? null),
       upsert: jest.fn((args: { create: Record<string, unknown> }) =>
@@ -69,6 +95,7 @@ function setup(
     providerUpload: { updateMany: jest.fn() },
   };
   const prisma = {
+    setting: { findUnique: jest.fn(settingLookup) },
     catalogService: {
       findMany: jest.fn().mockResolvedValue(catalogRows(catalog)),
     },
@@ -98,7 +125,9 @@ function setup(
   );
   jest.spyOn(service as never, 'requireProvider' as never).mockResolvedValue({
     id: 'user-1',
-    emailVerifiedAt: new Date(),
+    emailVerifiedAt: options.emailVerified === false ? null : new Date(),
+    phoneE164: '+2348031234567',
+    phoneVerifiedAt: new Date(),
   } as never);
   jest
     .spyOn(service as never, 'verifyAttachments' as never)
@@ -113,6 +142,128 @@ function setup(
 }
 
 describe('ProvidersService', () => {
+  it('rejects a profile whose phone differs from the verified account number', async () => {
+    const { service, prisma } = setup({ requirePhoneVerification: true });
+    await expect(
+      service.submit('user-1', submission({ phone: '08031234568' })),
+    ).rejects.toThrow(
+      'Verify your phone number before submitting your profile.',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rechecks verification under the account lock before saving', async () => {
+    const { service, tx } = setup({ requirePhoneVerification: true });
+    tx.user.findUnique.mockResolvedValueOnce({
+      emailVerifiedAt: new Date(),
+      phoneE164: '+2348031234567',
+      phoneVerifiedAt: null,
+    });
+    await expect(
+      service.submit(
+        'user-1',
+        submission({
+          serviceIds: ['svc:Design'],
+          skillIds: { 'svc:Design': [INTERIOR] },
+        }),
+      ),
+    ).rejects.toThrow(
+      'Verify your phone number before submitting your profile.',
+    );
+    expect(tx.providerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  it('allows an unverified number by default and clears verification when the phone changes', async () => {
+    const { service, tx } = setup();
+    await service.submit(
+      'user-1',
+      submission({
+        phone: '08031234568',
+        serviceIds: ['svc:Design'],
+        skillIds: { 'svc:Design': [INTERIOR] },
+      }),
+    );
+    expect(tx.user.update).toHaveBeenCalledWith({
+      where: { id: 'user-1' },
+      data: { phoneE164: '+2348031234568', phoneVerifiedAt: null },
+    });
+    expect(tx.phoneVerification.updateMany).toHaveBeenCalled();
+    expect(tx.providerProfile.upsert).toHaveBeenCalled();
+  });
+
+  it('enforces a requirement enabled after the initial policy read', async () => {
+    const { service, tx } = setup();
+    tx.setting.findUnique.mockImplementation(({ where }) =>
+      Promise.resolve(
+        where.key === 'provider.requirePhoneVerification'
+          ? { value: true }
+          : null,
+      ),
+    );
+    tx.user.findUnique.mockResolvedValue({
+      emailVerifiedAt: new Date(),
+      phoneE164: '+2348031234567',
+      phoneVerifiedAt: null,
+    });
+    await expect(
+      service.submit(
+        'user-1',
+        submission({
+          serviceIds: ['svc:Design'],
+          skillIds: { 'svc:Design': [INTERIOR] },
+        }),
+      ),
+    ).rejects.toThrow('Verify your phone number');
+    expect(tx.providerProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  it('exposes only the onboarding verification policy to providers', async () => {
+    const disabled = setup({ requireEmailVerification: false });
+    await expect(disabled.service.onboardingPolicy('user-1')).resolves.toEqual({
+      phoneVerificationRequired: false,
+      emailVerificationRequired: false,
+    });
+    const enabled = setup({ requirePhoneVerification: true });
+    await expect(enabled.service.onboardingPolicy('user-1')).resolves.toEqual({
+      phoneVerificationRequired: true,
+      emailVerificationRequired: true,
+    });
+  });
+
+  const emailSubmission = () =>
+    submission({
+      serviceIds: ['svc:Design'],
+      skillIds: { 'svc:Design': [INTERIOR] },
+    });
+
+  it('requires a verified email by default', async () => {
+    const { service, prisma } = setup({ emailVerified: false });
+    await expect(service.submit('user-1', emailSubmission())).rejects.toThrow(
+      'Verify your email before submitting your provider profile.',
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('accepts an unverified email when the requirement is turned off', async () => {
+    const { service, tx } = setup({
+      emailVerified: false,
+      requireEmailVerification: false,
+    });
+    await service.submit('user-1', emailSubmission());
+    expect(tx.providerProfile.upsert).toHaveBeenCalled();
+  });
+
+  it('enforces an email requirement re-enabled after the initial policy read', async () => {
+    const { service, tx } = setup({
+      emailVerified: false,
+      requireEmailVerification: false,
+    });
+    tx.setting.findUnique.mockResolvedValue({ value: true });
+    await expect(service.submit('user-1', emailSubmission())).rejects.toThrow(
+      'Verify your email before submitting your provider profile.',
+    );
+    expect(tx.providerProfile.upsert).not.toHaveBeenCalled();
+  });
   const originalKey = process.env.ENCRYPTION_KEY;
   beforeAll(() => {
     process.env.ENCRYPTION_KEY = 'test-encryption-key-test-encryption-key';
