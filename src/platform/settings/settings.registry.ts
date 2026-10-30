@@ -144,6 +144,16 @@ const highRisk = (
 ): SettingDefinition => ({ defaultValue, label, validate, riskClass: 'high' });
 
 export const SETTINGS_REGISTRY = {
+  'provider.requireEmailVerification': operational(
+    true,
+    'Require provider email verification',
+    booleanValue,
+  ),
+  'provider.requirePhoneVerification': operational(
+    false,
+    'Require provider phone verification',
+    booleanValue,
+  ),
   'assignment.modeByService': operational(
     {
       Design: 'auto',

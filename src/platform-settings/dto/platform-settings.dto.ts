@@ -11,7 +11,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-export class SettingChangeDto {
+export class PlatformSettingChangeDto {
   @ApiProperty()
   @IsString()
   key!: string;
@@ -28,20 +28,20 @@ export class SettingChangeDto {
   expectedVersion!: number;
 }
 
-export class SaveSettingsDto {
-  @ApiProperty({ type: [SettingChangeDto] })
+export class SavePlatformSettingsDto {
+  @ApiProperty({ type: [PlatformSettingChangeDto] })
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
-  @Type(() => SettingChangeDto)
-  changes!: SettingChangeDto[];
+  @Type(() => PlatformSettingChangeDto)
+  changes!: PlatformSettingChangeDto[];
 
   @ApiProperty()
   @IsString()
   reason!: string;
 }
 
-export class SettingsHistoryQueryDto {
+export class PlatformSettingsHistoryQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

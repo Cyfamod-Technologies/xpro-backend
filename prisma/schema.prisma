@@ -169,6 +169,8 @@ model User {
   role                    AppRole       @default(user)
   status                  AccountStatus @default(invited)
   emailVerifiedAt         DateTime?     @map("email_verified_at")
+  phoneE164               String?       @map("phone_e164")
+  phoneVerifiedAt         DateTime?     @map("phone_verified_at")
   onboardingCompleted     Boolean       @default(false) @map("onboarding_completed")
   mfaEnabled              Boolean       @default(false) @map("mfa_enabled")
   mfaSecret               String?       @map("mfa_secret")
@@ -206,8 +208,26 @@ model User {
   staffMember   StaffMember?
   providerProfile ProviderProfile?
   providerUploads ProviderUpload[]
+  phoneVerifications PhoneVerification[]
 
   @@map("users")
+}
+
+model PhoneVerification {
+  id          String    @id @default(uuid())
+  userId      String    @map("user_id")
+  phoneE164   String    @map("phone_e164")
+  codeHash    String    @map("code_hash")
+  attempts    Int       @default(0)
+  expiresAt   DateTime  @map("expires_at")
+  consumedAt  DateTime? @map("consumed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([phoneE164, createdAt])
+  @@map("phone_verifications")
 }
 
 model UserRole {

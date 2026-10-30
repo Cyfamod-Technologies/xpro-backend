@@ -409,4 +409,25 @@ describe('notification catalogue', () => {
       title: 'Please confirm your job is complete',
     });
   });
+
+  it('gives message updates a customer/provider link and a separate staff inbox link (04 §6.20)', () => {
+    expect(
+      renderNotification('request.message_update', {
+        requestCode: 'XPR-00042',
+        channel: 'customer',
+        providerId: null,
+      }),
+    ).toMatchObject({
+      audience: { kind: 'message:participants' },
+      link: '/requests/XPR-00042/messages',
+      staffLink: '/admin/messages?request=XPR-00042',
+    });
+  });
+
+  it('defines a staff link only where the entry has mixed recipients', () => {
+    const withStaffLink = Object.values(NOTIFICATION_CATALOGUE)
+      .filter((definition) => 'staffLink' in definition)
+      .map((definition) => definition.key);
+    expect(withStaffLink).toEqual(['request.message_update']);
+  });
 });

@@ -14,6 +14,8 @@ import { IntakeService } from './intake.service';
 import { T6TimerHandlers } from './t6-timer-handlers';
 import { OwnershipService } from './ownership.service';
 import { MessagesService } from './messages.service';
+import { ConversationsController } from './conversations.controller';
+import { ConversationsService } from './conversations.service';
 import { DispatchService } from './dispatch/dispatch.service';
 import { ProviderDispatchLoader } from './dispatch/provider-dispatch.loader';
 import { DispatchController } from './dispatch/dispatch.controller';
@@ -60,6 +62,7 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
   ],
   controllers: [
     RequestsController,
+    ConversationsController,
     DispatchController,
     PricingController,
     SchedulesController,
@@ -77,6 +80,7 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     IntakeService,
     OwnershipService,
     MessagesService,
+    ConversationsService,
     DispatchService,
     ProviderDispatchLoader,
     PricingService,

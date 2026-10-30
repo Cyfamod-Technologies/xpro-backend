@@ -61,6 +61,7 @@ export class NotificationDispatcher {
       params,
       context,
       rendered.link,
+      rendered.staffLink ?? rendered.link,
     );
     await this.inbox.createMany(
       tx,
@@ -171,6 +172,7 @@ export class NotificationDispatcher {
     params: Record<string, unknown>,
     context: DispatchContext,
     link: string | null,
+    staffLink: string | null,
   ): Promise<Recipient[]> {
     const plain = (recipientId: string | null): Recipient[] =>
       recipientId ? [{ recipientId, requestId: context.requestId, link }] : [];
@@ -333,6 +335,7 @@ export class NotificationDispatcher {
       case 'message:participants': {
         const channel = params.channel;
         let ids: string[] = [];
+        let staffIds: string[] = [];
         if (channel === 'customer') {
           const staffRecipients = await this.staffRouting.audience(
             'customer_message',
@@ -342,6 +345,7 @@ export class NotificationDispatcher {
               actorId: context.actorId,
             },
           );
+          staffIds = staffRecipients;
           ids = [context.ownerId, ...staffRecipients];
         } else if (channel === 'provider') {
           const request = await tx.serviceRequest.findUnique({
@@ -366,28 +370,29 @@ export class NotificationDispatcher {
           ) {
             ids.push(assignment.providerUserId);
           }
-          ids.push(
-            ...(await this.staffRouting.audience('gated', {
-              requestId: context.requestId,
-              ownerId: context.staffOwnerId,
-              actorId: context.actorId,
-              permission: 'message.provider',
-            })),
-          );
+          staffIds = await this.staffRouting.audience('gated', {
+            requestId: context.requestId,
+            ownerId: context.staffOwnerId,
+            actorId: context.actorId,
+            permission: 'message.provider',
+          });
+          ids.push(...staffIds);
         } else if (channel === 'internal') {
-          ids = await this.staffRouting.audience('gated_unscoped', {
+          staffIds = await this.staffRouting.audience('gated_unscoped', {
             requestId: context.requestId,
             ownerId: context.staffOwnerId,
             actorId: context.actorId,
             permission: 'message.internal',
           });
+          ids = staffIds;
         }
+        const staff = new Set(staffIds);
         return [...new Set(ids)]
           .filter((recipientId) => recipientId !== context.actorId)
           .map((recipientId) => ({
             recipientId,
             requestId: context.requestId,
-            link,
+            link: staff.has(recipientId) ? staffLink : link,
           }));
       }
     }

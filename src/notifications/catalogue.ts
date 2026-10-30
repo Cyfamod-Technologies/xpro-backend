@@ -24,6 +24,12 @@ export interface CatalogueEntry<P> {
   title: (params: P) => string;
   message: (params: P) => string;
   link: (params: P) => string | null;
+  /**
+   * Deep link for staff recipients of an entry whose other recipients (the
+   * customer, the provider) use `link`. Only the dispatcher cases that know
+   * which recipients are staff read it.
+   */
+  staffLink?: (params: P) => string | null;
 }
 
 function entry<P>(definition: CatalogueEntry<P>): CatalogueEntry<P> {
@@ -331,6 +337,9 @@ export const NOTIFICATION_CATALOGUE = {
     message: ({ requestCode }) =>
       `${requestCode} has a new conversation update.`,
     link: ({ requestCode }) => `/requests/${requestCode}/messages`,
+    // Staff read conversations in the admin Messages inbox (spec 04 §6.20).
+    staffLink: ({ requestCode }) =>
+      `/admin/messages?request=${encodeURIComponent(requestCode)}`,
   }),
   'request.auto_cancelled': entry<RequestParams>({
     key: 'request.auto_cancelled',
@@ -1326,6 +1335,7 @@ export interface RenderedNotification {
   title: string;
   message: string;
   link: string | null;
+  staffLink?: string | null;
 }
 
 export function renderNotification<K extends NotificationEvent>(
@@ -1342,5 +1352,6 @@ export function renderNotification<K extends NotificationEvent>(
     title: definition.title(params),
     message: definition.message(params),
     link: definition.link(params),
+    staffLink: definition.staffLink?.(params),
   };
 }

@@ -14,7 +14,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { OutboxModule } from './platform/outbox/outbox.module';
 import { PlatformModule } from './platform/platform.module';
 import { TimersModule } from './platform/timers/timers.module';
-import { SettingsModule } from './platform/settings/settings.module';
+import { PlatformSettingsModule } from './platform-settings/platform-settings.module';
 import { LocationsModule } from './platform/locations/locations.module';
 import { CatalogModule } from './platform/catalog/catalog.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -27,6 +27,7 @@ import { UploadsModule } from './uploads/uploads.module';
 import { RequestsModule } from './requests/requests.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { PaymentsModule } from './payments/payments.module';
+import { PhoneModule } from './phone/phone.module';
 
 @Module({
   imports: [
@@ -41,7 +42,7 @@ import { PaymentsModule } from './payments/payments.module';
     PlatformModule,
     OutboxModule,
     TimersModule,
-    SettingsModule,
+    PlatformSettingsModule,
     LocationsModule,
     CatalogModule,
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }]),
@@ -64,6 +65,7 @@ import { PaymentsModule } from './payments/payments.module';
     }),
     RedisModule,
     AuthModule,
+    PhoneModule,
     StaffModule,
     ProvidersModule,
     UploadsModule,

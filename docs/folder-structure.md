@@ -62,6 +62,7 @@ xpro-server/
 │   │       └── email.processor.ts
 │   ├── notifications/          # Notification record + email job dispatch
 │   ├── prisma/                 # PrismaService + PrismaModule (global)
+│   ├── platform-settings/      # Admin settings API, DTOs and permission checks
 │   ├── redis/                  # RedisModule (REDIS_CLIENT token) + SessionStore
 │   ├── scripts/
 │   │   ├── seed-super-admin.ts

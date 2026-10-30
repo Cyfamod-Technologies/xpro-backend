@@ -9,6 +9,7 @@ type MemberQuery = {
 
 const CUSTOMER_ID = 'customer-1';
 const REQUEST_ID = 'request-1';
+const PROVIDER_USER_ID = 'provider-user-1';
 const gatedEvent = 'assignment.accepted'; // staff:gated on dispatch.manage
 
 function setup(members: Member[]) {
@@ -96,7 +97,44 @@ function setup(members: Member[]) {
     const rows = inbox.createMany.mock.calls[0]?.[1] ?? [];
     return rows.map((row) => row.recipientId).sort();
   };
-  return { send, alert, direct };
+  const message = async (
+    channel: 'customer' | 'provider' | 'internal',
+    staffOwnerId: string | null,
+  ) => {
+    inbox.createMany.mockClear();
+    const tx = {
+      serviceRequest: {
+        findUnique: jest.fn().mockResolvedValue({
+          assignments: [
+            {
+              providerId: 'provider-1',
+              providerUserId: PROVIDER_USER_ID,
+              status: 'accepted',
+            },
+          ],
+        }),
+      },
+    };
+    await dispatcher.dispatch(
+      tx as never,
+      'request.message_update',
+      { requestCode: 'XPR-00042', channel, providerId: 'provider-1' },
+      {
+        requestId: REQUEST_ID,
+        ownerId: CUSTOMER_ID,
+        staffOwnerId,
+        actorId: null,
+      },
+    );
+    const rows = (inbox.createMany.mock.calls[0]?.[1] ?? []) as Array<{
+      recipientId: string;
+      title: string;
+      message: string;
+      link: string | null;
+    }>;
+    return Object.fromEntries(rows.map((row) => [row.recipientId, row]));
+  };
+  return { send, alert, direct, message };
 }
 
 const roster: Member[] = [
@@ -318,5 +356,54 @@ describe('NotificationDispatcher escalations and approval notices (02 §6.10, §
     await expect(direct('nope', {}, ['ops-1'], null)).rejects.toThrow(
       'Unknown notification event: nope',
     );
+  });
+});
+
+describe('NotificationDispatcher message updates (04 §6.20)', () => {
+  const STAFF_LINK = '/admin/messages?request=XPR-00042';
+  const PARTICIPANT_LINK = '/requests/XPR-00042/messages';
+  const members: Member[] = [
+    { userId: 'msg-staff', roles: [StaffRole.client_relations] },
+    { userId: 'ops-owner', roles: [StaffRole.operations] },
+  ];
+
+  it('links staff to the admin Messages inbox and the customer to their own thread', async () => {
+    const { message } = setup(members);
+    const rows = await message('customer', 'msg-staff');
+    expect(rows[CUSTOMER_ID].link).toBe(PARTICIPANT_LINK);
+    expect(rows['msg-staff'].link).toBe(STAFF_LINK);
+    for (const id of Object.keys(rows)) {
+      expect(rows[id].link).toBe(
+        id === CUSTOMER_ID ? PARTICIPANT_LINK : STAFF_LINK,
+      );
+    }
+  });
+
+  it('links staff to the admin Messages inbox and the provider user to their own thread', async () => {
+    const { message } = setup(members);
+    const rows = await message('provider', 'ops-owner');
+    expect(rows[PROVIDER_USER_ID].link).toBe(PARTICIPANT_LINK);
+    const staffIds = Object.keys(rows).filter((id) => id !== PROVIDER_USER_ID);
+    expect(staffIds).not.toHaveLength(0);
+    for (const id of staffIds) expect(rows[id].link).toBe(STAFF_LINK);
+  });
+
+  it('links every internal-channel recipient to the admin Messages inbox', async () => {
+    const { message } = setup(members);
+    const rows = await message('internal', 'ops-owner');
+    const ids = Object.keys(rows);
+    expect(ids).not.toHaveLength(0);
+    expect(ids).not.toContain(CUSTOMER_ID);
+    expect(ids).not.toContain(PROVIDER_USER_ID);
+    for (const id of ids) expect(rows[id].link).toBe(STAFF_LINK);
+  });
+
+  it('keeps message bodies and the thread link out of the text', async () => {
+    const { message } = setup(members);
+    const rows = await message('customer', 'msg-staff');
+    for (const row of Object.values(rows)) {
+      expect(row.title).toBe('New conversation update');
+      expect(row.message).toBe('XPR-00042 has a new conversation update.');
+    }
   });
 });

@@ -41,9 +41,7 @@ export function resolveStorageConfig(config: ConfigService): StorageConfig {
     region: isR2
       ? config.get<string>('STORAGE_REGION', 'auto')
       : config.getOrThrow<string>('STORAGE_REGION'),
-    endpoint: isR2
-      ? config.getOrThrow<string>('STORAGE_ENDPOINT')
-      : undefined,
+    endpoint: isR2 ? config.getOrThrow<string>('STORAGE_ENDPOINT') : undefined,
     accessKeyId: isR2
       ? config.getOrThrow<string>('STORAGE_ACCESS_KEY_ID')
       : config.get<string>('STORAGE_ACCESS_KEY_ID'),
