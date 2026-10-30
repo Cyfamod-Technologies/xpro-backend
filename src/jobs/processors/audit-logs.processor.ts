@@ -2,6 +2,7 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Job } from 'bullmq';
+import { randomBytes } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FailedJobsService } from '../failed-jobs.service';
 
@@ -16,7 +17,13 @@ interface AuditLogJobData {
   timestamp: string;
 }
 
-function buildPublicId(date: Date): string {
+/**
+ * `AUD-yymmdd-hhmmss-xxxxxx`. The time part only has second resolution, so a random
+ * suffix keeps two events in the same second (a bulk owner move, an action and its
+ * login) from colliding on the unique `public_id`. It is drawn on every attempt, so a
+ * retry never repeats a clash.
+ */
+export function buildPublicId(date: Date): string {
   const fmt = new Intl.DateTimeFormat(undefined, {
     year: '2-digit',
     month: '2-digit',
@@ -31,7 +38,9 @@ function buildPublicId(date: Date): string {
     fmt.formatToParts(date).map(({ type, value }) => [type, value]),
   );
 
-  return `AUD-${p.year}${p.month}${p.day}-${p.hour}${p.minute}${p.second}`;
+  const suffix = randomBytes(3).toString('hex');
+
+  return `AUD-${p.year}${p.month}${p.day}-${p.hour}${p.minute}${p.second}-${suffix}`;
 }
 
 @Processor('audit-logs')

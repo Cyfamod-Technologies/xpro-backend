@@ -20,6 +20,7 @@ import {
 } from '@prisma/client';
 import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
 import { normalizeAccountPhone } from '../common/utils/phone.util';
+import { changedProfileFields } from './profile-changes';
 import {
   PROVIDER_EMAIL_VERIFICATION_SETTING,
   PROVIDER_PHONE_VERIFICATION_SETTING,
@@ -565,6 +566,7 @@ export class ProvidersService {
           providerId: profile.id,
           kind: approved ? 'held_change' : 'profile',
           decision: 'submitted',
+          fields: approved && live ? changedProfileFields(live, proposed) : [],
           actorId: userId,
           version: profile.version,
         },
@@ -1063,6 +1065,7 @@ export class ProvidersService {
         kind: review.kind,
         decision: review.decision,
         note: review.note,
+        fields: review.fields,
         actorId: review.actorId,
         createdAt: review.createdAt.toISOString(),
         version: review.version,
@@ -2041,6 +2044,7 @@ export class ProvidersService {
         kind: string;
         decision: string;
         note: string | null;
+        fields?: string[];
         createdAt: Date;
       }[];
     },
@@ -2103,6 +2107,7 @@ export class ProvidersService {
         kind: review.kind,
         decision: review.decision,
         note: owner ? review.note : undefined,
+        fields: review.fields ?? [],
         createdAt: review.createdAt,
       })),
     };

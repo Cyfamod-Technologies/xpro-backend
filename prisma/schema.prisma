@@ -370,6 +370,22 @@ model StaffMember {
   status      StaffStatus @default(invited)
   permVersion Int         @default(1) @map("perm_version")
   canOwnRequests Boolean  @default(false) @map("can_own_requests")
+  // Optimistic concurrency for staff commands (If-Match); bumped on every change.
+  rowVersion  Int         @default(1) @map("row_version")
+  employmentPeriod Int    @default(1) @map("employment_period")
+  acceptedAt  DateTime?   @map("accepted_at")
+  suspendedAt DateTime?   @map("suspended_at")
+  suspendedBy String?     @map("suspended_by")
+  suspensionReason String? @map("suspension_reason")
+  suspensionSecurityIncident Boolean @default(false) @map("suspension_security_incident")
+  deactivatedAt DateTime? @map("deactivated_at")
+  deactivatedBy String?   @map("deactivated_by")
+  deactivationReason String? @map("deactivation_reason")
+  leaveFrom   DateTime?   @map("leave_from") @db.Date
+  leaveTo     DateTime?   @map("leave_to") @db.Date
+  leaveDelegateId String? @map("leave_delegate_id")
+  leaveNote   String?     @map("leave_note")
+  conflictDeclaration Json? @map("conflict_declaration")
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")
 
@@ -513,6 +529,7 @@ model ProviderReview {
   kind       String
   decision   String
   note       String?
+  fields     String[] @default([])
   actorId    String   @map("actor_id")
   version    Int
   createdAt  DateTime @default(now()) @map("created_at")
