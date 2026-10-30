@@ -30,7 +30,7 @@ const PRODUCTION_SMTP_VARS = [
 
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1'];
 
-const STORAGE_DRIVERS = ['none', 'r2'] as const;
+const STORAGE_DRIVERS = ['none', 'r2', 's3'] as const;
 type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 
 const PAYMENT_GATEWAYS = ['paystack', 'test'] as const;
@@ -143,8 +143,7 @@ function validatePaymentGateway(config: Record<string, unknown>): void {
 
 /**
  * Storage is opt-in. Nothing is checked while STORAGE_DRIVER is unset or
- * `none`, so the app boots without object storage configured. Adding an `s3`
- * driver: see docs/storage/s3.md.
+ * `none`, so the app boots without object storage configured.
  */
 function validateStorage(config: Record<string, unknown>): void {
   const driver = (config['STORAGE_DRIVER'] as string | undefined) ?? 'none';
@@ -157,19 +156,31 @@ function validateStorage(config: Record<string, unknown>): void {
 
   if (driver === 'none') return;
 
-  const required = [
-    'STORAGE_BUCKET',
-    'STORAGE_ACCESS_KEY_ID',
-    'STORAGE_SECRET_ACCESS_KEY',
-    'STORAGE_ENDPOINT',
-    'STORAGE_PUBLIC_URL',
-  ];
+  const required = ['STORAGE_BUCKET', 'STORAGE_PUBLIC_URL'];
+  if (driver === 'r2') {
+    required.push(
+      'STORAGE_ACCESS_KEY_ID',
+      'STORAGE_SECRET_ACCESS_KEY',
+      'STORAGE_ENDPOINT',
+    );
+  }
+  if (driver === 's3') required.push('STORAGE_REGION');
 
   const missingStorage = required.filter((key) => !config[key]);
   if (missingStorage.length > 0) {
     throw new Error(
       `STORAGE_DRIVER=${driver} requires: ${missingStorage.join(', ')}`,
     );
+  }
+
+  if (driver === 's3') {
+    const hasAccessKey = Boolean(config['STORAGE_ACCESS_KEY_ID']);
+    const hasSecretKey = Boolean(config['STORAGE_SECRET_ACCESS_KEY']);
+    if (hasAccessKey !== hasSecretKey) {
+      throw new Error(
+        'STORAGE_ACCESS_KEY_ID and STORAGE_SECRET_ACCESS_KEY must be set together for S3',
+      );
+    }
   }
 }
 
