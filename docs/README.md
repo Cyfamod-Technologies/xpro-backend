@@ -14,6 +14,7 @@ Architecture and conventions for this template, for both humans and coding agent
 | [deployment.md](deployment.md) | Docker, compose, CI/CD, production checklist |
 | [email/](email/README.md) | Email rendering and Hostinger SMTP setup |
 | [storage/](storage/README.md) | Object storage setup (Cloudflare R2, AWS S3) |
+| [provider-locations.md](provider-locations.md) | Provider state and city from the built-in Nigeria list, and the later admin-managed locations update |
 
 Start with [architecture.md](architecture.md) for a system-wide orientation.
 For quick setup, go to [setup.md](setup.md).

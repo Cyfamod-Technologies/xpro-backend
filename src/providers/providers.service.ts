@@ -434,6 +434,7 @@ export class ProvidersService {
         services: normalized.services,
         serviceIds: normalized.serviceIds,
         city: locationValues.cityName,
+        state: locationValues.state ?? null,
         cityId: locationValues.cityId,
         serviceAreas: locationValues.serviceAreaNames,
         serviceAreaIds: locationValues.serviceAreaIds,
@@ -450,6 +451,7 @@ export class ProvidersService {
           data: {
             phone,
             city: locationValues.cityName,
+            state: locationValues.state ?? null,
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || undefined,
             experience: dto.experience,
@@ -476,6 +478,7 @@ export class ProvidersService {
             phone,
             trade: dto.trade.trim(),
             city: locationValues.cityName,
+            state: locationValues.state ?? null,
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || undefined,
             services: json(normalized.services),
@@ -498,6 +501,7 @@ export class ProvidersService {
             phone,
             trade: dto.trade.trim(),
             city: locationValues.cityName,
+            state: locationValues.state ?? null,
             cityId: locationValues.cityId ?? null,
             businessName: dto.businessName?.trim() || null,
             services: json(normalized.services),
@@ -1073,6 +1077,7 @@ export class ProvidersService {
       phone: '',
       trade: '',
       city: '',
+      state: null,
       cityId: null,
       businessName: null,
       services: [],
@@ -1502,6 +1507,9 @@ export class ProvidersService {
                 serviceAreas: json(changes.serviceAreas),
                 ...(typeof changes.city === 'string'
                   ? { city: changes.city }
+                  : {}),
+                ...(typeof changes.state === 'string'
+                  ? { state: changes.state }
                   : {}),
                 ...(typeof changes.cityId === 'string'
                   ? { cityId: changes.cityId }
@@ -1996,6 +2004,7 @@ export class ProvidersService {
       phone: string;
       trade: string;
       city: string;
+      state?: string | null;
       cityId?: string | null;
       businessName?: string | null;
       services: Prisma.JsonValue;
@@ -2054,6 +2063,7 @@ export class ProvidersService {
       phone: profile.phone,
       trade: profile.trade,
       city: profile.city,
+      state: profile.state ?? null,
       cityId: profile.cityId,
       businessName: profile.businessName,
       ...currentSkills(catalog, profile),

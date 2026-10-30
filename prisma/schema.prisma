@@ -398,6 +398,7 @@ model ProviderProfile {
   phone              String
   trade              String
   city               String
+  state              String?
   cityId             String?                  @map("city_id")
   services           Json
   serviceAreas       Json                     @map("service_areas")
