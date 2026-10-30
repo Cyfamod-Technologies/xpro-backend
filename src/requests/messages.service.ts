@@ -10,13 +10,13 @@ import { TimerKinds } from '../platform/timers/timer-kinds';
 import { RequestCommandRunner } from './command-runner';
 import { parseRequestId } from './domain/statuses';
 
-const CURRENT_ASSIGNMENTS = new Set([
+export const CURRENT_ASSIGNMENTS = new Set([
   'offered',
   'pending_approval',
   'accepted',
   'completed',
 ]);
-const CHANNEL_PERMISSION: Record<
+export const CHANNEL_PERMISSION: Record<
   'customer' | 'provider' | 'internal',
   'message.customer' | 'message.provider' | 'message.internal'
 > = {
@@ -25,7 +25,7 @@ const CHANNEL_PERMISSION: Record<
   internal: 'message.internal',
 };
 
-type MessageChannelName = 'customer' | 'provider' | 'internal';
+export type MessageChannelName = 'customer' | 'provider' | 'internal';
 
 @Injectable()
 export class MessagesService {
@@ -507,7 +507,7 @@ export function renderAuthor(
   return role === 'provider' ? 'Provider' : 'Customer';
 }
 
-function forbiddenChannel() {
+export function forbiddenChannel() {
   return new AppError(
     403,
     'FORBIDDEN',
