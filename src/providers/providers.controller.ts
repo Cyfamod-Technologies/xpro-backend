@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Headers,
   Param,
   Post,
   Put,
@@ -25,6 +26,9 @@ import {
   ProviderListQueryDto,
   ProviderProfileSubmissionDto,
   ProviderReviewDto,
+  ProviderReliabilityReviewDto,
+  ProviderRevealDto,
+  ProviderStandingDto,
 } from './dto/provider.dto';
 import { ProvidersService } from './providers.service';
 
@@ -128,6 +132,12 @@ export class ProviderReviewController {
     return this.providers.listForReview(user.id, query);
   }
 
+  @Get(':id')
+  @ApiOperation({ summary: 'Get the masked admin provider detail view' })
+  detail(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.providers.detailForReview(user.id, id);
+  }
+
   @Post(':id/reviews')
   review(
     @CurrentUser() user: RequestUser,
@@ -153,6 +163,63 @@ export class ProviderReviewController {
     @Body() dto: ProviderBankReviewDto,
   ) {
     return this.providers.reviewBank(user.id, id, dto);
+  }
+
+  @Post(':id/reliability/review')
+  @ApiOperation({ summary: 'Clear or restrict a provider reliability review' })
+  reviewReliability(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: ProviderReliabilityReviewDto,
+  ) {
+    return this.providers.reviewReliability(user.id, id, dto);
+  }
+
+  @Post(':id/delist')
+  @ApiOperation({
+    summary: 'Delist a provider (requires recent authentication)',
+  })
+  delist(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: ProviderStandingDto,
+    @Headers('x-reauth-token') reauthToken?: string,
+  ) {
+    return this.providers.delistProvider(user.id, id, dto, reauthToken);
+  }
+
+  @Post(':id/reinstate')
+  @ApiOperation({ summary: 'Reinstate a delisted provider into fresh review' })
+  reinstate(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: ProviderStandingDto,
+  ) {
+    return this.providers.reinstateProvider(user.id, id, dto);
+  }
+
+  @Post(':id/identity/reveal')
+  @ApiOperation({
+    summary: 'Reveal provider identity files with an audit reason',
+  })
+  revealIdentity(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: ProviderRevealDto,
+  ) {
+    return this.providers.revealIdentity(user.id, id, dto);
+  }
+
+  @Post(':id/bank/reveal')
+  @ApiOperation({
+    summary: 'Reveal full provider bank details with an audit reason',
+  })
+  revealBankDetails(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: ProviderRevealDto,
+  ) {
+    return this.providers.revealBankDetails(user.id, id, dto);
   }
 
   @Get(':id/files/:fileId')

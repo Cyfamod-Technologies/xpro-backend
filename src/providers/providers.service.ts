@@ -59,10 +59,15 @@ import {
   ProviderBankUpdateDto,
   ProviderCalendarDto,
   ProviderListQueryDto,
+  ProviderReliabilityReviewDto,
   ProviderChangesReviewDto,
+  ProviderRevealDto,
   ProviderProfileSubmissionDto,
   ProviderReviewDto,
+  ProviderStandingDto,
 } from './dto/provider.dto';
+import { SessionStore } from '../redis/session-store.service';
+import { paginationArgs, toPaginatedResult } from '../common/utils/paginate';
 
 const PROVIDER_REVIEW_DENIED =
   'You do not have permission to review provider details.';
@@ -86,6 +91,7 @@ export class ProvidersService {
     private readonly locations: LocationsService,
     private readonly requestEvents: RequestEventsService,
     @Inject('REDIS_CLIENT') private readonly redis: Redis,
+    private readonly sessions?: SessionStore,
   ) {}
 
   async recordReliabilityEvent(
@@ -294,7 +300,9 @@ export class ProvidersService {
       }));
     if (!upload) throw new NotFoundException('File not found.');
     if (upload.purpose !== ProviderUploadPurpose.provider_portfolio)
-      await this.requirePermission(reviewerId, 'view.provider_identity');
+      throw new ForbiddenException(
+        'Use the audited identity reveal action to access this file.',
+      );
     return {
       url: await this.storage.signedDownloadUrl(
         upload.storageKey,
@@ -773,24 +781,55 @@ export class ProvidersService {
       throw new ForbiddenException(
         'You do not have permission to review provider details.',
       );
+    const bankState = query.bankReview
+      ? {
+          pending: ProviderBankStatus.pending,
+          verified: ProviderBankStatus.verified,
+          rejected: ProviderBankStatus.rejected,
+          none: null,
+        }[query.bankReview]
+      : !providerReview
+        ? ProviderBankStatus.pending
+        : undefined;
     const rows = await this.prisma.providerProfile.findMany({
       where: {
         ...(query.verification
           ? { verification: query.verification as ProviderVerificationStatus }
           : {}),
-        ...(!providerReview && bankReview
-          ? { bankAccounts: { some: { state: ProviderBankStatus.pending } } }
-          : {}),
+        ...(bankState === null
+          ? { bankAccounts: { none: {} } }
+          : bankState
+            ? { bankAccounts: { some: { state: bankState } } }
+            : {}),
       },
       include: {
-        user: { select: { firstName: true, lastName: true, email: true } },
-        bankAccounts: { where: { state: ProviderBankStatus.pending } },
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            status: true,
+          },
+        },
+        bankAccounts: {
+          where: {
+            state: {
+              in: [
+                ProviderBankStatus.pending,
+                ProviderBankStatus.verified,
+                ProviderBankStatus.rejected,
+              ],
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        },
       },
       orderBy: { updatedAt: 'asc' },
     });
     const signups =
       providerReview &&
-      (!query.verification || query.verification === ProviderVerificationStatus.draft)
+      (!query.verification ||
+        query.verification === ProviderVerificationStatus.draft)
         ? await this.prisma.user.findMany({
             where: {
               platformRoles: { some: { role: 'provider' } },
@@ -811,7 +850,19 @@ export class ProvidersService {
         : [];
     const catalog = await loadCatalog(this.prisma);
     const profiles = rows.map((row) => {
-      const payout = this.project(catalog, row, false, bankReview).payout;
+      const projected = this.project(catalog, row, false, false);
+      const pendingChanges =
+        projected.pendingChanges &&
+        typeof projected.pendingChanges === 'object' &&
+        !Array.isArray(projected.pendingChanges)
+          ? { ...projected.pendingChanges }
+          : projected.pendingChanges;
+      if (pendingChanges && typeof pendingChanges === 'object') {
+        delete (pendingChanges as Prisma.JsonObject).documents;
+        delete (pendingChanges as Prisma.JsonObject).photo;
+      }
+      const payout = projected.payout;
+      const bankReviewState = row.bankAccounts[0]?.state ?? 'none';
       if (!providerReview) {
         return {
           id: row.id,
@@ -825,16 +876,24 @@ export class ProvidersService {
           available: row.available,
           version: row.version,
           payout,
+          bankReviewState,
         };
       }
       return {
-        ...this.project(catalog, row, false, bankReview),
+        ...projected,
+        documents: [],
+        photo: null,
+        portfolio: [],
+        pendingChanges,
+        reviewNote: undefined,
+        history: [],
         firstName: row.user.firstName,
         lastName: row.user.lastName,
         email: row.user.email,
+        bankReviewState,
       };
     });
-    return [
+    const all = [
       ...profiles,
       ...signups.map((user) => ({
         id: user.id,
@@ -847,6 +906,501 @@ export class ProvidersService {
         registeredAt: user.createdAt.toISOString(),
       })),
     ];
+    const q = query.q?.trim().toLocaleLowerCase();
+    const filtered = q
+      ? all.filter((item) => {
+          const searchable = item as Record<string, unknown>;
+          return [
+            searchable.firstName,
+            searchable.lastName,
+            searchable.email,
+            searchable.trade,
+            searchable.city,
+            searchable.services,
+            searchable.serviceAreas,
+          ]
+            .filter((value) => value !== undefined && value !== null)
+            .map((value) =>
+              Array.isArray(value) ? value.join(' ') : String(value),
+            )
+            .join(' ')
+            .toLocaleLowerCase()
+            .includes(q);
+        })
+      : all;
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 25;
+    const { skip, take } = paginationArgs(page, limit);
+    return toPaginatedResult(
+      filtered.slice(skip, skip + take),
+      filtered.length,
+      page,
+      limit,
+    );
+  }
+
+  async detailForReview(userId: string, providerId: string) {
+    const providerReview = await this.hasPermission(userId, 'provider.review');
+    const bankReview = await this.hasPermission(userId, 'bank.review');
+    if (!providerReview && !bankReview)
+      throw new ForbiddenException(PROVIDER_REVIEW_DENIED);
+    const profile = await this.prisma.providerProfile.findUnique({
+      where: { id: providerId },
+      include: {
+        user: {
+          select: {
+            firstName: true,
+            lastName: true,
+            email: true,
+            status: true,
+            createdAt: true,
+            phoneVerifiedAt: true,
+          },
+        },
+        bankAccounts: { orderBy: { createdAt: 'desc' } },
+        reviews: { orderBy: { createdAt: 'desc' } },
+      },
+    });
+    if (!profile) throw new NotFoundException('Provider profile not found.');
+
+    const [reliabilityEvents, activeJobs] = await Promise.all([
+      this.prisma.providerReliabilityEvent.findMany({
+        where: {
+          providerId,
+          kind: { in: ['no_show_confirmed', 'no_show_voided'] },
+          occurredAt: {
+            gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
+          },
+        },
+        orderBy: { occurredAt: 'desc' },
+        take: 50,
+      }),
+      this.prisma.assignment.count({
+        where: {
+          providerId,
+          status: 'accepted',
+          request: {
+            status: {
+              notIn: ['closed', 'cancelled', 'rejected', 'acknowledged'],
+            },
+          },
+        },
+      }),
+    ]);
+    const data = this.project(
+      await loadCatalog(this.prisma),
+      profile,
+      false,
+      bankReview,
+    );
+    const pendingChanges =
+      profile.pendingChanges &&
+      typeof profile.pendingChanges === 'object' &&
+      !Array.isArray(profile.pendingChanges)
+        ? { ...profile.pendingChanges }
+        : null;
+    const pendingDocuments = this.uploadsFrom(pendingChanges?.documents);
+    const latestBankReview = profile.reviews.find(
+      (review) => review.kind === 'bank',
+    );
+    if (pendingChanges) {
+      delete pendingChanges.documents;
+      delete pendingChanges.photo;
+    }
+    const detail = {
+      ...data,
+      documents: [],
+      photo: null,
+      pendingChanges,
+      evidenceSummary: {
+        documentCount: this.uploadsFrom(profile.documents).length,
+        hasPhoto: this.uploadsFrom(profile.photo).length > 0,
+        pendingDocumentCount: pendingDocuments.length,
+        hasPendingPhoto:
+          this.uploadsFrom(
+            profile.pendingChanges &&
+              typeof profile.pendingChanges === 'object' &&
+              !Array.isArray(profile.pendingChanges)
+              ? profile.pendingChanges.photo
+              : null,
+          ).length > 0,
+      },
+      accountStatus: profile.user.status,
+      phoneVerifiedAt: profile.user.phoneVerifiedAt?.toISOString() ?? null,
+      email: profile.user.email,
+      firstName: profile.user.firstName,
+      lastName: profile.user.lastName,
+      registeredAt: profile.user.createdAt.toISOString(),
+      reliabilityStatus: profile.reliabilityStatus,
+      lastOfferedAt: profile.lastOfferedAt?.toISOString() ?? null,
+      activeJobs,
+      payout: {
+        ...data.payout,
+        review: latestBankReview
+          ? {
+              state: latestBankReview.decision,
+              note: bankReview ? latestBankReview.note : undefined,
+            }
+          : undefined,
+        history: profile.reviews
+          .filter((review) => review.kind === 'bank')
+          .map((review) => ({
+            action: `Bank details ${review.decision}`,
+            note: bankReview ? review.note : undefined,
+            by: review.actorId,
+            createdAt: review.createdAt.toISOString(),
+          })),
+      },
+      history: profile.reviews.map((review) => ({
+        kind: review.kind,
+        decision: review.decision,
+        note: review.note,
+        actorId: review.actorId,
+        createdAt: review.createdAt.toISOString(),
+        version: review.version,
+      })),
+      reliabilityEvents,
+    };
+    if (providerReview) return detail;
+
+    return {
+      ...detail,
+      userId: '',
+      phone: '',
+      trade: '',
+      city: '',
+      cityId: null,
+      businessName: null,
+      services: [],
+      serviceIds: [],
+      serviceAreas: [],
+      serviceAreaIds: [],
+      skills: {},
+      skillIds: {},
+      capacity: 0,
+      workingHours: {},
+      timeOff: [],
+      experience: 0,
+      bio: '',
+      documents: [],
+      photo: null,
+      portfolio: [],
+      verification: '',
+      available: false,
+      reviewNote: undefined,
+      pendingChanges: null,
+      changesReview: null,
+      accountStatus: '',
+      phoneVerifiedAt: null,
+      email: '',
+      registeredAt: '',
+      reliabilityStatus: '',
+      lastOfferedAt: null,
+      activeJobs: 0,
+      evidenceSummary: {
+        documentCount: 0,
+        hasPhoto: false,
+        pendingDocumentCount: 0,
+        hasPendingPhoto: false,
+      },
+      history: [],
+      reliabilityEvents: [],
+    };
+  }
+
+  async reviewReliability(
+    reviewerId: string,
+    providerId: string,
+    dto: ProviderReliabilityReviewDto,
+  ) {
+    await this.requirePermission(reviewerId, 'provider.review');
+    const profile = await this.prisma.providerProfile.findUnique({
+      where: { id: providerId },
+    });
+    if (!profile) throw new NotFoundException('Provider profile not found.');
+    if (!['review_due', 'under_review'].includes(profile.reliabilityStatus))
+      throw new ConflictException('This reliability review is no longer open.');
+    const reliabilityStatus =
+      dto.decision === 'restrict' ? 'restricted' : 'normal';
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.providerProfile.updateMany({
+        where: {
+          id: providerId,
+          version: profile.version,
+          reliabilityStatus: profile.reliabilityStatus,
+        },
+        data: { reliabilityStatus, version: { increment: 1 } },
+      });
+      if (!result.count)
+        throw new ConflictException(
+          'This review has already changed. Refresh and try again.',
+        );
+      const latest = await tx.providerProfile.findUniqueOrThrow({
+        where: { id: providerId },
+      });
+      await tx.providerReview.create({
+        data: {
+          providerId,
+          kind: 'reliability',
+          decision: dto.decision,
+          note: dto.note.trim(),
+          actorId: reviewerId,
+          version: latest.version,
+        },
+      });
+      return latest;
+    });
+    this.audit.record({
+      actorType: 'user',
+      actorId: reviewerId,
+      entityType: 'provider_profile',
+      entityId: providerId,
+      action: `provider.reliability.${dto.decision}`,
+      metadata: { version: updated.version, note: dto.note.trim() },
+    });
+    if (dto.decision === 'restrict')
+      await this.requestEvents.onProviderStandingChanged(
+        providerId,
+        dto.note.trim(),
+      );
+    return this.detailForReview(reviewerId, providerId);
+  }
+
+  async delistProvider(
+    reviewerId: string,
+    providerId: string,
+    dto: ProviderStandingDto,
+    reauthToken?: string,
+  ) {
+    await this.requirePermission(reviewerId, 'provider.review');
+    const profile = await this.prisma.providerProfile.findUnique({
+      where: { id: providerId },
+    });
+    if (!profile) throw new NotFoundException('Provider profile not found.');
+    if (profile.version !== dto.expectedVersion)
+      throw new ConflictException(
+        'This provider has changed. Refresh and try again.',
+      );
+    if (profile.verification === ProviderVerificationStatus.delisted)
+      throw new ConflictException('This provider is already delisted.');
+    if (
+      profile.verification !== ProviderVerificationStatus.pending &&
+      profile.verification !== ProviderVerificationStatus.approved &&
+      profile.verification !== ProviderVerificationStatus.changes_requested
+    )
+      throw new ConflictException(
+        'This provider cannot be delisted from its current state.',
+      );
+    if (
+      !reauthToken ||
+      !this.sessions ||
+      !(await this.sessions.consumeReauthToken(reviewerId, reauthToken))
+    )
+      throw new ForbiddenException('Reauthenticate to delist this provider.');
+    const nextVersion = dto.expectedVersion + 1;
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.providerProfile.updateMany({
+        where: { id: providerId, version: dto.expectedVersion },
+        data: {
+          verification: ProviderVerificationStatus.delisted,
+          available: false,
+          version: { increment: 1 },
+        },
+      });
+      if (!updated.count)
+        throw new ConflictException(
+          'This provider has changed. Refresh and try again.',
+        );
+      await tx.providerReview.create({
+        data: {
+          providerId,
+          kind: 'standing',
+          decision: 'delisted',
+          note: dto.reason.trim(),
+          actorId: reviewerId,
+          version: nextVersion,
+        },
+      });
+    });
+    this.audit.record({
+      actorType: 'user',
+      actorId: reviewerId,
+      entityType: 'provider_profile',
+      entityId: providerId,
+      action: 'provider.delist',
+      metadata: { version: nextVersion, reason: dto.reason.trim() },
+    });
+    await this.requestEvents.onProviderStandingChanged(
+      providerId,
+      dto.reason.trim(),
+    );
+    return this.detailForReview(reviewerId, providerId);
+  }
+
+  async reinstateProvider(
+    reviewerId: string,
+    providerId: string,
+    dto: ProviderStandingDto,
+  ) {
+    await this.requirePermission(reviewerId, 'provider.review');
+    const profile = await this.prisma.providerProfile.findUnique({
+      where: { id: providerId },
+    });
+    if (!profile) throw new NotFoundException('Provider profile not found.');
+    if (
+      profile.version !== dto.expectedVersion ||
+      profile.verification !== ProviderVerificationStatus.delisted
+    )
+      throw new ConflictException(
+        'This provider cannot be reinstated from the current state. Refresh and try again.',
+      );
+    const nextVersion = dto.expectedVersion + 1;
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.providerProfile.updateMany({
+        where: {
+          id: providerId,
+          version: dto.expectedVersion,
+          verification: ProviderVerificationStatus.delisted,
+        },
+        data: {
+          verification: ProviderVerificationStatus.pending,
+          available: false,
+          version: { increment: 1 },
+        },
+      });
+      if (!updated.count)
+        throw new ConflictException(
+          'This provider has changed. Refresh and try again.',
+        );
+      await tx.providerReview.create({
+        data: {
+          providerId,
+          kind: 'standing',
+          decision: 'reinstated',
+          note: dto.reason.trim(),
+          actorId: reviewerId,
+          version: nextVersion,
+        },
+      });
+    });
+    this.audit.record({
+      actorType: 'user',
+      actorId: reviewerId,
+      entityType: 'provider_profile',
+      entityId: providerId,
+      action: 'provider.reinstate',
+      metadata: { version: nextVersion, reason: dto.reason.trim() },
+    });
+    return this.detailForReview(reviewerId, providerId);
+  }
+
+  async revealIdentity(
+    reviewerId: string,
+    providerId: string,
+    dto: ProviderRevealDto,
+  ) {
+    await this.requirePermission(reviewerId, 'view.provider_identity');
+    const profile = await this.prisma.providerProfile.findUnique({
+      where: { id: providerId },
+    });
+    if (!profile) throw new NotFoundException('Provider profile not found.');
+    const files = [
+      ...this.uploadsFrom(profile.documents),
+      ...this.uploadsFrom(
+        profile.pendingChanges &&
+          typeof profile.pendingChanges === 'object' &&
+          !Array.isArray(profile.pendingChanges)
+          ? profile.pendingChanges.documents
+          : null,
+      ),
+      ...this.uploadsFrom(profile.photo),
+      ...this.uploadsFrom(
+        profile.pendingChanges &&
+          typeof profile.pendingChanges === 'object' &&
+          !Array.isArray(profile.pendingChanges)
+          ? profile.pendingChanges.photo
+          : null,
+      ),
+    ];
+    const unique = [...new Map(files.map((file) => [file.id, file])).values()];
+    const uploads = await this.prisma.providerUpload.findMany({
+      where: {
+        id: { in: unique.map((file) => file.id) },
+        ownerId: profile.userId,
+        status: ProviderUploadStatus.attached,
+      },
+    });
+    const uploadMap = new Map(uploads.map((upload) => [upload.id, upload]));
+    const links = await Promise.all(
+      unique.map(async (file) => {
+        const upload = uploadMap.get(file.id);
+        if (
+          !upload ||
+          upload.purpose === ProviderUploadPurpose.provider_portfolio
+        )
+          return null;
+        return {
+          id: file.id,
+          name: upload.fileName,
+          size: upload.size,
+          type: upload.contentType,
+          purpose: upload.purpose,
+          url: await this.storage.signedDownloadUrl(
+            upload.storageKey,
+            300,
+            upload.fileName,
+          ),
+          expiresInSeconds: 300,
+        };
+      }),
+    );
+    this.audit.record({
+      actorType: 'user',
+      actorId: reviewerId,
+      entityType: 'provider_profile',
+      entityId: providerId,
+      action: 'provider.identity.reveal',
+      metadata: {
+        reason: dto.reason.trim(),
+        fileIds: unique.map((file) => file.id),
+      },
+    });
+    return links.filter(
+      (link): link is NonNullable<typeof link> => link !== null,
+    );
+  }
+
+  async revealBankDetails(
+    reviewerId: string,
+    providerId: string,
+    dto: ProviderRevealDto,
+  ) {
+    await this.requirePermission(reviewerId, 'view.bank_full');
+    const profile = await this.prisma.providerProfile.findUnique({
+      where: { id: providerId },
+      include: { bankAccounts: { orderBy: { createdAt: 'desc' } } },
+    });
+    if (!profile) throw new NotFoundException('Provider profile not found.');
+    const accounts = profile.bankAccounts.map((account) => ({
+      id: account.id,
+      bankName: account.bankName,
+      accountName: decryptSecret(account.accountNameEnc),
+      accountNumber: decryptSecret(account.accountNumberEnc),
+      state: account.state,
+      submittedAt: account.createdAt.toISOString(),
+    }));
+    this.audit.record({
+      actorType: 'user',
+      actorId: reviewerId,
+      entityType: 'provider_profile',
+      entityId: providerId,
+      action: 'provider.bank.reveal',
+      metadata: {
+        reason: dto.reason.trim(),
+        accountIds: accounts.map((account) => account.id),
+      },
+    });
+    return accounts;
   }
 
   async reviewProfile(
@@ -1098,6 +1652,25 @@ export class ProvidersService {
       accountType: PROVIDER_REVIEW_DENIED,
       inactive: PROVIDER_REVIEW_DENIED,
       denied: PROVIDER_REVIEW_DENIED,
+    });
+  }
+
+  private async hasPermission(userId: string, permission: StaffPermission) {
+    const actor = await this.actors.resolve(userId);
+    return Boolean(
+      actor.staff?.status === 'active' &&
+      actor.staff.permissions.has(permission),
+    );
+  }
+
+  private uploadsFrom(value: Prisma.JsonValue | null | undefined) {
+    const values = Array.isArray(value) ? value : value ? [value] : [];
+    return values.flatMap((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const record = item;
+      return typeof record.id === 'string' && typeof record.name === 'string'
+        ? [{ id: record.id, name: record.name }]
+        : [];
     });
   }
 

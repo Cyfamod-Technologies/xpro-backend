@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsInt,
   IsEnum,
+  IsIn,
   IsNumber,
   IsObject,
   IsOptional,
@@ -267,6 +268,74 @@ export class ProviderChangesReviewDto {
 export class ProviderListQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
-  @IsString()
+  @IsIn([
+    'draft',
+    'pending',
+    'changes_requested',
+    'rejected',
+    'approved',
+    'delisted',
+  ])
   verification?: string;
+
+  @ApiPropertyOptional({
+    description: 'Search provider name, email, trade or area.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  q?: string;
+
+  @ApiPropertyOptional({ enum: ['pending', 'verified', 'rejected', 'none'] })
+  @IsOptional()
+  @IsIn(['pending', 'verified', 'rejected', 'none'])
+  bankReview?: 'pending' | 'verified' | 'rejected' | 'none';
+
+  @ApiPropertyOptional({ minimum: 1, default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 25 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit = 25;
+}
+
+export class ProviderReliabilityReviewDto {
+  @ApiProperty({ enum: ['clear', 'restrict'] })
+  @IsIn(['clear', 'restrict'])
+  decision: 'clear' | 'restrict';
+
+  @ApiProperty({ minLength: 5, maxLength: 1000 })
+  @IsString()
+  @MinLength(5)
+  @MaxLength(1000)
+  note: string;
+}
+
+export class ProviderStandingDto {
+  @ApiProperty({ minLength: 5, maxLength: 1000 })
+  @IsString()
+  @MinLength(5)
+  @MaxLength(1000)
+  reason: string;
+
+  @ApiProperty()
+  @IsInt()
+  @Min(1)
+  expectedVersion: number;
+}
+
+export class ProviderRevealDto {
+  @ApiProperty({ minLength: 5, maxLength: 500 })
+  @IsString()
+  @MinLength(5)
+  @MaxLength(500)
+  reason: string;
 }
