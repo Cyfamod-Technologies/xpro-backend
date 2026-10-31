@@ -450,6 +450,8 @@ model ProviderProfile {
   reviews    ProviderReview[]
   payouts    Payout[]
   featured   FeaturedProvider?
+  requestAssignments RequestProviderAssignment[]
+  decisions          RequestDecision[]           @relation("DecisionProvider")
 
   @@index([verification, available])
   @@map("provider_profiles")
@@ -800,6 +802,7 @@ enum RequestStatus {
   closed
   cancelled
   rejected
+  approved
 }
 
 enum IntakeState {
@@ -812,6 +815,33 @@ enum ContactMethod {
   email
   phone
   both
+  whatsapp
+}
+
+enum RequestWorkflow {
+  phase2
+  v1
+}
+
+enum MessageKind {
+  text
+  counter
+}
+
+enum RequestDecisionOutcome {
+  approved
+  denied
+}
+
+enum RequestActivityKind {
+  submitted
+  assigned
+  reassigned
+  approved
+  denied
+  cancelled
+  provider_assigned
+  provider_replaced
 }
 
 enum DispatchMode {
@@ -898,6 +928,7 @@ enum PaymentMethod {
   paystack
   offline
 }
+
 enum PaymentStatus {
   pending
   recorded
@@ -907,6 +938,7 @@ enum PaymentStatus {
   refunded
   reversed
 }
+
 enum RefundStatus {
   pending_approval
   awaiting_second_approval
@@ -917,10 +949,12 @@ enum RefundStatus {
   waived
   failed
 }
+
 enum PayoutKind {
   primary
   compensation
 }
+
 enum PayoutStatus {
   pending_approval
   awaiting_second_approval
@@ -1125,6 +1159,7 @@ model ServiceRequest {
   answers               Json                    @default("[]")
   status                RequestStatus           @default(submitted)
   version               Int                     @default(1)
+  workflowMode          RequestWorkflow        @default(phase2) @map("workflow_mode")
   contactInBrief        Boolean                 @default(false) @map("contact_in_brief")
   possibleDuplicateOf   String?                 @map("possible_duplicate_of")
   groupId               String?                 @map("group_id")
@@ -1181,6 +1216,10 @@ model ServiceRequest {
   payments      Payment[]
   refunds       Refund[]
   payouts       Payout[]
+  decision            RequestDecision?
+  providerAssignments RequestProviderAssignment[]
+  counterOffers       RequestCounterOffer[]
+  activities          RequestActivity[]
 
   @@index([ownerId, status])
   @@index([status, intakeState])
@@ -1188,6 +1227,9 @@ model ServiceRequest {
   @@index([service, locationId, createdAt])
   @@index([serviceRootId])
   @@index([groupId])
+  @@index([workflowMode, status, createdAt])
+  @@index([workflowMode, staffOwnerId, status])
+  @@index([workflowMode, ownerId, createdAt])
   @@map("service_requests")
 }
 
@@ -1361,6 +1403,7 @@ model Payment {
   updatedAt            DateTime      @updatedAt @map("updated_at")
   request              ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
   refunds              Refund[]
+
   @@index([requestId, status])
   @@map("payments")
 }
@@ -1388,6 +1431,7 @@ model Refund {
   payment            Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   request            ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
   cancellation       Cancellation? @relation(fields: [cancellationId], references: [id], onDelete: Restrict)
+
   @@index([requestId, status])
   @@map("refunds")
 }
@@ -1417,6 +1461,7 @@ model Payout {
   provider            ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Restrict)
   approvals           PayoutApproval[]
   transferAttempts    TransferAttempt[]
+
   @@index([requestId, kind])
   @@index([status])
   @@map("payouts")
@@ -1431,6 +1476,7 @@ model PayoutApproval {
   bankVersion String? @map("bank_version")
   createdAt  DateTime @default(now()) @map("created_at")
   payout     Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+
   @@map("payout_approvals")
 }
 
@@ -1446,6 +1492,7 @@ model TransferAttempt {
   settledAt         DateTime? @map("settled_at")
   createdAt         DateTime @default(now()) @map("created_at")
   payout            Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+
   @@index([payoutId, createdAt])
   @@map("transfer_attempts")
 }
@@ -1466,6 +1513,7 @@ model GatewayEvent {
   nextAttemptAt  DateTime? @map("next_attempt_at")
   receivedAt     DateTime  @default(now()) @map("received_at")
   processedAt    DateTime? @map("processed_at")
+
   @@index([status, receivedAt])
   @@index([status, nextAttemptAt])
   @@map("gateway_events")
@@ -1631,9 +1679,86 @@ model RequestMessage {
   authorId   String?        @map("author_id")
   authorRole String         @map("author_role")
   text       String
+  kind       MessageKind          @default(text)
   createdAt  DateTime       @default(now()) @map("created_at")
   request    ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  counter    RequestCounterOffer?
 
   @@index([requestId, channel, createdAt])
   @@map("request_messages")
+}
+
+model RequestDecision {
+  id                String                 @id @default(uuid())
+  requestId         String                 @unique @map("request_id")
+  outcome           RequestDecisionOutcome
+  reason            String?
+  decidedById       String                 @map("decided_by_id")
+  decidedByName     String                 @map("decided_by_name")
+  decidedAt         DateTime               @map("decided_at")
+  providerProfileId String?                @map("provider_profile_id")
+  priceKobo         BigInt?                @map("price_kobo")
+  agreedDate        String?                @map("agreed_date")
+  basedOnCounterId  String?                @map("based_on_counter_id")
+  createdAt         DateTime               @default(now()) @map("created_at")
+  request           ServiceRequest         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  provider          ProviderProfile?       @relation("DecisionProvider", fields: [providerProfileId], references: [id], onDelete: Restrict)
+
+  @@map("request_decisions")
+}
+
+model RequestProviderAssignment {
+  id                String          @id @default(uuid())
+  requestId         String          @map("request_id")
+  providerProfileId String          @map("provider_profile_id")
+  providerUserId    String          @map("provider_user_id")
+  assignedById      String          @map("assigned_by_id")
+  assignedByName    String          @map("assigned_by_name")
+  assignedAt        DateTime        @map("assigned_at")
+  priceKobo         BigInt          @map("price_kobo")
+  agreedDate        String          @map("agreed_date")
+  endedAt           DateTime?       @map("ended_at")
+  endedById         String?         @map("ended_by_id")
+  endReason         String?         @map("end_reason")
+  replacedById      String?         @unique @map("replaced_by_id")
+  createdAt         DateTime        @default(now()) @map("created_at")
+  request           ServiceRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  provider          ProviderProfile @relation(fields: [providerProfileId], references: [id], onDelete: Restrict)
+
+  @@index([providerUserId, endedAt, assignedAt])
+  @@index([requestId, assignedAt])
+  @@map("request_provider_assignments")
+}
+
+model RequestCounterOffer {
+  id             String         @id @default(uuid())
+  requestId      String         @map("request_id")
+  messageId      String         @unique @map("message_id")
+  authorRole     String         @map("author_role")
+  amountKobo     BigInt         @map("amount_kobo")
+  proposedDate   String?        @map("proposed_date")
+  note           String         @default("")
+  supersededById String?        @unique @map("superseded_by_id")
+  supersededAt   DateTime?      @map("superseded_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  request        ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  message        RequestMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("request_counter_offers")
+}
+
+model RequestActivity {
+  id        String              @id @default(uuid())
+  requestId String              @map("request_id")
+  kind      RequestActivityKind
+  actorId   String?             @map("actor_id")
+  actorName String              @map("actor_name")
+  text      String
+  note      String?
+  createdAt DateTime            @default(now()) @map("created_at")
+  request   ServiceRequest      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("request_activities")
 }
