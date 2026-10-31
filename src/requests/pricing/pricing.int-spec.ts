@@ -1,5 +1,4 @@
 import { Test } from '@nestjs/testing';
-import { randomUUID } from 'crypto';
 import { JobsService } from '../../jobs/jobs.service';
 import { NotificationDispatcher } from '../../notifications/notification-dispatcher';
 import { ActorService } from '../../platform/actor/actor.service';
@@ -17,6 +16,7 @@ import { ApprovalsHooks } from '../approvals.hooks';
 import { RequestCommandRunner } from '../command-runner';
 import { RequestSnapshotLoader } from '../snapshot.loader';
 import { PricingService } from './pricing.service';
+import { LIFE_CAMP_ID } from '../../platform/locations/locations.testkit';
 
 /**
  * Integration cases for quote sign-off and the customer decision (audit
@@ -29,8 +29,6 @@ describe('pricing and quotes (integration)', () => {
   const dispatch = jest.fn().mockResolvedValue(undefined);
   const actors = new Map<string, ActorContext>();
   const createdRequests: string[] = [];
-  const cityId = randomUUID();
-  const districtId = randomUUID();
   const items = [{ description: 'Labour', quantity: 2, unitPrice: 250_000 }];
 
   const staffActor = (userId: string, permissions: string[]): ActorContext =>
@@ -106,7 +104,7 @@ describe('pricing and quotes (integration)', () => {
       await prisma.serviceRequest.deleteMany({ where: { id: requestId } });
     }
     await prisma.providerProfile.deleteMany({
-      where: { serviceAreaIds: { has: districtId } },
+      where: { serviceAreaIds: { has: LIFE_CAMP_ID } },
     });
   });
 
@@ -124,8 +122,7 @@ describe('pricing and quotes (integration)', () => {
         customerName: 'Pricing customer',
         title: 'Pricing test',
         service: 'Design',
-        cityId,
-        districtId,
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for pricing.',
@@ -142,10 +139,8 @@ describe('pricing and quotes (integration)', () => {
         userId: providerUser.id,
         phone: '+2348000000000',
         trade: 'Architect',
-        city: 'Test city',
         services: ['Design'],
-        serviceAreas: [],
-        serviceAreaIds: [districtId],
+        serviceAreaIds: [LIFE_CAMP_ID],
         skills: { Design: ['Architectural Designs'] },
         workingHours: {
           mon: everyDay,

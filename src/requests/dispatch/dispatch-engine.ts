@@ -46,8 +46,7 @@ export async function runAutoDispatch(
 ): Promise<{ offered: boolean }> {
   const { request } = input;
   const dispatchRequest = await dispatchRequestFor(ctx.tx, request, {
-    districtName: ctx.snap.districtName,
-    cityName: ctx.snap.cityName,
+    locationPath: ctx.snap.locationPath,
   });
   const options = {
     requireVerifiedBank:
@@ -195,7 +194,7 @@ async function makeOffer(
     providerUserId: fresh.userId,
     requestCode: ctx.snap.number,
     service: input.request.service,
-    district: ctx.snap.districtName ?? '',
+    district: ctx.snap.locationName ?? '',
     skill: dispatchRequest.skill ?? input.request.service,
   });
 }

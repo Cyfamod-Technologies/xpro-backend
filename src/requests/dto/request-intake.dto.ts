@@ -16,8 +16,11 @@ export class RequestIntakeDto {
   @ApiPropertyOptional({ description: 'Legacy top-level service name' })
   @Allow()
   service?: string;
-  @ApiProperty() @Allow() cityId!: string;
-  @ApiProperty() @Allow() districtId!: string;
+  @ApiProperty({
+    description: 'A served LGA or area, chosen from GET /locations',
+  })
+  @Allow()
+  locationId!: string;
   @ApiProperty() @Allow() address!: string;
   @ApiProperty() @Allow() phone!: string;
   @ApiPropertyOptional({ enum: ['email', 'phone', 'both'], default: 'phone' })
@@ -49,8 +52,7 @@ export class RequestUpdateDto {
   @ApiPropertyOptional() @Allow() title?: string;
   @ApiPropertyOptional() @Allow() serviceId?: string;
   @ApiPropertyOptional() @Allow() service?: string;
-  @ApiPropertyOptional() @Allow() cityId?: string;
-  @ApiPropertyOptional() @Allow() districtId?: string;
+  @ApiPropertyOptional() @Allow() locationId?: string;
   @ApiPropertyOptional() @Allow() address?: string;
   @ApiPropertyOptional() @Allow() phone?: string;
   @ApiPropertyOptional({ enum: ['email', 'phone', 'both'] })

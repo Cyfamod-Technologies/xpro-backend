@@ -8,9 +8,17 @@ import {
 import { resolveServiceInput } from './legacy-service-input';
 import { validateIntake, normalizeNigerianPhone } from './intake-validation';
 
+const place = (
+  id: string,
+  kind: string,
+  ancestorIds: string[],
+  extra: { active?: boolean; serviceable?: boolean } = {},
+) => ({ id, kind, ancestorIds, active: true, serviceable: true, ...extra });
+// The chosen place and its ancestors, as `loadLocationChain` returns them.
 const locations = [
-  { id: 'city', kind: 'city', parentId: null, active: true },
-  { id: 'district', kind: 'district', parentId: 'city', active: true },
+  place('state', 'state', []),
+  place('lga', 'lga', ['state']),
+  place('area', 'area', ['state', 'lga']),
 ];
 const now = new Date('2026-10-23T12:00:00Z');
 const catalog = seededCatalog();
@@ -19,8 +27,7 @@ function valid(overrides: Record<string, unknown> = {}) {
   return {
     title: 'Repair a leaking roof',
     service: 'Construction',
-    cityId: 'city',
-    districtId: 'district',
+    locationId: 'area',
     address: '12 Broad Street, Lagos',
     phone: '08031234567',
     contactMethod: 'phone',
@@ -47,14 +54,9 @@ describe('validateIntake', () => {
       valid({ providerId: 'provider' }),
       'XPro assigns a verified provider for you. Remove the provider preference.',
     ],
-    [
-      valid({ cityId: 'missing' }),
-      'Choose your city and district from the list.',
-    ],
-    [
-      valid({ districtId: 'city' }),
-      'Choose your city and district from the list.',
-    ],
+    [valid({ locationId: 'missing' }), 'Choose your location from the list.'],
+    [valid({ locationId: undefined }), 'Choose your location from the list.'],
+    [valid({ locationId: 'state' }), 'Choose your location from the list.'],
     [valid({ address: '' }), 'Complete your contact and site details.'],
     [valid({ phone: '555' }), 'Enter a valid Nigerian phone number.'],
     [
@@ -132,6 +134,38 @@ describe('validateIntake', () => {
     ],
   ])('returns the first failure in spec order', (input, message) => {
     expect(() => run(input)).toThrow(message);
+  });
+
+  describe('location', () => {
+    it('accepts a served area or a served LGA', () => {
+      expect(run(valid()).locationId).toBe('area');
+      expect(run(valid({ locationId: 'lga' })).locationId).toBe('lga');
+    });
+
+    it.each([
+      ['the place is not serviceable', 'area', { serviceable: false }],
+      ['the place is inactive', 'area', { active: false }],
+      ['an ancestor is not serviceable', 'lga', { serviceable: false }],
+      ['an ancestor is inactive', 'state', { active: false }],
+    ])('refuses a place when %s', (_label, id, change) => {
+      const chain = locations.map((item) =>
+        item.id === id ? { ...item, ...change } : item,
+      );
+      expect(() =>
+        validateIntake(
+          valid(),
+          resolveServiceInput(catalog, valid()),
+          chain,
+          now,
+        ),
+      ).toThrow('Choose your location from the list.');
+    });
+
+    it('refuses a state even when it is served', () => {
+      expect(() => run(valid({ locationId: 'state' }))).toThrow(
+        'Choose your location from the list.',
+      );
+    });
   });
 
   it('fails with a missing service when nothing resolves', () => {

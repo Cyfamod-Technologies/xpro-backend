@@ -1,3 +1,4 @@
+import { locationStub } from '../platform/locations/locations.testkit';
 import { RequestSnapshotLoader, type RequestDb } from './snapshot.loader';
 
 const REQUEST_ID = '11111111-1111-4111-8111-111111111111';
@@ -47,8 +48,7 @@ function build(options: Options = {}) {
     status: 'awaiting_payment',
     intakeState: 'approved',
     contactInBrief: false,
-    cityId: 'city-1',
-    districtId: 'district-1',
+    locationId: 'district-1',
     holdKind: null,
     holdPreviousStatus: null,
     defectsWindowEndsAt: null,
@@ -87,7 +87,7 @@ function build(options: Options = {}) {
         user: { firstName: 'Pat', lastName: 'Provider' },
       }),
     },
-    location: { findUnique: jest.fn().mockResolvedValue({ name: 'Lagos' }) },
+    location: locationStub(),
     user: {
       findUnique: jest.fn(({ where }: { where: { id: string } }) =>
         Promise.resolve({
@@ -120,6 +120,19 @@ async function load(options: Options = {}) {
   );
   return { tx, snapshot: loaded!.snapshot };
 }
+
+describe('RequestSnapshotLoader location', () => {
+  it('loads the place and its ancestors, root first, with a most-specific-first label', async () => {
+    const { snapshot } = await load();
+    expect(snapshot.locationPath).toEqual([
+      { id: 'state-1', kind: 'state', name: 'FCT' },
+      { id: 'city-1', kind: 'lga', name: 'Abuja Municipal' },
+      { id: 'district-1', kind: 'area', name: 'Wuse II' },
+    ]);
+    expect(snapshot.locationLabel).toBe('Wuse II, Abuja Municipal, FCT');
+    expect(snapshot.locationName).toBe('Wuse II');
+  });
+});
 
 describe('RequestSnapshotLoader payment state', () => {
   const accepted = [

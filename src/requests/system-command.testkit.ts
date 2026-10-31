@@ -74,7 +74,11 @@ export function systemCommandKit(
       pendingUpdates: [],
       openIssues: [],
       hold: null,
-      districtName: 'Ikeja',
+      locationName: 'Ikeja',
+      locationPath: [
+        { id: 'city-1', kind: 'lga', name: 'Lagos' },
+        { id: 'district-1', kind: 'area', name: 'Ikeja' },
+      ],
       ...options.snap,
     } as unknown as RequestSnapshot,
     actor: SYSTEM_ACTOR,

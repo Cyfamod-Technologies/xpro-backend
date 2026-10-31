@@ -32,6 +32,7 @@ import type {
 } from './dto/request-intake.dto';
 import { effectiveDates, jsonObject } from './projections/projection.helpers';
 import { loadCatalog } from '../platform/catalog/catalog.tree';
+import { loadLocationChain } from '../platform/locations/location-path';
 import { answerSnapshots, answersByQuestion } from './domain/answers';
 import { storedSkill } from './domain/dispatch-request';
 import {
@@ -98,10 +99,7 @@ export class IntakeService {
     const result = await this.runner.create(
       { actor, idempotencyKey: key, idempotencyHash: hash },
       async (tx, now, settings) => {
-        const locations = await tx.location.findMany({
-          where: { active: true },
-          select: { id: true, kind: true, parentId: true, active: true },
-        });
+        const locations = await loadLocationChain(tx, dto.locationId);
         const resolved = resolveServiceInput(await loadCatalog(tx), dto);
         const valid = validateIntake(dto, resolved, locations, now);
         await enforceOpenRequestLimit(tx, user.id, settings, 1);
@@ -155,8 +153,7 @@ export class IntakeService {
         serviceRootId: valid.serviceRootId,
         servicePath: valid.servicePath,
         answers: valid.answers,
-        cityId: valid.cityId,
-        districtId: valid.districtId,
+        locationId: valid.locationId,
         address: valid.address,
         phone: valid.phone,
         contactMethod: valid.contactMethod,
@@ -302,8 +299,7 @@ export class IntakeService {
           title: dto.title ?? row.title,
           service,
           serviceId,
-          cityId: dto.cityId ?? row.cityId,
-          districtId: dto.districtId ?? row.districtId,
+          locationId: dto.locationId ?? row.locationId,
           address: dto.address ?? row.address,
           phone: dto.phone ?? row.phone,
           contactMethod: dto.contactMethod ?? row.contactMethod,
@@ -316,10 +312,7 @@ export class IntakeService {
           providerId: dto.providerId,
           attachments: [],
         };
-        const locations = await context.tx.location.findMany({
-          where: { active: true },
-          select: { id: true, kind: true, parentId: true, active: true },
-        });
+        const locations = await loadLocationChain(context.tx, input.locationId);
         const resolved = resolveServiceInput(
           await loadCatalog(context.tx),
           input,
@@ -361,8 +354,7 @@ export class IntakeService {
           serviceRootId: valid.serviceRootId,
           servicePath: valid.servicePath,
           answers: valid.answers,
-          cityId: valid.cityId,
-          districtId: valid.districtId,
+          locationId: valid.locationId,
           address: valid.address,
           phone: valid.phone,
           contactMethod: valid.contactMethod,
@@ -452,7 +444,7 @@ export class IntakeService {
             assignmentId: offered.id,
             requestCode: context.snap.number,
             service: valid.service,
-            district: context.snap.districtName ?? 'your area',
+            district: context.snap.locationName ?? 'your area',
           });
         }
         const settingsMode = row.dispatchMode;
@@ -956,7 +948,7 @@ async function findPossibleDuplicate(
     where: {
       ownerId,
       service: intake.service,
-      districtId: intake.districtId,
+      locationId: intake.locationId,
       status: { in: OPEN_STATUSES },
       createdAt: { gte: since },
       ...(excludeIds.length ? { id: { notIn: [...excludeIds] } } : {}),
@@ -1022,8 +1014,7 @@ function fieldLabel(field: string): string {
     title: 'title',
     service: 'service',
     serviceId: 'service',
-    cityId: 'city',
-    districtId: 'district',
+    locationId: 'location',
     address: 'site address',
     phone: 'phone',
     contactMethod: 'contact method',
@@ -1046,8 +1037,7 @@ function changedRequestFields(
   for (const field of [
     'title',
     'service',
-    'cityId',
-    'districtId',
+    'locationId',
     'address',
     'phone',
     'contactMethod',
@@ -1084,8 +1074,7 @@ function hasKeyFieldChanged(
   return (
     row.service !== valid.service ||
     (row.serviceId !== null && row.serviceId !== valid.serviceId) ||
-    row.cityId !== valid.cityId ||
-    row.districtId !== valid.districtId ||
+    row.locationId !== valid.locationId ||
     storedSkill(row, oldDetails) !== valid.skill ||
     oldDates.effectiveStartDate !== valid.effectiveStartDate ||
     oldDates.effectiveEndDate !== valid.effectiveEndDate

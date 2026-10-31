@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { createUser, deleteTestUsers } from '../../test/integration/users';
 import type { AppError } from '../platform/errors/app-error';
 import { enforceOpenRequestLimit } from './open-request-limit';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 const prisma = new PrismaClient();
 const settings = { 'request.maxOpenPerCustomer': 1 };
@@ -14,8 +15,7 @@ describe('open-request limit (integration)', () => {
     customerName: 'Integration customer',
     title,
     service: 'Construction',
-    cityId: 'city-int',
-    districtId: 'district-int',
+    locationId: LIFE_CAMP_ID,
     address: '1 Test Street',
     phone: '+2348012345678',
     description: 'Integration test request for the open-request limit.',

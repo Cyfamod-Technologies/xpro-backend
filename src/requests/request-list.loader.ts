@@ -66,8 +66,8 @@ function groupBy<T extends { requestId: string }>(items: T[]) {
 /**
  * Builds the same `RequestSnapshot` as `RequestSnapshotLoader.load`, for a page of
  * rows, with one batched query per child table instead of a full aggregate per
- * row. It leaves out only what a summary never reads: attachments, city and
- * district names, and the full child columns.
+ * row. It leaves out only what a summary never reads: attachments, the
+ * location path, and the full child columns.
  */
 @Injectable()
 export class RequestListLoader {

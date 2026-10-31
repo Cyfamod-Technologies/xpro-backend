@@ -13,10 +13,12 @@ export type DispatchRequest = {
   serviceId: string | null;
   skill?: string | null;
   skillId: string | null;
-  districtId: string;
-  districtName: string;
-  cityId: string;
-  cityName?: string | null;
+  locationId: string;
+  locationName: string;
+  /** The chosen place and its ancestors: `[locationId, ...ancestorIds]`. */
+  locationIds: readonly string[];
+  /** The direct parent, which ranking scores below an exact match. */
+  locationParentId: string | null;
   effectiveStartDate?: string | null;
   effectiveEndDate?: string | null;
 };
@@ -33,7 +35,7 @@ export type DispatchProvider = {
   serviceIds: readonly string[];
   /** Root service id to the option ids and skill-leaf ids the provider holds under it. */
   skillIds: Readonly<Record<string, readonly string[]>>;
-  /** District and city ids the provider covers; a city id covers every district in it (04 §4.3). */
+  /** Place ids the provider covers; an id covers that place and everything under it (04 §4.3). */
   serviceAreaIds: readonly string[];
   available: boolean;
   capacity: number;
@@ -136,12 +138,11 @@ const serviceCheck: Check = (provider, request) =>
 const availableCheck: Check = (provider) =>
   provider.available ? null : failure('available', 'Not accepting new jobs');
 
-// 04 §6.5 E6: the request's district or its city is in `serviceAreaIds`.
+// 04 §6.5 E6: the request's place or one of its ancestors is in `serviceAreaIds`.
 const areaCheck: Check = (provider, request) =>
-  provider.serviceAreaIds.includes(request.districtId) ||
-  provider.serviceAreaIds.includes(request.cityId)
+  request.locationIds.some((id) => provider.serviceAreaIds.includes(id))
     ? null
-    : failure('area', `Doesn’t cover ${request.districtName}`);
+    : failure('area', `Doesn’t cover ${request.locationName}`);
 
 const dayCheck: Check = (provider, request) => {
   const start = request.effectiveStartDate;

@@ -15,6 +15,7 @@ import { ResponseInterceptor } from '../common/interceptors/response.interceptor
 import { ActorService } from '../platform/actor/actor.service';
 import type { ActorContext } from '../platform/actor/actor.types';
 import { AppError } from '../platform/errors/app-error';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 import { SettingsService } from '../platform/settings/settings.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import type { StaffPermission } from '../staff/staff-permissions';
@@ -99,8 +100,7 @@ describe('GET /admin/conversations (integration)', () => {
       description?: string;
       customerName?: string;
       service?: string;
-      cityId?: string;
-      districtId?: string;
+      locationId?: string;
       serviceId?: string;
       serviceRootId?: string;
       staffOwnerId?: string;
@@ -112,8 +112,7 @@ describe('GET /admin/conversations (integration)', () => {
         customerName: options.customerName ?? `Chika ${RUN}`,
         title: options.title ?? `${RUN} ${key}`,
         service: options.service ?? 'Maintenance',
-        cityId: options.cityId ?? randomUUID(),
-        districtId: options.districtId ?? randomUUID(),
+        locationId: options.locationId ?? LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: options.description ?? 'Plain brief.',
@@ -161,10 +160,8 @@ describe('GET /admin/conversations (integration)', () => {
         userId: user.id,
         phone: '+2348000000000',
         trade: 'Plumber',
-        city: 'Test city',
         services: [],
         skills: {},
-        serviceAreas: [],
         workingHours: {},
         bio: 'Integration test provider.',
         businessName,
@@ -250,13 +247,27 @@ describe('GET /admin/conversations (integration)', () => {
       data: { name: `${RUN} Leak repair`, parentId: root.id, depth: 1 },
     });
     catalogIds.push(leaf.id, root.id);
-    const city = await prisma.location.create({
-      data: { kind: 'city', name: `${RUN} Lagosia` },
+    const state = await prisma.location.create({
+      data: { kind: 'state', name: `${RUN} Lagosia` },
     });
-    const district = await prisma.location.create({
-      data: { kind: 'district', name: `${RUN} Ikejaville`, parentId: city.id },
+    const lga = await prisma.location.create({
+      data: {
+        kind: 'lga',
+        name: `${RUN} Ikejaland`,
+        parentId: state.id,
+        ancestorIds: [state.id],
+      },
     });
-    locationIds.push(district.id, city.id);
+    const area = await prisma.location.create({
+      data: {
+        kind: 'area',
+        name: `${RUN} Ikejaville`,
+        parentId: lga.id,
+        ancestorIds: [state.id, lga.id],
+      },
+    });
+    // Children first: requests and locations reference each other with RESTRICT.
+    locationIds.push(area.id, lga.id, state.id);
 
     // R1: customer asks, XPro answers, customer asks twice more, then an internal note (XPro last).
     await createRequest('r1', {
@@ -264,8 +275,7 @@ describe('GET /admin/conversations (integration)', () => {
       description: 'Replace the corrugated roof sheets.',
       serviceId: leaf.id,
       serviceRootId: root.id,
-      cityId: city.id,
-      districtId: district.id,
+      locationId: area.id,
       staffOwnerId: ops.id,
       customerName: `Chika ${RUN}`,
     });
@@ -564,8 +574,9 @@ describe('GET /admin/conversations (integration)', () => {
       ['description', 'corrugated ROOF sheets', 'r1'],
       ['sub-service name', `${RUN} leak repair`, 'r1'],
       ['service name', `${RUN} plumbing`, 'r1'],
-      ['city name', `${RUN} lagosia`, 'r1'],
-      ['district name', `${RUN} ikejaville`, 'r1'],
+      ['state name', `${RUN} lagosia`, 'r1'],
+      ['LGA name', `${RUN} ikejaland`, 'r1'],
+      ['area name', `${RUN} ikejaville`, 'r1'],
       ['customer name', `Chika ${RUN}`, 'r1'],
       ['provider business name', `Tunde Roofing ${RUN}`, 'r4'],
     ])('finds a request by %s, case-insensitively', async (_name, q, key) => {

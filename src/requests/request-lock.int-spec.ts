@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { RequestSnapshotLoader } from './snapshot.loader';
 import { resolveRequestId } from './request-ref';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 const prisma = new PrismaClient();
 
@@ -15,8 +16,7 @@ describe('request row locks and references', () => {
         customerName: 'Integration customer',
         title: 'Row lock test',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for row locking.',

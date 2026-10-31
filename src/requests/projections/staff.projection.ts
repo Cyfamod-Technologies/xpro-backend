@@ -40,8 +40,9 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
     contactInBrief: context.snapshot.contactInBrief ?? false,
     title: row.title,
     service: row.service,
-    cityId: row.cityId,
-    districtId: row.districtId,
+    locationId: row.locationId,
+    locationPath: context.snapshot.locationPath,
+    locationLabel: context.snapshot.locationLabel,
     ...(canSeeContact
       ? {
           address: row.address,

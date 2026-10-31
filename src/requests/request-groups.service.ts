@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { RequestUser } from '../common/types/request-user';
 import { ActorService } from '../platform/actor/actor.service';
 import { loadCatalog } from '../platform/catalog/catalog.tree';
+import { loadLocationChain } from '../platform/locations/location-path';
 import { IdempotencyService } from '../platform/idempotency/idempotency.service';
 import { RequestCommandRunner } from './command-runner';
 import {
@@ -67,10 +68,7 @@ export class RequestGroupsService {
       async (tx, now, settings, createChild) => {
         checkGroupServices(dto.services, servicesLimit(settings));
         checkNoProjectFiles(dto.attachments);
-        const locations = await tx.location.findMany({
-          where: { active: true },
-          select: { id: true, kind: true, parentId: true, active: true },
-        });
+        const locations = await loadLocationChain(tx, dto.locationId);
         const catalog = await loadCatalog(tx);
         const prepared = dto.services.map((item, index) =>
           this.prepare(dto, item, index, catalog, locations, now),
@@ -177,8 +175,7 @@ export class RequestGroupsService {
     const input: IntakeValidationInput = {
       title: dto.title,
       serviceId: service.serviceId,
-      cityId: dto.cityId,
-      districtId: dto.districtId,
+      locationId: dto.locationId,
       address: dto.address,
       phone: dto.phone,
       contactMethod: dto.contactMethod,

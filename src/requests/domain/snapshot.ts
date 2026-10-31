@@ -102,8 +102,12 @@ export type RequestSnapshot = {
     firstName: string | null;
     lastName: string | null;
   } | null;
-  cityName?: string | null;
-  districtName?: string | null;
+  /** The chosen place and its ancestors, root first. */
+  locationPath?: ReadonlyArray<{ id: string; kind: string; name: string }>;
+  /** Names from the chosen place to the state, e.g. `Life Camp, Abuja Municipal, FCT`. */
+  locationLabel?: string | null;
+  /** The chosen place's own name, for notification and offer text. */
+  locationName?: string | null;
   attachmentInfo?: ReadonlyArray<{
     id: string;
     name: string;

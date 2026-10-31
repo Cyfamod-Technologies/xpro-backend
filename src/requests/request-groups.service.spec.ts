@@ -58,9 +58,24 @@ function world(
   const sequence = { next: 1 };
   let counter = 0;
   const uploads = (options.uploads ?? []).map((id) => ({ id, size: 1000 }));
+  const place = (
+    id: string,
+    kind: string,
+    parentId: string | null,
+    ancestorIds: string[],
+  ) => ({
+    id,
+    kind,
+    name: id,
+    parentId,
+    active: true,
+    serviceable: true,
+    ancestorIds,
+  });
   const locations = [
-    { id: 'city-1', kind: 'city', parentId: null, active: true },
-    { id: 'district-1', kind: 'district', parentId: 'city-1', active: true },
+    place('state-1', 'state', null, []),
+    place('city-1', 'lga', 'state-1', ['state-1']),
+    place('district-1', 'area', 'city-1', ['state-1', 'city-1']),
   ];
   const tx = {
     $executeRaw: jest.fn((query: { values?: unknown[] }) => {
@@ -82,7 +97,14 @@ function world(
     $queryRaw: jest.fn(() =>
       Promise.resolve([{ nextval: BigInt(sequence.next++) }]),
     ),
-    location: { findMany: jest.fn().mockResolvedValue(locations) },
+    location: {
+      findUnique: jest.fn(({ where }: { where: { id: string } }) =>
+        Promise.resolve(locations.find(({ id }) => id === where.id) ?? null),
+      ),
+      findMany: jest.fn(({ where }: { where: { id: { in: string[] } } }) =>
+        Promise.resolve(locations.filter(({ id }) => where.id.in.includes(id))),
+      ),
+    },
     catalogService: {
       findMany: jest.fn().mockResolvedValue(catalogRows(catalog)),
     },
@@ -115,7 +137,7 @@ function world(
               (row) =>
                 row.ownerId === where.ownerId &&
                 row.service === where.service &&
-                row.districtId === where.districtId &&
+                row.locationId === where.locationId &&
                 where.status.in.includes(row.status) &&
                 row.createdAt >= where.createdAt.gte &&
                 !(where.id?.notIn ?? []).includes(row.id),
@@ -291,8 +313,7 @@ function body(
 ): RequestGroupCreateDto {
   return {
     title: PROJECT,
-    cityId: 'city-1',
-    districtId: 'district-1',
+    locationId: 'district-1',
     address: '12 Example Road',
     phone: '08031234567',
     contactMethod: 'phone',
@@ -346,8 +367,7 @@ describe('POST /request-groups', () => {
         dispatchMode: 'auto',
         ownerId: 'customer-1',
         customerName: 'Customer One',
-        cityId: 'city-1',
-        districtId: 'district-1',
+        locationId: 'district-1',
         address: '12 Example Road',
         phone: '+2348031234567',
         description: BRIEF,
@@ -597,7 +617,7 @@ describe('POST /request-groups', () => {
     const w = world();
     w.existing({
       service: 'Construction',
-      districtId: 'district-1',
+      locationId: 'district-1',
       title: childTitle(PROJECT, construction[0].name),
     });
 
@@ -696,8 +716,7 @@ describe('open-request limit (MS-6, MS-7)', () => {
       {
         title: PROJECT,
         serviceId: construction[0].id,
-        cityId: 'city-1',
-        districtId: 'district-1',
+        locationId: 'district-1',
         address: '12 Example Road',
         phone: '08031234567',
         contactMethod: 'phone',

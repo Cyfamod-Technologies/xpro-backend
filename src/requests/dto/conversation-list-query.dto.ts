@@ -40,7 +40,7 @@ export class ConversationListQueryDto {
   @ApiPropertyOptional({
     maxLength: CONVERSATION_SEARCH_MAX_LENGTH,
     description:
-      'Case-insensitive search over request id, title, description, service and sub-service, city and district, customer name and provider business name. Message text is not searched.',
+      'Case-insensitive search over request id, title, description, service and sub-service, location (place, LGA and state), customer name and provider business name. Message text is not searched.',
   })
   @IsOptional()
   @Transform(({ value }) =>

@@ -12,6 +12,7 @@ import { ApprovalsHooks } from '../approvals.hooks';
 import { RequestCommandRunner } from '../command-runner';
 import { RequestSnapshotLoader } from '../snapshot.loader';
 import { RequestEventsService } from './request-events.service';
+import { LIFE_CAMP_ID } from '../../platform/locations/locations.testkit';
 
 describe('payment settlement atomicity (integration)', () => {
   let prisma: PrismaService;
@@ -54,8 +55,7 @@ describe('payment settlement atomicity (integration)', () => {
         customerName: 'Settlement customer',
         title: 'Settlement test',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for payment settlement.',

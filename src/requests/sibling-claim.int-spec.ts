@@ -9,6 +9,7 @@ import { formatGroupRef } from './domain/request-group';
 import { resolveRequestGroup } from './request-group-ref';
 import { LIST_ROW_SELECT } from './request-list.loader';
 import { claimGroupSiblings } from './sibling-claim';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 const prisma = new PrismaClient();
 const hooks = new ApprovalsHooks({} as never);
@@ -30,8 +31,7 @@ describe('bundle claim and group list filter (integration)', () => {
     customerName: 'Integration customer',
     title,
     service: 'Construction',
-    cityId: 'city-int',
-    districtId: 'district-int',
+    locationId: LIFE_CAMP_ID,
     address: '1 Test Street',
     phone: '+2348012345678',
     description: 'Integration test request for a bundle.',

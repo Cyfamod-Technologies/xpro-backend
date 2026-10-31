@@ -1,6 +1,7 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import { createUser, deleteTestUsers } from '../../test/integration/users';
 import { formatGroupRef } from './domain/request-group';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 const prisma = new PrismaClient();
 
@@ -19,8 +20,7 @@ describe('request groups (integration)', () => {
     customerName: 'Integration customer',
     title,
     service: 'Construction',
-    cityId: 'city-int',
-    districtId: 'district-int',
+    locationId: LIFE_CAMP_ID,
     address: '1 Test Street',
     phone: '+2348012345678',
     description: 'Integration test request for a request group.',

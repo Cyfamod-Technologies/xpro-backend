@@ -5,10 +5,15 @@ import { evaluateEligibility, type DispatchProvider } from './eligibility';
 const base = {
   id: 'request-1',
   ownerId: 'customer-1',
-  districtId: 'district-1',
-  cityId: 'city-1',
+  locationId: 'district-1',
 };
-const locations = { districtName: 'Wuse II', cityName: 'Abuja' };
+const locations = {
+  locationPath: [
+    { id: 'state-1', name: 'FCT' },
+    { id: 'city-1', name: 'Abuja Municipal' },
+    { id: 'district-1', name: 'Wuse II' },
+  ],
+};
 
 describe('buildDispatchRequest (04 §4.9, C.6)', () => {
   it.each([
@@ -109,7 +114,7 @@ describe('buildDispatchRequest (04 §4.9, C.6)', () => {
     });
   });
 
-  it('carries the district and city names, not their ids', () => {
+  it('carries the place name and its coverage ids, nearest first', () => {
     const result = buildDispatchRequest(
       { ...base, service: 'Design', startDate: null, details: {} },
       locations,
@@ -118,19 +123,30 @@ describe('buildDispatchRequest (04 §4.9, C.6)', () => {
       id: 'request-1',
       ownerId: 'customer-1',
       service: 'Design',
-      districtId: 'district-1',
-      districtName: 'Wuse II',
-      cityId: 'city-1',
-      cityName: 'Abuja',
+      locationId: 'district-1',
+      locationName: 'Wuse II',
+      locationIds: ['district-1', 'state-1', 'city-1'],
+      locationParentId: 'city-1',
     });
   });
 
-  it('never shows an id when the district name is missing', () => {
+  it('covers just the place when the path is unknown', () => {
+    const result = buildDispatchRequest(
+      { ...base, service: 'Design', startDate: null, details: {} },
+      {},
+    );
+    expect(result).toMatchObject({
+      locationIds: ['district-1'],
+      locationParentId: null,
+    });
+  });
+
+  it('never shows an id when the place name is missing', () => {
     const result = buildDispatchRequest(
       { ...base, service: 'Design', startDate: null, details: null },
-      { districtName: null },
+      { locationPath: null },
     );
-    expect(result.districtName).not.toContain('district-1');
+    expect(result.locationName).not.toContain('district-1');
   });
 });
 
