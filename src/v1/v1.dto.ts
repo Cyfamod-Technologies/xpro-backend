@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   Max,
@@ -12,6 +13,7 @@ import {
   Min,
   MinLength,
   ValidateNested,
+  ValidateIf,
 } from 'class-validator';
 
 export class V1AttachmentDto {
@@ -40,9 +42,18 @@ export class V1AttachmentDto {
 }
 
 export class V1CreateRequestDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      'V1 service id; use serviceId for the existing request contract',
+  })
+  @IsOptional()
   @IsString()
-  service!: string;
+  service?: string;
+
+  @ApiPropertyOptional({ description: 'Existing request API service id' })
+  @IsOptional()
+  @IsString()
+  serviceId?: string;
 
   @ApiProperty()
   @IsString()
@@ -56,9 +67,20 @@ export class V1CreateRequestDto {
   @MaxLength(5000)
   description!: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      'V1 serviceable location id; use locationId for the existing request contract',
+  })
+  @IsOptional()
   @IsString()
-  location!: string;
+  location?: string;
+
+  @ApiPropertyOptional({
+    description: 'Existing request API serviceable location id',
+  })
+  @IsOptional()
+  @IsString()
+  locationId?: string;
 
   @ApiProperty()
   @IsString()
@@ -71,27 +93,62 @@ export class V1CreateRequestDto {
   @MaxLength(30)
   phone!: string;
 
-  @ApiProperty({ enum: ['phone', 'whatsapp', 'email'] })
-  @IsIn(['phone', 'whatsapp', 'email'])
-  contactMethod!: 'phone' | 'whatsapp' | 'email';
+  @ApiPropertyOptional({
+    enum: ['phone', 'whatsapp', 'email', 'both'],
+    default: 'phone',
+  })
+  @IsOptional()
+  @IsIn(['phone', 'whatsapp', 'email', 'both'])
+  contactMethod?: 'phone' | 'whatsapp' | 'email' | 'both';
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description: 'V1 amount in kobo; alternatively use budget in naira',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   @Max(Number.MAX_SAFE_INTEGER)
-  budgetKobo!: number;
+  budgetKobo?: number;
 
-  @ApiProperty()
-  @IsString()
+  @ApiPropertyOptional({ description: 'Existing request API amount in naira' })
   @IsOptional()
-  preferredDate!: string;
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(Math.floor(Number.MAX_SAFE_INTEGER / 100))
+  budget?: number;
 
-  @ApiProperty({ type: [V1AttachmentDto] })
+  @ApiPropertyOptional()
+  @ValidateIf((_dto, value) => value !== undefined && value !== '')
+  @IsDateString()
+  preferredDate?: string;
+
+  @ApiPropertyOptional({
+    description: 'Existing request API preferred start date',
+  })
+  @ValidateIf((_dto, value) => value !== undefined && value !== '')
+  @IsDateString()
+  startDate?: string;
+
+  @ApiPropertyOptional({ type: [V1AttachmentDto] })
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => V1AttachmentDto)
-  attachments!: V1AttachmentDto[];
+  attachments?: V1AttachmentDto[];
+
+  @ApiPropertyOptional({
+    description: 'Existing request API service question answers',
+  })
+  @IsOptional()
+  @IsObject()
+  answers?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ description: 'Legacy service question details' })
+  @IsOptional()
+  @IsObject()
+  details?: Record<string, unknown>;
 }
 
 export class V1ListRequestsQueryDto {

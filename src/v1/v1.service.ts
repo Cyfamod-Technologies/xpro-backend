@@ -10,6 +10,7 @@ import {
   UploadPurpose,
 } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import type { Request } from 'express';
 import { formatRequestId, parseRequestId } from '../requests/domain/statuses';
 import { ActorService } from '../platform/actor/actor.service';
 import type { ActorContext } from '../platform/actor/actor.types';
@@ -18,6 +19,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SettingsService } from '../platform/settings/settings.service';
 import { UploadsService } from '../uploads/uploads.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { IdempotencyService } from '../platform/idempotency/idempotency.service';
 import {
   evaluateOpenRequestLimit,
   platformOpenRequestLimit,
@@ -49,6 +51,7 @@ const requestInclude = {
 type RequestRow = Prisma.ServiceRequestGetPayload<{
   include: typeof requestInclude;
 }>;
+type V1ReadDb = Pick<Prisma.TransactionClient, 'user' | 'upload'>;
 
 const fail = (
   status: number,
@@ -86,7 +89,55 @@ export class V1Service {
     private readonly uploads: UploadsService,
     private readonly settingsService: SettingsService,
     private readonly audit: AuditLogsService,
+    private readonly idempotency: IdempotencyService,
   ) {}
+
+  private async runIdempotent<T>(
+    userId: string,
+    key: string,
+    request: Pick<Request, 'method' | 'originalUrl' | 'body'>,
+    status: number,
+    action: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<{ value: T; replayed: boolean }> {
+    const hash = this.commandHash(request);
+    return this.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${userId}:${key}`}, 0))`,
+        );
+        const replay = await this.idempotency.lookup(userId, key, hash, tx);
+        if (replay) return { value: replay.body as T, replayed: true };
+
+        const value = await action(tx);
+        await this.idempotency.store(userId, key, hash, status, value, tx);
+        return { value, replayed: false };
+      },
+      { timeout: 15_000 },
+    );
+  }
+
+  private commandHash(
+    request: Pick<Request, 'method' | 'originalUrl' | 'body'>,
+  ) {
+    return this.idempotency.hashRequest(
+      request.method,
+      request.originalUrl,
+      request.body,
+    );
+  }
+
+  private async replayCommand<T>(
+    userId: string,
+    key: string,
+    request: Pick<Request, 'method' | 'originalUrl' | 'body'>,
+  ): Promise<T | null> {
+    const replay = await this.idempotency.lookup(
+      userId,
+      key,
+      this.commandHash(request),
+    );
+    return replay ? (replay.body as T) : null;
+  }
 
   private async actor(userId: string): Promise<ActorContext> {
     return this.actors.resolve(userId);
@@ -125,12 +176,16 @@ export class V1Service {
     return row;
   }
 
-  private async projectRequest(row: RequestRow, actor: ActorContext) {
+  private async projectRequest(
+    row: RequestRow,
+    actor: ActorContext,
+    db: V1ReadDb = this.prisma,
+  ) {
     const userIds = [
       row.ownerId,
       ...(row.staffOwnerId ? [row.staffOwnerId] : []),
     ];
-    const users = await this.prisma.user.findMany({
+    const users = await db.user.findMany({
       where: { id: { in: userIds } },
       select: {
         id: true,
@@ -143,7 +198,7 @@ export class V1Service {
     });
     const owner = users.find((user) => user.id === row.ownerId);
     const assigneeUser = users.find((user) => user.id === row.staffOwnerId);
-    const requestAttachments = await this.prisma.upload.findMany({
+    const requestAttachments = await db.upload.findMany({
       where: { entityType: 'request', entityId: row.id, status: 'attached' },
       select: { id: true, fileName: true, size: true, contentType: true },
       orderBy: { createdAt: 'asc' },
@@ -390,26 +445,66 @@ export class V1Service {
     return this.projectRequest(await this.findRequest(ref, actor), actor);
   }
 
-  async createRequest(userId: string, dto: V1CreateRequestDto, _key: string) {
+  async createRequest(
+    userId: string,
+    dto: V1CreateRequestDto,
+    key: string,
+    request: Request,
+  ) {
     const actor = await this.actor(userId);
     if (actor.kind !== 'customer' || !actor.platformRoles.includes('customer'))
       fail(403, 'FORBIDDEN', 'Only customers can submit requests.');
-    const [user, service, location] = await Promise.all([
+    const serviceInput = dto.serviceId?.trim() || dto.service?.trim();
+    const locationInput = dto.locationId?.trim() || dto.location?.trim();
+    const budgetKobo = dto.budgetKobo ?? Math.round((dto.budget ?? 0) * 100);
+    const preferredDate = dto.startDate || dto.preferredDate || '';
+    const attachments = dto.attachments ?? [];
+    if (!serviceInput)
+      fail(422, 'VALIDATION_ERROR', 'Choose a service to continue.');
+    const locationId =
+      locationInput ||
+      fail(422, 'VALIDATION_ERROR', 'Choose a location Xpro serves.');
+    const replay = await this.replayCommand<
+      Awaited<ReturnType<typeof this.projectRequest>>
+    >(userId, key, request);
+    if (replay) return replay;
+    const [user, catalog, location] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
         select: { firstName: true, lastName: true, name: true, email: true },
       }),
-      this.prisma.catalogService.findFirst({
-        where: { id: dto.service, parentId: null, active: true },
+      this.prisma.catalogService.findMany({
+        where: { active: true },
+        select: { id: true, name: true, parentId: true },
       }),
       this.prisma.location.findFirst({
-        where: { id: dto.location, active: true, serviceable: true },
+        where: { id: locationId, active: true, serviceable: true },
       }),
     ]);
     if (!user)
       throw new AppError(404, 'NOT_FOUND', 'Customer account not found.');
+    const serviceById = catalog.find((item) => item.id === serviceInput);
+    const service =
+      serviceById ??
+      catalog.find(
+        (item) => item.parentId === null && item.name === serviceInput,
+      );
     if (!service)
       throw new AppError(422, 'VALIDATION_ERROR', 'Choose an active service.');
+    let serviceRoot = service;
+    const servicePath = [service];
+    while (serviceRoot.parentId) {
+      const parent = catalog.find((item) => item.id === serviceRoot.parentId);
+      if (!parent)
+        throw new AppError(
+          422,
+          'VALIDATION_ERROR',
+          'Choose an active service.',
+        );
+      serviceRoot = parent;
+      servicePath.push(parent);
+    }
+    servicePath.reverse();
     if (!location)
       throw new AppError(
         422,
@@ -423,96 +518,111 @@ export class V1Service {
         'VALIDATION_ERROR',
         'Enter a valid Nigerian phone number.',
       );
-    const created = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw(
-        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${'v1-open-request-limit:' + userId}, 0))`,
-      );
-      const [ownerLimit, open, settingsRows] = await Promise.all([
-        tx.user.findUnique({
-          where: { id: userId },
-          select: { openRequestLimit: true },
-        }),
-        tx.serviceRequest.count({
-          where: {
-            workflowMode: RequestWorkflow.v1,
-            ownerId: userId,
-            status: RequestStatus.submitted,
-          },
-        }),
-        this.settingsService.snapshot(),
-      ]);
-      const settings = Object.fromEntries(
-        settingsRows.map(({ key, value }) => [key, value]),
-      );
-      const limit =
-        ownerLimit?.openRequestLimit ?? platformOpenRequestLimit(settings);
-      const allowance = evaluateOpenRequestLimit({ open, limit, requested: 1 });
-      if ('code' in allowance)
-        fail(422, allowance.code, allowance.message, allowance.details);
-      const row = await tx.serviceRequest.create({
-        data: {
-          ownerId: userId,
-          customerName: fullName({ ...user, email: user.email }),
-          title: dto.title.trim(),
-          service: service.name,
-          serviceId: service.id,
-          serviceRootId: service.id,
-          locationId: location.id,
-          address: dto.address.trim(),
-          phone,
-          contactMethod: dto.contactMethod,
-          description: dto.description.trim(),
-          budget: BigInt(dto.budgetKobo),
-          startDate: dto.preferredDate || null,
-          status: RequestStatus.submitted,
-          version: 1,
-          workflowMode: RequestWorkflow.v1,
-          dispatchMode: 'manual',
-          intakeState: 'pending',
-          answers: [],
-          details: {},
-          unclaimedSince: null,
-          contactInBrief: false,
-        },
-      });
-      const ids = dto.attachments.map((file) => file.id);
-      const uploads = await this.uploads.attach(
-        tx,
-        ids,
-        userId,
-        UploadPurpose.request_attachment,
-        'request',
-        row.id,
-      );
-      if (uploads.length)
-        await tx.requestAttachment.createMany({
-          data: uploads.map((upload) => ({
-            requestId: row.id,
-            uploadId: upload.id,
-          })),
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      request,
+      201,
+      async (tx) => {
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${'v1-open-request-limit:' + userId}, 0))`,
+        );
+        const [ownerLimit, open, settingsRows] = await Promise.all([
+          tx.user.findUnique({
+            where: { id: userId },
+            select: { openRequestLimit: true },
+          }),
+          tx.serviceRequest.count({
+            where: {
+              workflowMode: RequestWorkflow.v1,
+              ownerId: userId,
+              status: RequestStatus.submitted,
+            },
+          }),
+          this.settingsService.snapshot(),
+        ]);
+        const settings = Object.fromEntries(
+          settingsRows.map(({ key: settingKey, value }) => [settingKey, value]),
+        );
+        const limit =
+          ownerLimit?.openRequestLimit ?? platformOpenRequestLimit(settings);
+        const allowance = evaluateOpenRequestLimit({
+          open,
+          limit,
+          requested: 1,
         });
-      await tx.requestActivity.create({
-        data: {
-          requestId: row.id,
-          kind: RequestActivityKind.submitted,
-          actorId: userId,
-          actorName: actor.displayName,
-          text: `${actor.displayName} submitted the request`,
-        },
+        if ('code' in allowance)
+          fail(422, allowance.code, allowance.message, allowance.details);
+        const row = await tx.serviceRequest.create({
+          data: {
+            ownerId: userId,
+            customerName: fullName({ ...user, email: user.email }),
+            title: dto.title.trim(),
+            service: serviceRoot.name,
+            serviceId: service.id,
+            serviceRootId: serviceRoot.id,
+            servicePath: servicePath.map(({ id, name }) => ({
+              id,
+              name,
+            })),
+            locationId,
+            address: dto.address.trim(),
+            phone,
+            contactMethod: dto.contactMethod ?? 'phone',
+            description: dto.description.trim(),
+            budget: BigInt(budgetKobo),
+            startDate: preferredDate || null,
+            status: RequestStatus.submitted,
+            version: 1,
+            workflowMode: RequestWorkflow.v1,
+            dispatchMode: 'manual',
+            intakeState: 'pending',
+            answers: (dto.answers ?? []) as Prisma.InputJsonValue,
+            details: (dto.details ?? {}) as Prisma.InputJsonValue,
+            unclaimedSince: null,
+            contactInBrief: false,
+          },
+        });
+        const uploads = await this.uploads.attach(
+          tx,
+          attachments.map((file) => file.id),
+          userId,
+          UploadPurpose.request_attachment,
+          'request',
+          row.id,
+        );
+        if (uploads.length)
+          await tx.requestAttachment.createMany({
+            data: uploads.map((upload) => ({
+              requestId: row.id,
+              uploadId: upload.id,
+            })),
+          });
+        await tx.requestActivity.create({
+          data: {
+            requestId: row.id,
+            kind: RequestActivityKind.submitted,
+            actorId: userId,
+            actorName: actor.displayName,
+            text: `${actor.displayName} submitted the request`,
+          },
+        });
+        const created = await tx.serviceRequest.findFirstOrThrow({
+          where: { id: row.id },
+          include: requestInclude,
+        });
+        return this.projectRequest(created, actor, tx);
+      },
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: 'customer',
+        actorId: userId,
+        entityType: 'service_request',
+        entityId: execution.value.id,
+        action: 'v1.request.created',
       });
-      return tx.serviceRequest.findFirstOrThrow({
-        where: { id: row.id },
-        include: requestInclude,
-      });
-    });
-    this.audit.record({
-      actorType: 'customer',
-      actorId: userId,
-      entityType: 'service_request',
-      entityId: created.id,
-      action: 'v1.request.created',
-    });
-    return this.projectRequest(created, actor);
+    return execution.value;
   }
 
   async assignStaff(
@@ -520,11 +630,16 @@ export class V1Service {
     ref: string,
     dto: V1AssignStaffDto,
     version: number,
-    _key: string,
+    key: string,
+    request: Request,
   ) {
     const actor = await this.actor(userId);
     if (!this.isAdmin(actor))
       fail(403, 'FORBIDDEN', 'Only an admin can assign staff.');
+    const replay = await this.replayCommand<
+      Awaited<ReturnType<typeof this.projectRequest>>
+    >(userId, key, request);
+    if (replay) return replay;
     const current = await this.findRequest(ref, actor);
     this.assertVersion(current, version);
     if ((dto.expectedOwnerId ?? null) !== current.staffOwnerId)
@@ -552,41 +667,49 @@ export class V1Service {
         'VALIDATION_ERROR',
         'Choose an active staff member.',
       );
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await this.bumpVersion(tx, current.id, version, {
-        staffOwnerId: member.userId,
-        claimedAt: new Date(),
-        unclaimedSince: null,
-        ownershipVersion: { increment: 1 },
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      request,
+      200,
+      async (tx) => {
+        await this.bumpVersion(tx, current.id, version, {
+          staffOwnerId: member.userId,
+          claimedAt: new Date(),
+          unclaimedSince: null,
+          ownershipVersion: { increment: 1 },
+        });
+        await tx.requestActivity.create({
+          data: {
+            requestId: current.id,
+            kind: current.staffOwnerId
+              ? RequestActivityKind.reassigned
+              : RequestActivityKind.assigned,
+            actorId: userId,
+            actorName: actor.displayName,
+            text: `${actor.displayName} ${current.staffOwnerId ? 'reassigned the request to' : 'assigned'} ${fullName({ ...member.user, email: member.user.email })}`,
+            ...(dto.note ? { note: dto.note.trim() } : {}),
+          },
+        });
+        const updated = await tx.serviceRequest.findFirstOrThrow({
+          where: { id: current.id },
+          include: requestInclude,
+        });
+        return this.projectRequest(updated, actor, tx);
+      },
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: 'staff',
+        actorId: userId,
+        entityType: 'service_request',
+        entityId: current.id,
+        action: current.staffOwnerId
+          ? 'v1.request.staff_reassigned'
+          : 'v1.request.staff_assigned',
+        metadata: { staffId: member.userId },
       });
-      await tx.requestActivity.create({
-        data: {
-          requestId: current.id,
-          kind: current.staffOwnerId
-            ? RequestActivityKind.reassigned
-            : RequestActivityKind.assigned,
-          actorId: userId,
-          actorName: actor.displayName,
-          text: `${actor.displayName} ${current.staffOwnerId ? 'reassigned the request to' : 'assigned'} ${fullName({ ...member.user, email: member.user.email })}`,
-          ...(dto.note ? { note: dto.note.trim() } : {}),
-        },
-      });
-      return tx.serviceRequest.findFirstOrThrow({
-        where: { id: current.id },
-        include: requestInclude,
-      });
-    });
-    this.audit.record({
-      actorType: 'staff',
-      actorId: userId,
-      entityType: 'service_request',
-      entityId: current.id,
-      action: current.staffOwnerId
-        ? 'v1.request.staff_reassigned'
-        : 'v1.request.staff_assigned',
-      metadata: { staffId: member.userId },
-    });
-    return this.projectRequest(updated, actor);
+    return execution.value;
   }
 
   async approve(
@@ -594,11 +717,16 @@ export class V1Service {
     ref: string,
     dto: V1ApproveDto,
     version: number,
-    _key: string,
+    key: string,
+    request: Request,
   ) {
     const actor = await this.actor(userId);
     if (!this.isXpro(actor))
       fail(403, 'FORBIDDEN', 'Only Xpro staff can approve a request.');
+    const replay = await this.replayCommand<
+      Awaited<ReturnType<typeof this.projectRequest>>
+    >(userId, key, request);
+    if (replay) return replay;
     const current = await this.findRequest(ref, actor);
     if (!this.isAdmin(actor) && current.staffOwnerId !== userId)
       fail(
@@ -611,43 +739,51 @@ export class V1Service {
     if (!current.staffOwnerId)
       fail(422, 'ASSIGNEE_REQUIRED', 'Assign a staff member before approving.');
     const decisionAt = new Date();
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await this.bumpVersion(tx, current.id, version, {
-        status: RequestStatus.approved,
-        intakeApprovedBy: userId,
-        intakeApprovedAt: decisionAt,
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      request,
+      200,
+      async (tx) => {
+        await this.bumpVersion(tx, current.id, version, {
+          status: RequestStatus.approved,
+          intakeApprovedBy: userId,
+          intakeApprovedAt: decisionAt,
+        });
+        await tx.requestDecision.create({
+          data: {
+            requestId: current.id,
+            outcome: RequestDecisionOutcome.approved,
+            decidedById: userId,
+            decidedByName: actor.displayName,
+            decidedAt: decisionAt,
+          },
+        });
+        await tx.requestActivity.create({
+          data: {
+            requestId: current.id,
+            kind: RequestActivityKind.approved,
+            actorId: userId,
+            actorName: actor.displayName,
+            text: `${actor.displayName} approved the request`,
+          },
+        });
+        const updated = await tx.serviceRequest.findFirstOrThrow({
+          where: { id: current.id },
+          include: requestInclude,
+        });
+        return this.projectRequest(updated, actor, tx);
+      },
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: 'staff',
+        actorId: userId,
+        entityType: 'service_request',
+        entityId: current.id,
+        action: 'v1.request.approved',
       });
-      await tx.requestDecision.create({
-        data: {
-          requestId: current.id,
-          outcome: RequestDecisionOutcome.approved,
-          decidedById: userId,
-          decidedByName: actor.displayName,
-          decidedAt: decisionAt,
-        },
-      });
-      await tx.requestActivity.create({
-        data: {
-          requestId: current.id,
-          kind: RequestActivityKind.approved,
-          actorId: userId,
-          actorName: actor.displayName,
-          text: `${actor.displayName} approved the request`,
-        },
-      });
-      return tx.serviceRequest.findFirstOrThrow({
-        where: { id: current.id },
-        include: requestInclude,
-      });
-    });
-    this.audit.record({
-      actorType: 'staff',
-      actorId: userId,
-      entityType: 'service_request',
-      entityId: current.id,
-      action: 'v1.request.approved',
-    });
-    return this.projectRequest(updated, actor);
+    return execution.value;
   }
 
   async deny(
@@ -655,91 +791,122 @@ export class V1Service {
     ref: string,
     dto: V1DenyDto,
     version: number,
-    _key: string,
+    key: string,
+    request: Request,
   ) {
     const actor = await this.actor(userId);
     if (!this.isAdmin(actor))
       fail(403, 'FORBIDDEN', 'Only an admin can deny a request.');
+    const replay = await this.replayCommand<
+      Awaited<ReturnType<typeof this.projectRequest>>
+    >(userId, key, request);
+    if (replay) return replay;
     const current = await this.findRequest(ref, actor);
     this.assertVersion(current, version);
     this.assertSubmitted(current);
     const reason = dto.reason.trim();
     const now = new Date();
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await this.bumpVersion(tx, current.id, version, {
-        status: RequestStatus.rejected,
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      request,
+      200,
+      async (tx) => {
+        await this.bumpVersion(tx, current.id, version, {
+          status: RequestStatus.rejected,
+        });
+        await tx.requestDecision.create({
+          data: {
+            requestId: current.id,
+            outcome: RequestDecisionOutcome.denied,
+            reason,
+            decidedById: userId,
+            decidedByName: actor.displayName,
+            decidedAt: now,
+          },
+        });
+        await tx.requestActivity.create({
+          data: {
+            requestId: current.id,
+            kind: RequestActivityKind.denied,
+            actorId: userId,
+            actorName: actor.displayName,
+            text: `${actor.displayName} denied the request`,
+            note: reason,
+          },
+        });
+        const updated = await tx.serviceRequest.findFirstOrThrow({
+          where: { id: current.id },
+          include: requestInclude,
+        });
+        return this.projectRequest(updated, actor, tx);
+      },
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: 'staff',
+        actorId: userId,
+        entityType: 'service_request',
+        entityId: current.id,
+        action: 'v1.request.denied',
       });
-      await tx.requestDecision.create({
-        data: {
-          requestId: current.id,
-          outcome: RequestDecisionOutcome.denied,
-          reason,
-          decidedById: userId,
-          decidedByName: actor.displayName,
-          decidedAt: now,
-        },
-      });
-      await tx.requestActivity.create({
-        data: {
-          requestId: current.id,
-          kind: RequestActivityKind.denied,
-          actorId: userId,
-          actorName: actor.displayName,
-          text: `${actor.displayName} denied the request`,
-          note: reason,
-        },
-      });
-      return tx.serviceRequest.findFirstOrThrow({
-        where: { id: current.id },
-        include: requestInclude,
-      });
-    });
-    this.audit.record({
-      actorType: 'staff',
-      actorId: userId,
-      entityType: 'service_request',
-      entityId: current.id,
-      action: 'v1.request.denied',
-    });
-    return this.projectRequest(updated, actor);
+    return execution.value;
   }
 
-  async cancel(userId: string, ref: string, version: number, _key: string) {
+  async cancel(
+    userId: string,
+    ref: string,
+    version: number,
+    key: string,
+    request: Request,
+  ) {
     const actor = await this.actor(userId);
     if (actor.kind !== 'customer' || !actor.platformRoles.includes('customer'))
       fail(403, 'FORBIDDEN', 'Only a customer can cancel a request.');
+    const replay = await this.replayCommand<
+      Awaited<ReturnType<typeof this.projectRequest>>
+    >(userId, key, request);
+    if (replay) return replay;
     const current = await this.findRequest(ref, actor);
     this.assertVersion(current, version);
     this.assertSubmitted(current);
     const now = new Date();
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await this.bumpVersion(tx, current.id, version, {
-        status: RequestStatus.cancelled,
-        closedAt: now,
-        closedBy: userId,
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      request,
+      200,
+      async (tx) => {
+        await this.bumpVersion(tx, current.id, version, {
+          status: RequestStatus.cancelled,
+          closedAt: now,
+          closedBy: userId,
+        });
+        await tx.requestActivity.create({
+          data: {
+            requestId: current.id,
+            kind: RequestActivityKind.cancelled,
+            actorId: userId,
+            actorName: actor.displayName,
+            text: `${actor.displayName} cancelled the request`,
+          },
+        });
+        const updated = await tx.serviceRequest.findFirstOrThrow({
+          where: { id: current.id },
+          include: requestInclude,
+        });
+        return this.projectRequest(updated, actor, tx);
+      },
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: 'customer',
+        actorId: userId,
+        entityType: 'service_request',
+        entityId: current.id,
+        action: 'v1.request.cancelled',
       });
-      await tx.requestActivity.create({
-        data: {
-          requestId: current.id,
-          kind: RequestActivityKind.cancelled,
-          actorId: userId,
-          actorName: actor.displayName,
-          text: `${actor.displayName} cancelled the request`,
-        },
-      });
-      return tx.serviceRequest.findFirstOrThrow({
-        where: { id: current.id },
-        include: requestInclude,
-      });
-    });
-    this.audit.record({
-      actorType: 'customer',
-      actorId: userId,
-      entityType: 'service_request',
-      entityId: current.id,
-      action: 'v1.request.cancelled',
-    });
-    return this.projectRequest(updated, actor);
+    return execution.value;
   }
 
   private assertVersion(row: RequestRow, version: number) {
@@ -863,11 +1030,16 @@ export class V1Service {
     ref: string,
     dto: V1ReplaceProviderDto,
     version: number,
-    _key: string,
+    key: string,
+    request: Request,
   ) {
     const actor = await this.actor(userId);
     if (!this.isXpro(actor))
       fail(403, 'FORBIDDEN', 'Only Xpro staff can replace a provider.');
+    const replay = await this.replayCommand<
+      Awaited<ReturnType<typeof this.projectRequest>>
+    >(userId, key, request);
+    if (replay) return replay;
     const current = await this.findRequest(ref, actor);
     if (!this.isAdmin(actor) && current.staffOwnerId !== userId)
       fail(
@@ -914,62 +1086,70 @@ export class V1Service {
         'VALIDATION_ERROR',
         'Choose today or a later date.',
       );
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const assignmentId = randomUUID();
-      await this.bumpVersion(tx, current.id, version);
-      if (existing)
-        await tx.requestProviderAssignment.update({
-          where: { id: existing.id },
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      request,
+      200,
+      async (tx) => {
+        const assignmentId = randomUUID();
+        await this.bumpVersion(tx, current.id, version);
+        if (existing)
+          await tx.requestProviderAssignment.update({
+            where: { id: existing.id },
+            data: {
+              endedAt: new Date(),
+              endedById: userId,
+              endReason: reason,
+              replacedById: assignmentId,
+            },
+          });
+        await tx.requestProviderAssignment.create({
           data: {
-            endedAt: new Date(),
-            endedById: userId,
-            endReason: reason,
-            replacedById: assignmentId,
+            id: assignmentId,
+            requestId: current.id,
+            providerProfileId: provider.id,
+            providerUserId: provider.userId,
+            assignedById: userId,
+            assignedByName: actor.displayName,
+            assignedAt: new Date(),
+            priceKobo: BigInt(priceKobo),
+            agreedDate,
           },
         });
-      await tx.requestProviderAssignment.create({
-        data: {
-          id: assignmentId,
-          requestId: current.id,
-          providerProfileId: provider.id,
-          providerUserId: provider.userId,
-          assignedById: userId,
-          assignedByName: actor.displayName,
-          assignedAt: new Date(),
-          priceKobo: BigInt(priceKobo),
-          agreedDate,
-        },
+        await tx.requestActivity.create({
+          data: {
+            requestId: current.id,
+            kind: existing
+              ? RequestActivityKind.provider_replaced
+              : RequestActivityKind.provider_assigned,
+            actorId: userId,
+            actorName: actor.displayName,
+            text: existing
+              ? `${actor.displayName} replaced the assigned provider`
+              : `${actor.displayName} assigned a provider`,
+            ...(reason ? { note: reason } : {}),
+          },
+        });
+        const updated = await tx.serviceRequest.findFirstOrThrow({
+          where: { id: current.id },
+          include: requestInclude,
+        });
+        return this.projectRequest(updated, actor, tx);
+      },
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: 'staff',
+        actorId: userId,
+        entityType: 'service_request',
+        entityId: current.id,
+        action: existing
+          ? 'v1.request.provider_replaced'
+          : 'v1.request.provider_assigned',
+        metadata: { providerId: provider.id },
       });
-      await tx.requestActivity.create({
-        data: {
-          requestId: current.id,
-          kind: existing
-            ? RequestActivityKind.provider_replaced
-            : RequestActivityKind.provider_assigned,
-          actorId: userId,
-          actorName: actor.displayName,
-          text: existing
-            ? `${actor.displayName} replaced the assigned provider`
-            : `${actor.displayName} assigned a provider`,
-          ...(reason ? { note: reason } : {}),
-        },
-      });
-      return tx.serviceRequest.findFirstOrThrow({
-        where: { id: current.id },
-        include: requestInclude,
-      });
-    });
-    this.audit.record({
-      actorType: 'staff',
-      actorId: userId,
-      entityType: 'service_request',
-      entityId: current.id,
-      action: existing
-        ? 'v1.request.provider_replaced'
-        : 'v1.request.provider_assigned',
-      metadata: { providerId: provider.id },
-    });
-    return this.projectRequest(updated, actor);
+    return execution.value;
   }
 
   async messages(userId: string, ref: string, channel?: string) {
@@ -1062,7 +1242,8 @@ export class V1Service {
     userId: string,
     ref: string,
     dto: V1SendMessageDto,
-    _key: string,
+    key: string,
+    requestDetails: Request,
   ) {
     const actor = await this.actor(userId);
     const request = await this.findRequest(ref, actor);
@@ -1072,6 +1253,15 @@ export class V1Service {
       actor.kind === 'staff' && request.staffOwnerId === userId;
     if (!isCustomer && !this.isAdmin(actor) && !isAssignedStaff)
       fail(403, 'FORBIDDEN', 'You cannot send messages for this request.');
+    const replay = await this.replayCommand<string>(
+      userId,
+      key,
+      requestDetails,
+    );
+    if (replay)
+      return (await this.messages(userId, ref)).find(
+        (item) => item.id === replay,
+      );
     if (dto.channel !== 'customer')
       fail(
         403,
@@ -1083,94 +1273,109 @@ export class V1Service {
       fail(422, 'VALIDATION_ERROR', 'Write a message or attach a file.');
     if (dto.kind === 'counter' && !dto.counter)
       fail(422, 'VALIDATION_ERROR', 'Enter the offer.');
-    const message = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT id FROM "service_requests" WHERE id = ${request.id} FOR UPDATE`;
-      const current = await tx.serviceRequest.findFirst({
-        where: { id: request.id, workflowMode: RequestWorkflow.v1 },
-        select: { status: true },
-      });
-      if (!current)
-        throw new AppError(404, 'NOT_FOUND', "We couldn't find that request.");
-      if (dto.kind === 'counter' && current.status !== RequestStatus.submitted)
-        fail(
-          409,
-          'COUNTER_CLOSED',
-          'Offers are closed once a request is decided.',
-        );
-      const created = await tx.requestMessage.create({
-        data: {
-          requestId: request.id,
-          channel: 'customer',
-          authorId: userId,
-          authorRole: isCustomer
-            ? 'customer'
-            : this.isAdmin(actor)
-              ? 'admin'
-              : 'staff',
-          text: dto.kind === 'counter' ? '' : text,
-          kind: dto.kind === 'counter' ? MessageKind.counter : MessageKind.text,
-        },
-      });
-      if (dto.kind === 'counter' && dto.counter) {
-        const latest = await tx.requestCounterOffer.findFirst({
-          where: { requestId: request.id, supersededById: null },
-          orderBy: { createdAt: 'desc' },
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      requestDetails,
+      201,
+      async (tx) => {
+        await tx.$executeRaw`SELECT id FROM "service_requests" WHERE id = ${request.id} FOR UPDATE`;
+        const current = await tx.serviceRequest.findFirst({
+          where: { id: request.id, workflowMode: RequestWorkflow.v1 },
+          select: { status: true },
         });
-        if (isCustomer && (!latest || latest.authorRole === 'customer'))
+        if (!current)
+          throw new AppError(
+            404,
+            'NOT_FOUND',
+            "We couldn't find that request.",
+          );
+        if (
+          dto.kind === 'counter' &&
+          current.status !== RequestStatus.submitted
+        )
           fail(
             409,
-            'NO_OFFER_TO_COUNTER',
-            'There is no offer from Xpro to counter.',
+            'COUNTER_CLOSED',
+            'Offers are closed once a request is decided.',
           );
-        if (!isCustomer && latest && latest.authorRole !== 'customer')
-          fail(
-            409,
-            'NO_OFFER_TO_COUNTER',
-            'Wait for the customer to respond before sending another offer.',
-          );
-        const counterId = randomUUID();
-        if (latest)
-          await tx.requestCounterOffer.update({
-            where: { id: latest.id },
-            data: { supersededById: counterId, supersededAt: new Date() },
-          });
-        await tx.requestCounterOffer.create({
+        const created = await tx.requestMessage.create({
           data: {
-            id: counterId,
             requestId: request.id,
-            messageId: created.id,
-            authorRole: isCustomer ? 'customer' : created.authorRole,
-            amountKobo: BigInt(dto.counter.amountKobo),
-            proposedDate: dto.counter.date || null,
-            note: (dto.counter.note ?? '').trim(),
+            channel: 'customer',
+            authorId: userId,
+            authorRole: isCustomer
+              ? 'customer'
+              : this.isAdmin(actor)
+                ? 'admin'
+                : 'staff',
+            text: dto.kind === 'counter' ? '' : text,
+            kind:
+              dto.kind === 'counter' ? MessageKind.counter : MessageKind.text,
           },
         });
-      }
-      const uploadIds = dto.attachments.map((file) => file.id);
-      await this.uploads.attach(
-        tx,
-        uploadIds,
-        userId,
-        UploadPurpose.message_attachment,
-        'message',
-        created.id,
-      );
-      return created;
-    });
-    this.audit.record({
-      actorType: isCustomer ? 'customer' : 'staff',
-      actorId: userId,
-      entityType: 'request_message',
-      entityId: message.id,
-      action: 'v1.message.sent',
-      metadata: {
-        requestId: request.id,
-        kind: dto.kind,
-        attachmentCount: dto.attachments.length,
+        if (dto.kind === 'counter' && dto.counter) {
+          const latest = await tx.requestCounterOffer.findFirst({
+            where: { requestId: request.id, supersededById: null },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (isCustomer && (!latest || latest.authorRole === 'customer'))
+            fail(
+              409,
+              'NO_OFFER_TO_COUNTER',
+              'There is no offer from Xpro to counter.',
+            );
+          if (!isCustomer && latest && latest.authorRole !== 'customer')
+            fail(
+              409,
+              'NO_OFFER_TO_COUNTER',
+              'Wait for the customer to respond before sending another offer.',
+            );
+          const counterId = randomUUID();
+          if (latest)
+            await tx.requestCounterOffer.update({
+              where: { id: latest.id },
+              data: { supersededById: counterId, supersededAt: new Date() },
+            });
+          await tx.requestCounterOffer.create({
+            data: {
+              id: counterId,
+              requestId: request.id,
+              messageId: created.id,
+              authorRole: isCustomer ? 'customer' : created.authorRole,
+              amountKobo: BigInt(dto.counter.amountKobo),
+              proposedDate: dto.counter.date || null,
+              note: (dto.counter.note ?? '').trim(),
+            },
+          });
+        }
+        const uploadIds = dto.attachments.map((file) => file.id);
+        await this.uploads.attach(
+          tx,
+          uploadIds,
+          userId,
+          UploadPurpose.message_attachment,
+          'message',
+          created.id,
+        );
+        return created.id;
       },
-    });
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: isCustomer ? 'customer' : 'staff',
+        actorId: userId,
+        entityType: 'request_message',
+        entityId: execution.value,
+        action: 'v1.message.sent',
+        metadata: {
+          requestId: request.id,
+          kind: dto.kind,
+          attachmentCount: dto.attachments.length,
+        },
+      });
     return (await this.messages(userId, ref)).find(
-      (item) => item.id === message.id,
+      (item) => item.id === execution.value,
     );
   }
 

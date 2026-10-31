@@ -8,19 +8,19 @@ import {
   Post,
   Put,
   Query,
+  Req,
   Res,
   UseGuards,
   ValidationPipe,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import type { RequestUser } from '../common/types/request-user';
 import { IfMatch } from '../platform/concurrency/if-match.decorator';
 import { formatEtag } from '../platform/concurrency/etag.util';
 import { IdempotencyKey } from '../platform/idempotency/idempotency-key.decorator';
-import { Idempotent } from '../platform/idempotency/idempotency.interceptor';
 import {
   V1ApproveDto,
   V1AssignStaffDto,
@@ -67,7 +67,6 @@ export class V1Controller {
 
   @Post('requests')
   @HttpCode(HttpStatus.CREATED)
-  @Idempotent({ required: true })
   async createRequest(
     @CurrentUser() user: RequestUser,
     @Body(
@@ -79,11 +78,12 @@ export class V1Controller {
     )
     dto: V1CreateRequestDto,
     @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const request = await this.v1.createRequest(user.id, dto, key);
-    response.setHeader('ETag', formatEtag(request.version));
-    return request;
+    const result = await this.v1.createRequest(user.id, dto, key, request);
+    response.setHeader('ETag', formatEtag(result.version));
+    return result;
   }
 
   @Get('requests/:id')
@@ -99,7 +99,6 @@ export class V1Controller {
 
   @Post('requests/:id/reassign')
   @HttpCode(HttpStatus.OK)
-  @Idempotent({ required: true })
   async assignStaff(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -113,16 +112,23 @@ export class V1Controller {
     dto: V1AssignStaffDto,
     @IfMatch({ required: true }) version: number,
     @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const request = await this.v1.assignStaff(user.id, id, dto, version, key);
-    response.setHeader('ETag', formatEtag(request.version));
-    return request;
+    const result = await this.v1.assignStaff(
+      user.id,
+      id,
+      dto,
+      version,
+      key,
+      request,
+    );
+    response.setHeader('ETag', formatEtag(result.version));
+    return result;
   }
 
   @Post('requests/:id/approve')
   @HttpCode(HttpStatus.OK)
-  @Idempotent({ required: true })
   async approve(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -136,16 +142,23 @@ export class V1Controller {
     dto: V1ApproveDto,
     @IfMatch({ required: true }) version: number,
     @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const request = await this.v1.approve(user.id, id, dto, version, key);
-    response.setHeader('ETag', formatEtag(request.version));
-    return request;
+    const result = await this.v1.approve(
+      user.id,
+      id,
+      dto,
+      version,
+      key,
+      request,
+    );
+    response.setHeader('ETag', formatEtag(result.version));
+    return result;
   }
 
   @Post('requests/:id/deny')
   @HttpCode(HttpStatus.OK)
-  @Idempotent({ required: true })
   async deny(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -159,26 +172,27 @@ export class V1Controller {
     dto: V1DenyDto,
     @IfMatch({ required: true }) version: number,
     @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const request = await this.v1.deny(user.id, id, dto, version, key);
-    response.setHeader('ETag', formatEtag(request.version));
-    return request;
+    const result = await this.v1.deny(user.id, id, dto, version, key, request);
+    response.setHeader('ETag', formatEtag(result.version));
+    return result;
   }
 
   @Post('requests/:id/cancel')
   @HttpCode(HttpStatus.OK)
-  @Idempotent({ required: true })
   async cancel(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
     @IfMatch({ required: true }) version: number,
     @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const request = await this.v1.cancel(user.id, id, version, key);
-    response.setHeader('ETag', formatEtag(request.version));
-    return request;
+    const result = await this.v1.cancel(user.id, id, version, key, request);
+    response.setHeader('ETag', formatEtag(result.version));
+    return result;
   }
 
   @Get('requests/:id/provider-candidates')
@@ -191,7 +205,6 @@ export class V1Controller {
 
   @Put('requests/:id/provider-assignment')
   @HttpCode(HttpStatus.OK)
-  @Idempotent({ required: true })
   async replaceProvider(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -205,17 +218,19 @@ export class V1Controller {
     dto: V1ReplaceProviderDto,
     @IfMatch({ required: true }) version: number,
     @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    const request = await this.v1.replaceProvider(
+    const result = await this.v1.replaceProvider(
       user.id,
       id,
       dto,
       version,
       key,
+      request,
     );
-    response.setHeader('ETag', formatEtag(request.version));
-    return request;
+    response.setHeader('ETag', formatEtag(result.version));
+    return result;
   }
 
   @Get('requests/:id/messages')
@@ -229,7 +244,6 @@ export class V1Controller {
 
   @Post('requests/:id/messages')
   @HttpCode(HttpStatus.CREATED)
-  @Idempotent({ required: true })
   sendMessage(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -242,8 +256,9 @@ export class V1Controller {
     )
     dto: V1SendMessageDto,
     @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
   ) {
-    return this.v1.sendMessage(user.id, id, dto, key);
+    return this.v1.sendMessage(user.id, id, dto, key, request);
   }
 
   @Get('admin/conversations')

@@ -38,7 +38,9 @@ const PAYMENT_GATEWAYS = ['paystack', 'test'] as const;
 export function validateEnv(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
-  const requestFlow = String(config['REQUEST_FLOW'] ?? 'v1')
+  const requestFlow = String(
+    typeof config['REQUEST_FLOW'] === 'string' ? config['REQUEST_FLOW'] : 'v1',
+  )
     .trim()
     .toLowerCase();
   if (!['v1', 'phase2'].includes(requestFlow)) {
