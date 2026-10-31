@@ -6,6 +6,7 @@ import {
   permissionsForRoles,
 } from '../../staff/staff-permissions';
 import { AppError } from '../errors/app-error';
+import { activeWorkspaceRole } from './active-role';
 import type { ActorContext, ActorKind, ActorStaff } from './actor.types';
 
 @Injectable()
@@ -22,6 +23,7 @@ export class ActorService {
         lastName: true,
         name: true,
         email: true,
+        lastActiveRole: true,
         platformRoles: { select: { role: true } },
         staffMember: {
           select: {
@@ -58,9 +60,7 @@ export class ActorService {
 
     const kind: ActorKind = staff
       ? 'staff'
-      : platformRoles.includes('provider')
-        ? 'provider'
-        : 'customer';
+      : (activeWorkspaceRole(platformRoles, user.lastActiveRole) ?? 'customer');
     const fullName = [user.firstName, user.lastName]
       .filter(Boolean)
       .join(' ')
