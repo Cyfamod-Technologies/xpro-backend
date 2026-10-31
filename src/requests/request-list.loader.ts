@@ -26,6 +26,9 @@ export const LIST_ROW_SELECT = {
   reportApprovedAt: true,
   createdAt: true,
   updatedAt: true,
+  groupId: true,
+  groupPosition: true,
+  group: { select: { ref: true } },
 } satisfies Prisma.ServiceRequestSelect;
 
 export type ListRow = Prisma.ServiceRequestGetPayload<{

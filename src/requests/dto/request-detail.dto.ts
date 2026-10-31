@@ -37,6 +37,19 @@ export interface RequestNoShowView {
   note: string;
   createdAt: Date;
 }
+export interface RequestGroupSummary {
+  id: string;
+  ref: string;
+  title: string;
+}
+export interface RequestSiblingView {
+  /** The sibling's `XPR-nnnnn` id. */
+  id: string;
+  title: string;
+  serviceName: string;
+  status: RequestStatus;
+  stage: RequestStage;
+}
 export interface RequestDetailDto {
   id: string;
   version: number;
@@ -71,6 +84,17 @@ export interface RequestDetailDto {
   customerName?: string;
   ownerId?: string;
   staffOwnerId?: string | null;
+  /** Staff only (04 §11.2): the owner's limit override, the limit in force and the requests counted against it. */
+  customerRequestLimit?: {
+    userId: string;
+    override: number | null;
+    effective: number;
+    open: number;
+  };
+  /** Customer and staff only, on `GET /requests/:id` (04 §4.1a). `null` for a request created alone. */
+  group?: RequestGroupSummary | null;
+  /** Customer and staff only: the other requests of the same group in `groupPosition` order, `[]` when ungrouped. */
+  siblings?: RequestSiblingView[];
   claimedAt?: Date | null;
   unclaimedSince?: Date | null;
   ownershipVersion?: number;

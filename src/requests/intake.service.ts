@@ -17,7 +17,8 @@ import { AppError } from '../platform/errors/app-error';
 import { IdempotencyService } from '../platform/idempotency/idempotency.service';
 import { UploadsService } from '../uploads/uploads.service';
 import { TimerKinds } from '../platform/timers/timer-kinds';
-import { RequestCommandRunner } from './command-runner';
+import { RequestCommandRunner, type CommandContext } from './command-runner';
+import { enforceOpenRequestLimit } from './open-request-limit';
 import { clarificationDueTimes } from './domain/clarification-timers';
 import {
   normalizeNigerianPhone,
@@ -103,77 +104,126 @@ export class IntakeService {
         });
         const resolved = resolveServiceInput(await loadCatalog(tx), dto);
         const valid = validateIntake(dto, resolved, locations, now);
-        const possible = await findPossibleDuplicate(tx, user.id, valid, now);
-        if (possible) {
-          duplicateRef = formatRequestNumber(possible.number);
-          warning = `You already have a similar open request (${formatRequestNumber(possible.number)}). XPro will check it isn't a duplicate.`;
-        }
-        const row = await tx.serviceRequest.create({
-          data: {
-            ownerId: user.id,
-            customerName: actor.displayName,
-            title: valid.title,
-            service: valid.service,
-            serviceId: valid.serviceId,
-            serviceRootId: valid.serviceRootId,
-            servicePath: valid.servicePath,
-            answers: valid.answers,
-            cityId: valid.cityId,
-            districtId: valid.districtId,
-            address: valid.address,
-            phone: valid.phone,
-            contactMethod: valid.contactMethod,
-            description: valid.description,
-            budget: BigInt(valid.budget),
-            startDate: valid.startDate,
-            details: valid.details,
-            status: 'submitted',
-            intakeState: 'pending',
-            version: 1,
-            contactInBrief: valid.contactInBrief,
-            possibleDuplicateOf: possible?.id,
-            dispatchMode: modeForService(settings, valid.service),
-            autoAttempts: 0,
-            unclaimedSince: now,
-          },
-        });
-        const uploaded = await this.attachUploads(
+        await enforceOpenRequestLimit(tx, user.id, settings, 1);
+        const inserted = await this.insertValidated(
           tx,
-          valid.attachmentIds,
-          user.id,
-          row.id,
+          { userId: user.id, displayName: actor.displayName, now, settings },
+          valid,
         );
-        if (uploaded.length)
-          await tx.requestAttachment.createMany({
-            data: uploaded.map(({ id }) => ({
-              requestId: row.id,
-              uploadId: id,
-              sharedWithProvider: false,
-            })),
-          });
-
-        return row.id;
+        warning = inserted.warning;
+        duplicateRef = inserted.duplicateRef;
+        return inserted.id;
       },
-      (context) => {
-        context.audit('Request submitted', {
-          flags: warning ? ['possible_duplicate'] : [],
-          changes: duplicateRef
-            ? { possibleDuplicateOf: duplicateRef }
-            : undefined,
-        });
-        const requestCode = context.snap.number;
-        context.notify('request.received', { requestCode });
-        context.notify('request.submitted', { requestCode });
-        // 02 §6.11: the intake review and the unclaimed deadline both start at submission.
-        context.approvals.open('intake', context.snap.id);
-        context.approvals.open('unclaimed', context.snap.id);
-        return Promise.resolve({
-          status: 201,
-          ...(warning ? { warning } : {}),
-        });
-      },
+      (context) =>
+        Promise.resolve(this.recordCreated(context, { warning, duplicateRef })),
     );
     return result;
+  }
+
+  /**
+   * The duplicate check, the row and its attachments for one validated
+   * request. `create` and the multi-service submission both call it, once per
+   * request. `group.siblingIds` are the requests already created by the same
+   * submission, which are never duplicates of each other (04 §6.2).
+   */
+  async insertValidated(
+    tx: Prisma.TransactionClient,
+    owner: {
+      userId: string;
+      displayName: string;
+      now: Date;
+      settings: Readonly<Record<string, unknown>>;
+    },
+    valid: ValidatedIntake,
+    group?: { id: string; position: number; siblingIds: readonly string[] },
+  ): Promise<{ id: string; warning?: string; duplicateRef?: string }> {
+    const { userId, displayName, now, settings } = owner;
+    const possible = await findPossibleDuplicate(
+      tx,
+      userId,
+      valid,
+      now,
+      group?.siblingIds,
+    );
+    const row = await tx.serviceRequest.create({
+      data: {
+        ownerId: userId,
+        customerName: displayName,
+        title: valid.title,
+        service: valid.service,
+        serviceId: valid.serviceId,
+        serviceRootId: valid.serviceRootId,
+        servicePath: valid.servicePath,
+        answers: valid.answers,
+        cityId: valid.cityId,
+        districtId: valid.districtId,
+        address: valid.address,
+        phone: valid.phone,
+        contactMethod: valid.contactMethod,
+        description: valid.description,
+        budget: BigInt(valid.budget),
+        startDate: valid.startDate,
+        details: valid.details,
+        status: 'submitted',
+        intakeState: 'pending',
+        version: 1,
+        contactInBrief: valid.contactInBrief,
+        possibleDuplicateOf: possible?.id,
+        dispatchMode: modeForService(settings, valid.service),
+        autoAttempts: 0,
+        unclaimedSince: now,
+        ...(group ? { groupId: group.id, groupPosition: group.position } : {}),
+      },
+    });
+    const uploaded = await this.attachUploads(
+      tx,
+      valid.attachmentIds,
+      userId,
+      row.id,
+    );
+    if (uploaded.length)
+      await tx.requestAttachment.createMany({
+        data: uploaded.map(({ id }) => ({
+          requestId: row.id,
+          uploadId: id,
+          sharedWithProvider: false,
+        })),
+      });
+    return {
+      id: row.id,
+      ...(possible
+        ? {
+            duplicateRef: formatRequestNumber(possible.number),
+            warning: `You already have a similar open request (${formatRequestNumber(possible.number)}). XPro will check it isn't a duplicate.`,
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * Audit, notices and approval deadlines for a request just created. A request
+   * created in a multi-service submission passes its `groupId`: its audit row
+   * carries it and the customer's per-request receipt is left out, because the
+   * submission sends one receipt for all of them (04 §6.2).
+   */
+  recordCreated(
+    context: CommandContext,
+    created: { warning?: string; duplicateRef?: string },
+    groupId?: string,
+  ): { status: number; warning?: string } {
+    const { warning, duplicateRef } = created;
+    context.audit('Request submitted', {
+      flags: warning ? ['possible_duplicate'] : [],
+      changes: duplicateRef ? { possibleDuplicateOf: duplicateRef } : undefined,
+      ...(groupId ? { groupId } : {}),
+    });
+    const requestCode = context.snap.number;
+    if (!groupId) context.notify('request.received', { requestCode });
+    context.notify('request.submitted', { requestCode });
+    // 02 §6.11: the intake review and the unclaimed deadline both start at submission.
+    context.approvals.open('intake', context.snap.id);
+    context.approvals.open('unclaimed', context.snap.id);
+    return { status: 201, ...(warning ? { warning } : {}) };
   }
 
   async update(
@@ -807,7 +857,7 @@ export class IntakeService {
     );
   }
 
-  private requireActiveCustomer(actor: ActorContext) {
+  requireActiveCustomer(actor: ActorContext) {
     requireCustomer(actor);
     if (!actor.accountActive)
       throw new AppError(
@@ -899,6 +949,7 @@ async function findPossibleDuplicate(
   ownerId: string,
   intake: ValidatedIntake,
   now: Date,
+  excludeIds: readonly string[] = [],
 ) {
   const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const candidates = await tx.serviceRequest.findMany({
@@ -908,6 +959,7 @@ async function findPossibleDuplicate(
       districtId: intake.districtId,
       status: { in: OPEN_STATUSES },
       createdAt: { gte: since },
+      ...(excludeIds.length ? { id: { notIn: [...excludeIds] } } : {}),
     },
     select: { id: true, number: true, title: true },
     orderBy: { createdAt: 'desc' },

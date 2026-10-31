@@ -20,6 +20,22 @@ describe('notification catalogue', () => {
     });
   });
 
+  it('renders the single customer receipt for a multi-service submission', () => {
+    expect(
+      renderNotification('request.group_received', {
+        count: 3,
+        projectTitle: 'Office fit-out',
+      }),
+    ).toEqual({
+      event: 'request.group_received',
+      audience: { kind: 'customer' },
+      mandatory: true,
+      title: 'Request received',
+      message: 'We received 3 requests for Office fit-out.',
+      link: '/requests',
+    });
+  });
+
   it('renders a staff event that is not mandatory', () => {
     const rendered = renderNotification('request.needs_owner', {
       requestCode: 'XPR-00042',

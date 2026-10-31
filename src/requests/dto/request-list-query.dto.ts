@@ -96,6 +96,17 @@ export class RequestListQueryDto {
   @IsOptional()
   @IsUUID()
   serviceRootId?: string;
+  @ApiPropertyOptional({
+    description:
+      "Only the requests of one multi-service submission: a group id or `XPG-nnnnn`. Narrows the caller's own scope; an unknown group returns an empty page. Ignored for providers.",
+    example: 'XPG-00012',
+  })
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim() : (value as unknown),
+  )
+  group?: string;
   @ApiPropertyOptional({ description: 'Search by request id or title' })
   @IsOptional()
   @IsString()

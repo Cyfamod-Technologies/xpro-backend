@@ -7,6 +7,7 @@ export const ERROR_CODES = [
   'IDEMPOTENCY_KEY_REUSED',
   'RATE_LIMITED',
   'PAYMENT_IN_PROGRESS',
+  'OPEN_REQUEST_LIMIT',
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];

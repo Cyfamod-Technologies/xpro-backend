@@ -22,11 +22,14 @@ import { REQUEST_GUARDS } from './domain/request-guard-registry';
 import type { RequestSnapshot } from './domain/snapshot';
 import { toActorView } from './actor-view';
 import { ApprovalsHooks } from './approvals.hooks';
+import { claimGroupSiblings } from './sibling-claim';
 
 type AuditInput = {
   note?: string;
   changes?: unknown;
   flags?: string[];
+  /** Set on `Request submitted` for a request created in a multi-service submission (04 §6.2). */
+  groupId?: string;
   resourceType?: string;
   resourceId?: string;
 };
@@ -113,6 +116,24 @@ export type CommandContext = {
   enqueueCascade(trigger: DispatchTrigger): void;
 };
 
+/** One request created inside a caller's transaction; `warning` stays out of `body` so a bundle can list it separately. */
+export type CreatedRequest = {
+  status: number;
+  id: string;
+  body: RequestDetailDto;
+  warning?: string;
+};
+
+/** Creates one request on the bundle's transaction with the same steps and effects as `create()`. */
+export type CreateChild = (
+  createRow: (
+    tx: Prisma.TransactionClient,
+    now: Date,
+    settings: Readonly<Record<string, unknown>>,
+  ) => Promise<string>,
+  fn: (context: CommandContext) => Promise<CommandResult>,
+) => Promise<CreatedRequest>;
+
 @Injectable()
 export class RequestCommandRunner {
   constructor(
@@ -190,43 +211,17 @@ export class RequestCommandRunner {
               body: replay.body as RequestDetailDto & { warning?: string },
             },
           };
-        const id = await createRow(tx, now, settings);
-        const loaded = await this.loader.load(tx, id, { forUpdate: true });
-        if (!loaded) throw opaqueNotFound();
-        const context = this.buildContext(
+        const created = await this.createInTx(
           tx,
-          loaded.snapshot,
           actor,
           now,
           settings,
           buffer,
+          createRow,
+          fn,
         );
-        const result = await fn(context);
-        await this.flushEffects(
-          tx,
-          {
-            requestId: loaded.row.id,
-            ownerId: loaded.row.ownerId,
-            staffOwnerId: loaded.row.staffOwnerId,
-            actor,
-            command: 'request.create',
-            now,
-          },
-          buffer,
-        );
-        await this.startCascade(tx, loaded.row.id, buffer, now);
-        const freshInTransaction = await this.loader.load(tx, loaded.row.id);
-        if (!freshInTransaction) throw opaqueNotFound();
-        const body = this.project(
-          freshInTransaction.row,
-          freshInTransaction.snapshot,
-          actor,
-          'customer',
-          now,
-          settings,
-        );
-        if (result?.warning) body.warning = result.warning;
-        const status = result?.status ?? 201;
+        if (created.warning) created.body.warning = created.warning;
+        const { status, body } = created;
         await this.idempotency.store(
           actor.userId!,
           idempotencyKey,
@@ -237,9 +232,9 @@ export class RequestCommandRunner {
         );
         return {
           status,
-          id: loaded.row.id,
+          id: created.id,
           role: 'customer' as const,
-          warning: result?.warning,
+          warning: created.warning,
           body,
         };
       },
@@ -263,6 +258,145 @@ export class RequestCommandRunner {
       body: outcome.body,
       etag: formatEtag(outcome.body.version),
       ...(outcome.warning ? { warning: outcome.warning } : {}),
+    };
+  }
+
+  /**
+   * Creates several requests in one transaction under one idempotency key
+   * (04 §6.2, `POST /request-groups`). `build` receives `createChild`, which
+   * runs the same steps as `create()` for one request and keeps each request's
+   * effects in its own buffer. Anything thrown rolls back every request. The
+   * body `build` returns is stored for replay, so it must be plain JSON.
+   */
+  async createBundle<T extends object>(
+    options: {
+      actor: ActorContext;
+      idempotencyKey: string;
+      idempotencyHash: string;
+    },
+    build: (
+      tx: Prisma.TransactionClient,
+      now: Date,
+      settings: Readonly<Record<string, unknown>>,
+      createChild: CreateChild,
+    ) => Promise<T>,
+  ): Promise<{ status: number; body: T }> {
+    const { actor, idempotencyKey, idempotencyHash } = options;
+    if (!actor.userId)
+      throw new Error('Request creation requires an authenticated actor.');
+    const existing = await this.idempotency.lookup(
+      actor.userId,
+      idempotencyKey,
+      idempotencyHash,
+    );
+    if (existing) return { status: existing.status, body: existing.body as T };
+
+    const now = new Date();
+    const settings = await this.settingsMap();
+    let dueNowTimer = false;
+    let notified = false;
+
+    const outcome = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${actor.userId}:${idempotencyKey}`}, 0))`,
+        );
+        const replay = await this.idempotency.lookup(
+          actor.userId!,
+          idempotencyKey,
+          idempotencyHash,
+          tx,
+        );
+        if (replay)
+          return { replay: { status: replay.status, body: replay.body as T } };
+        const createChild: CreateChild = async (createRow, fn) => {
+          const buffer = newBuffer();
+          const created = await this.createInTx(
+            tx,
+            actor,
+            now,
+            settings,
+            buffer,
+            createRow,
+            fn,
+          );
+          dueNowTimer ||= buffer.dueNowTimer;
+          notified ||= buffer.notifications.length > 0;
+          return created;
+        };
+        const body = await build(tx, now, settings, createChild);
+        await this.idempotency.store(
+          actor.userId!,
+          idempotencyKey,
+          idempotencyHash,
+          201,
+          body,
+          tx,
+        );
+        return { status: 201, body };
+      },
+      { timeout: 15_000 },
+    );
+
+    if (outcome.replay) return outcome.replay;
+    if (dueNowTimer) await this.timersService.kick();
+    if (notified) await this.outboxService.kick();
+    return { status: outcome.status, body: outcome.body };
+  }
+
+  private async createInTx(
+    tx: Prisma.TransactionClient,
+    actor: ActorContext,
+    now: Date,
+    settings: Readonly<Record<string, unknown>>,
+    buffer: EffectBuffer,
+    createRow: (
+      tx: Prisma.TransactionClient,
+      now: Date,
+      settings: Readonly<Record<string, unknown>>,
+    ) => Promise<string>,
+    fn: (context: CommandContext) => Promise<CommandResult>,
+  ): Promise<CreatedRequest> {
+    const id = await createRow(tx, now, settings);
+    const loaded = await this.loader.load(tx, id, { forUpdate: true });
+    if (!loaded) throw opaqueNotFound();
+    const context = this.buildContext(
+      tx,
+      loaded.snapshot,
+      actor,
+      now,
+      settings,
+      buffer,
+    );
+    const result = await fn(context);
+    await this.flushEffects(
+      tx,
+      {
+        requestId: loaded.row.id,
+        ownerId: loaded.row.ownerId,
+        staffOwnerId: loaded.row.staffOwnerId,
+        actor,
+        command: 'request.create',
+        now,
+      },
+      buffer,
+    );
+    await this.startCascade(tx, loaded.row.id, buffer, now);
+    const freshInTransaction = await this.loader.load(tx, loaded.row.id);
+    if (!freshInTransaction) throw opaqueNotFound();
+    const body = this.project(
+      freshInTransaction.row,
+      freshInTransaction.snapshot,
+      actor,
+      'customer',
+      now,
+      settings,
+    );
+    return {
+      status: result?.status ?? 201,
+      id: loaded.row.id,
+      body,
+      ...(result?.warning ? { warning: result.warning } : {}),
     };
   }
 
@@ -702,6 +836,8 @@ export class RequestCommandRunner {
     tx: Prisma.TransactionClient,
     row: {
       id: string;
+      number: number;
+      groupId: string | null;
       status: string;
       staffOwnerId: string | null;
       ownershipVersion: number;
@@ -760,6 +896,16 @@ export class RequestCommandRunner {
         },
       },
     });
+    if (row.groupId)
+      await claimGroupSiblings(tx, this.approvalsHooks, {
+        groupId: row.groupId,
+        trigger: { id: row.id, number: row.number },
+        staffId: actor.userId,
+        actorType: actor.kind,
+        now,
+        action: 'request.auto_claimed',
+        command,
+      });
   }
 
   private async flushEffects(

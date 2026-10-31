@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OutboxModule } from '../platform/outbox/outbox.module';
 import { PlatformModule } from '../platform/platform.module';
@@ -8,9 +9,14 @@ import { UploadsModule } from '../uploads/uploads.module';
 import { RequestEventsModule } from './events/request-events.module';
 import { RequestFileAccess } from './request-file-access';
 import { RequestsController } from './requests.controller';
+import { PublicRequestConfigController } from './public-request-config.controller';
 import { RequestsReadService } from './requests-read.service';
 import { RequestListLoader } from './request-list.loader';
 import { IntakeService } from './intake.service';
+import { RequestGroupsController } from './request-groups.controller';
+import { RequestGroupsService } from './request-groups.service';
+import { CustomerRequestLimitController } from './customer-request-limit.controller';
+import { CustomerRequestLimitService } from './customer-request-limit.service';
 import { T6TimerHandlers } from './t6-timer-handlers';
 import { OwnershipService } from './ownership.service';
 import { MessagesService } from './messages.service';
@@ -52,6 +58,7 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
   imports: [
     PlatformModule,
     SettingsModule,
+    AuditLogsModule,
     NotificationsModule,
     TimersModule,
     OutboxModule,
@@ -62,6 +69,9 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
   ],
   controllers: [
     RequestsController,
+    PublicRequestConfigController,
+    RequestGroupsController,
+    CustomerRequestLimitController,
     ConversationsController,
     DispatchController,
     PricingController,
@@ -78,6 +88,8 @@ import { ExecutionTimerHandlers } from './execution/execution-timer-handlers';
     RequestListLoader,
     RequestsReadService,
     IntakeService,
+    RequestGroupsService,
+    CustomerRequestLimitService,
     OwnershipService,
     MessagesService,
     ConversationsService,

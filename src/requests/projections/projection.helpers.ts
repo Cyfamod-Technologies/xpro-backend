@@ -11,6 +11,8 @@ import {
 } from '../domain/stage';
 import type { RequestSnapshot } from '../domain/snapshot';
 import type { LoadedRequest } from '../snapshot.loader';
+import type { CustomerRequestLimit } from '../open-request-limit';
+import type { RequestGroupView } from '../request-group-view';
 import type { RequestDetailDto, RequestRole } from '../dto/request-detail.dto';
 import type { SettingsSnapshot } from '../domain/guards/types';
 import { REQUEST_GUARDS } from '../domain/request-guard-registry';
@@ -23,6 +25,10 @@ export type ProjectionContext = {
   role: RequestRole;
   now: Date;
   settings: SettingsSnapshot;
+  /** Staff detail only (04 §11.2): the request owner's open-request allowance. */
+  customerRequestLimit?: CustomerRequestLimit;
+  /** Customer and staff detail only (04 §4.1a). Left out, the projection adds neither `group` nor `siblings`. */
+  groupView?: RequestGroupView;
 };
 
 export function scheduleProjection(
@@ -144,6 +150,14 @@ export function commonProjection(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+export function groupProjection(
+  context: ProjectionContext,
+): Pick<RequestDetailDto, 'group' | 'siblings'> {
+  return context.groupView
+    ? { group: context.groupView.group, siblings: context.groupView.siblings }
+    : {};
 }
 
 export function jsonObject(value: unknown): Record<string, unknown> {

@@ -185,6 +185,16 @@ export const SETTINGS_REGISTRY = {
     'Maximum assignment attempts',
     integerRange(1, 10, UNSPECIFIED_SETTING_MESSAGE),
   ),
+  'request.maxServicesPerSubmission': operational(
+    5,
+    'Maximum services per submission',
+    integerRange(1, 10, UNSPECIFIED_SETTING_MESSAGE),
+  ),
+  'request.maxOpenPerCustomer': operational(
+    3,
+    'Maximum open requests per customer',
+    integerRange(1, 20, UNSPECIFIED_SETTING_MESSAGE),
+  ),
   'assignment.weights': operational(
     { area: 25, capacity: 20, fairness: 15, experience: 5, reliability: 0 },
     'Assignment weights',

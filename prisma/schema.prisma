@@ -195,6 +195,7 @@ model User {
   deletionRequestedAt     DateTime?     @map("deletion_requested_at")
   deletionScheduledFor    DateTime?     @map("deletion_scheduled_for")
   deletedAt               DateTime?     @map("deleted_at")
+  openRequestLimit        Int?          @map("open_request_limit")
   createdAt               DateTime      @default(now()) @map("created_at")
   updatedAt               DateTime      @updatedAt @map("updated_at")
 
@@ -209,6 +210,7 @@ model User {
   providerProfile ProviderProfile?
   providerUploads ProviderUpload[]
   phoneVerifications PhoneVerification[]
+  requestGroups RequestGroup[]
 
   @@map("users")
 }
@@ -1125,6 +1127,8 @@ model ServiceRequest {
   version               Int                     @default(1)
   contactInBrief        Boolean                 @default(false) @map("contact_in_brief")
   possibleDuplicateOf   String?                 @map("possible_duplicate_of")
+  groupId               String?                 @map("group_id")
+  groupPosition         Int?                    @map("group_position")
   intakeState           IntakeState             @default(pending) @map("intake_state")
   clarificationAskedAt  DateTime?               @map("clarification_asked_at")
   clarificationCount    Int                     @default(0) @map("clarification_count")
@@ -1160,6 +1164,7 @@ model ServiceRequest {
 
   catalogService CatalogService? @relation("RequestService", fields: [serviceId], references: [id], onDelete: Restrict)
   catalogRoot    CatalogService? @relation("RequestServiceRoot", fields: [serviceRootId], references: [id], onDelete: Restrict)
+  group         RequestGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
   attachments   RequestAttachment[]
   edits         RequestEdit[]
   runs          DispatchRun[]
@@ -1181,7 +1186,21 @@ model ServiceRequest {
   @@index([staffOwnerId, status])
   @@index([service, districtId, createdAt])
   @@index([serviceRootId])
+  @@index([groupId])
   @@map("service_requests")
+}
+
+model RequestGroup {
+  id        String   @id @default(uuid())
+  ref       String   @unique
+  ownerId   String   @map("owner_id")
+  title     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  owner    User             @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  requests ServiceRequest[]
+
+  @@map("request_groups")
 }
 
 model RequestAttachment {

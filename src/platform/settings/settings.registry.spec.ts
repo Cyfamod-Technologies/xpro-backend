@@ -18,6 +18,30 @@ describe('settings registry', () => {
     expect(definition.validate(false)).toBeNull();
     expect(definition.validate('false')).toBeTruthy();
   });
+  it('limits services per submission to a whole number from 1 to 10, default 5', () => {
+    const definition = getSettingDefinition(
+      'request.maxServicesPerSubmission',
+    )!;
+    expect(definition.defaultValue).toBe(5);
+    expect(definition.riskClass).toBe('operational');
+    expect(definition.label).toBe('Maximum services per submission');
+    expect(definition.validate(1)).toBeNull();
+    expect(definition.validate(10)).toBeNull();
+    expect(definition.validate(2.5)).toBeTruthy();
+    expect(definition.validate('5')).toBeTruthy();
+  });
+  it('limits open requests per customer to a whole number from 1 to 20, default 3', () => {
+    const definition = getSettingDefinition('request.maxOpenPerCustomer')!;
+    expect(definition.defaultValue).toBe(3);
+    expect(definition.riskClass).toBe('operational');
+    expect(definition.label).toBe('Maximum open requests per customer');
+    expect(definition.validate(1)).toBeNull();
+    expect(definition.validate(20)).toBeNull();
+    expect(definition.validate(0)).toBeTruthy();
+    expect(definition.validate(21)).toBeTruthy();
+    expect(definition.validate(2.5)).toBeTruthy();
+    expect(definition.validate('3')).toBeTruthy();
+  });
   it('has a valid default for every registered setting', () => {
     for (const [key, definition] of Object.entries(SETTINGS_REGISTRY)) {
       if (key !== 'payment.offlineInstructions')
@@ -33,6 +57,10 @@ describe('settings registry', () => {
       ['assignment.offerExpiryHours', 0],
       ['assignment.offerMinWorkingHours', 25],
       ['assignment.maxAutoAttempts', 11],
+      ['request.maxServicesPerSubmission', 0],
+      ['request.maxServicesPerSubmission', 11],
+      ['request.maxOpenPerCustomer', 0],
+      ['request.maxOpenPerCustomer', 21],
       ['assignment.rankingRunMaxAgeMinutes', 4],
       ['quote.validityDays', 61],
       ['payment.dueDays', 0],

@@ -4,6 +4,7 @@ import {
   cancellationProjection,
   completionProjection,
   effectiveDates,
+  groupProjection,
   issueProjection,
   jsonObject,
   noShowProjection,
@@ -64,7 +65,11 @@ export function staffProjection(context: ProjectionContext): RequestDetailDto {
       : answers.filter(({ sensitive }) => !sensitive),
     customerName: row.customerName,
     ownerId: row.ownerId,
+    ...groupProjection(context),
     staffOwnerId: row.staffOwnerId,
+    ...(context.customerRequestLimit
+      ? { customerRequestLimit: context.customerRequestLimit }
+      : {}),
     claimedAt: row.claimedAt,
     unclaimedSince: row.unclaimedSince,
     ownershipVersion: row.ownershipVersion,

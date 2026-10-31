@@ -7,7 +7,8 @@ import type { ErrorCode } from './error-codes';
  *
  * Status mapping (spec 06 §11.1): 422 VALIDATION_ERROR and IDEMPOTENCY_KEY_REUSED,
  * 409 STATE_CONFLICT, VERSION_CONFLICT and PAYMENT_IN_PROGRESS, 403 FORBIDDEN,
- * 404 NOT_FOUND, 429 RATE_LIMITED. Every 409 should carry `details.current`.
+ * 404 NOT_FOUND, 429 RATE_LIMITED. 422 also carries OPEN_REQUEST_LIMIT (04 §6.2).
+ * Every 409 should carry `details.current`.
  */
 export class AppError extends HttpException {
   readonly code: ErrorCode;
