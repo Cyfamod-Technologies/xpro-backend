@@ -11,6 +11,7 @@ import { RequestEventsModule } from '../requests/events/request-events.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SettingsModule } from '../platform/settings/settings.module';
 import { TimersModule } from '../platform/timers/timers.module';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 
 @Module({
   imports: [
@@ -23,7 +24,12 @@ import { TimersModule } from '../platform/timers/timers.module';
     TimersModule,
   ],
   controllers: [ApprovalsController, EscalationsController],
-  providers: [ApprovalsService, ApprovalsSweeper, EscalationsService],
+  providers: [
+    ApprovalsService,
+    ApprovalsSweeper,
+    EscalationsService,
+    Phase2OnlyGuard,
+  ],
   exports: [ApprovalsService],
 })
 export class ApprovalsModule {}

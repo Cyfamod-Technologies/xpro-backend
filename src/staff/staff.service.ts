@@ -32,6 +32,7 @@ import {
   requirePermission,
 } from '../platform/actor/actor.guards';
 import { AppError } from '../platform/errors/app-error';
+import { requestFlowFrom } from '../common/utils/request-flow';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStore } from '../redis/session-store.service';
 import { RedisAuthService } from '../auth/redis-auth.service';
@@ -202,7 +203,8 @@ export class StaffService {
   /** Members who can take over requests, with their workload (successor and delegate pickers). */
   async owners(actorId: string, excludeId?: string) {
     const actor = await this.actors.resolve(actorId);
-    requireAnyPermission(actor, ['staff.manage', 'request.reassign']);
+    if (requestFlowFrom() === 'v1') requirePermission(actor, 'staff.manage');
+    else requireAnyPermission(actor, ['staff.manage', 'request.reassign']);
     const members = await this.prisma.staffMember.findMany({
       where: {
         status: StaffStatus.active,
@@ -218,6 +220,26 @@ export class StaffService {
         member.roles.map(({ role }) => role),
       ),
     );
+    if (requestFlowFrom() === 'v1') {
+      const workloads = await this.prisma.serviceRequest.groupBy({
+        by: ['staffOwnerId'],
+        where: {
+          workflowMode: 'v1',
+          status: 'submitted',
+          staffOwnerId: { in: eligible.map((member) => member.userId) },
+        },
+        _count: { _all: true },
+      });
+      const workloadByOwner = new Map(
+        workloads.map((item) => [item.staffOwnerId, item._count._all]),
+      );
+      return eligible.map((member) => ({
+        id: member.userId,
+        name: memberName(member.user),
+        email: member.user.email,
+        openRequests: workloadByOwner.get(member.userId) ?? 0,
+      }));
+    }
     const workload = await this.workload(
       eligible.map((member) => member.userId),
     );

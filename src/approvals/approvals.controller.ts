@@ -2,13 +2,14 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import type { RequestUser } from '../common/types/request-user';
 import { ApprovalsService } from './approvals.service';
 
 @ApiTags('Approvals')
 @ApiBearerAuth()
 @Controller('admin/approvals')
-@UseGuards(JwtAuthGuard)
+@UseGuards(Phase2OnlyGuard, JwtAuthGuard)
 export class ApprovalsController {
   constructor(private readonly approvals: ApprovalsService) {}
 
