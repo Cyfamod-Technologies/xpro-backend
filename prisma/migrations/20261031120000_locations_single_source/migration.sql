@@ -7,12 +7,14 @@
 -- used in this same migration.
 CREATE TYPE "LocationKind_new" AS ENUM ('state', 'lga', 'area');
 
--- squawk-ignore changing-column-type
 ALTER TABLE "locations"
+    -- squawk-ignore changing-column-type
     ALTER COLUMN "kind" TYPE "LocationKind_new"
     USING (CASE "kind"::text WHEN 'city' THEN 'state' ELSE 'area' END)::"LocationKind_new";
 
+-- squawk-ignore ban-drop-type
 DROP TYPE "LocationKind";
+-- squawk-ignore renaming-object
 ALTER TYPE "LocationKind_new" RENAME TO "LocationKind";
 
 ALTER TABLE "locations"
@@ -917,12 +919,13 @@ UPDATE "service_requests" SET "location_id" = "district_id";
 -- squawk-ignore adding-not-nullable-field
 ALTER TABLE "service_requests" ALTER COLUMN "location_id" SET NOT NULL;
 
--- squawk-ignore constraint-missing-not-valid,adding-foreign-key-constraint
 ALTER TABLE "service_requests"
+    -- squawk-ignore constraint-missing-not-valid,adding-foreign-key-constraint
     ADD CONSTRAINT "service_requests_location_id_fkey"
     FOREIGN KEY ("location_id") REFERENCES "locations"("id")
     ON DELETE RESTRICT ON UPDATE CASCADE;
 
+-- squawk-ignore require-concurrent-index-deletion
 DROP INDEX "service_requests_service_district_id_created_at_idx";
 CREATE INDEX "service_requests_service_location_id_created_at_idx"
     ON "service_requests"("service", "location_id", "created_at");
@@ -931,8 +934,10 @@ CREATE INDEX "service_requests_service_location_id_created_at_idx"
 ALTER TABLE "service_requests" DROP COLUMN "city_id", DROP COLUMN "district_id";
 
 -- provider_profiles: city_id becomes location_id (an LGA).
+-- squawk-ignore renaming-column
 ALTER TABLE "provider_profiles" RENAME COLUMN "city_id" TO "location_id";
 ALTER TABLE "provider_profiles"
+    -- squawk-ignore renaming-object
     RENAME CONSTRAINT "provider_profiles_city_id_fkey" TO "provider_profiles_location_id_fkey";
 
 -- A profile that pointed at the old managed city pointed at the capital area, which is the Abuja Municipal LGA.
@@ -1037,7 +1042,10 @@ WHERE EXISTS (
     WHERE "m"."profile_id" = "p"."id" AND "m"."location_id" IS NOT NULL
 );
 
+-- Scratch tables created earlier in this migration.
+-- squawk-ignore ban-drop-table
 DROP TABLE "tmp_provider_area_matches";
+-- squawk-ignore ban-drop-table
 DROP TABLE "tmp_location_names";
 
 -- squawk-ignore ban-drop-column
