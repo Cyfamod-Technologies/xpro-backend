@@ -8,6 +8,11 @@ export type LabelValues = Partial<
 export type StageLabels = Readonly<Record<LabelRole, string | null>>;
 
 export const STAGE_LABELS: Readonly<Record<RequestStage, StageLabels>> = {
+  approved: {
+    customer: 'Approved by XPro',
+    provider: 'Job assigned by XPro',
+    staff: 'Approved',
+  },
   intake_review: {
     customer: 'Request sent',
     provider: null,

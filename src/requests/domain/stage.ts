@@ -3,6 +3,7 @@ import type { RequestStatus } from './statuses';
 
 export type RequestStage =
   | 'intake_review'
+  | 'approved'
   | 'awaiting_clarification'
   | 'dispatching'
   | 'offer_out'
@@ -38,6 +39,7 @@ export type RequestStage =
 /** The only request status each stage is derived from, so a stage filter can narrow the SQL by status first. */
 export const STAGE_STATUS: Record<RequestStage, RequestStatus> = {
   intake_review: 'submitted',
+  approved: 'approved',
   awaiting_clarification: 'submitted',
   dispatching: 'under_review',
   offer_out: 'under_review',
@@ -101,6 +103,8 @@ export function deriveStage(snap: RequestSnapshot, now: Date): RequestStage {
   const schedule = snap.currentSchedule;
 
   switch (snap.status) {
+    case 'approved':
+      return 'approved';
     case 'submitted':
       return snap.intake.state === 'clarification'
         ? 'awaiting_clarification'
@@ -165,6 +169,8 @@ export function nextActor(
   now: Date,
 ): NextActor {
   switch (stage) {
+    case 'approved':
+      return 'none';
     case 'intake_review':
       return 'staff:request.review';
     case 'awaiting_clarification':
