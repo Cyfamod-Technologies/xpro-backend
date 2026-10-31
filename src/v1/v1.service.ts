@@ -454,26 +454,57 @@ export class V1Service {
     const actor = await this.actor(userId);
     if (actor.kind !== 'customer' || !actor.platformRoles.includes('customer'))
       fail(403, 'FORBIDDEN', 'Only customers can submit requests.');
+    const serviceInput = dto.serviceId?.trim() || dto.service?.trim();
+    const locationInput = dto.locationId?.trim() || dto.location?.trim();
+    const budgetKobo = dto.budgetKobo ?? Math.round((dto.budget ?? 0) * 100);
+    const preferredDate = dto.startDate || dto.preferredDate || '';
+    const attachments = dto.attachments ?? [];
+    if (!serviceInput)
+      fail(422, 'VALIDATION_ERROR', 'Choose a service to continue.');
+    const locationId =
+      locationInput ||
+      fail(422, 'VALIDATION_ERROR', 'Choose a location Xpro serves.');
     const replay = await this.replayCommand<
       Awaited<ReturnType<typeof this.projectRequest>>
     >(userId, key, request);
     if (replay) return replay;
-    const [user, service, location] = await Promise.all([
+    const [user, catalog, location] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: userId },
         select: { firstName: true, lastName: true, name: true, email: true },
       }),
-      this.prisma.catalogService.findFirst({
-        where: { id: dto.service, parentId: null, active: true },
+      this.prisma.catalogService.findMany({
+        where: { active: true },
+        select: { id: true, name: true, parentId: true },
       }),
       this.prisma.location.findFirst({
-        where: { id: dto.location, active: true, serviceable: true },
+        where: { id: locationId, active: true, serviceable: true },
       }),
     ]);
     if (!user)
       throw new AppError(404, 'NOT_FOUND', 'Customer account not found.');
+    const serviceById = catalog.find((item) => item.id === serviceInput);
+    const service =
+      serviceById ??
+      catalog.find(
+        (item) => item.parentId === null && item.name === serviceInput,
+      );
     if (!service)
       throw new AppError(422, 'VALIDATION_ERROR', 'Choose an active service.');
+    let serviceRoot = service;
+    const servicePath = [service];
+    while (serviceRoot.parentId) {
+      const parent = catalog.find((item) => item.id === serviceRoot.parentId);
+      if (!parent)
+        throw new AppError(
+          422,
+          'VALIDATION_ERROR',
+          'Choose an active service.',
+        );
+      serviceRoot = parent;
+      servicePath.push(parent);
+    }
+    servicePath.reverse();
     if (!location)
       throw new AppError(
         422,
@@ -527,30 +558,34 @@ export class V1Service {
             ownerId: userId,
             customerName: fullName({ ...user, email: user.email }),
             title: dto.title.trim(),
-            service: service.name,
+            service: serviceRoot.name,
             serviceId: service.id,
-            serviceRootId: service.id,
-            locationId: location.id,
+            serviceRootId: serviceRoot.id,
+            servicePath: servicePath.map(({ id, name }) => ({
+              id,
+              name,
+            })),
+            locationId,
             address: dto.address.trim(),
             phone,
-            contactMethod: dto.contactMethod,
+            contactMethod: dto.contactMethod ?? 'phone',
             description: dto.description.trim(),
-            budget: BigInt(dto.budgetKobo),
-            startDate: dto.preferredDate || null,
+            budget: BigInt(budgetKobo),
+            startDate: preferredDate || null,
             status: RequestStatus.submitted,
             version: 1,
             workflowMode: RequestWorkflow.v1,
             dispatchMode: 'manual',
             intakeState: 'pending',
-            answers: [],
-            details: {},
+            answers: (dto.answers ?? []) as Prisma.InputJsonValue,
+            details: (dto.details ?? {}) as Prisma.InputJsonValue,
             unclaimedSince: null,
             contactInBrief: false,
           },
         });
         const uploads = await this.uploads.attach(
           tx,
-          dto.attachments.map((file) => file.id),
+          attachments.map((file) => file.id),
           userId,
           UploadPurpose.request_attachment,
           'request',
