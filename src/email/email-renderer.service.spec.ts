@@ -39,6 +39,8 @@ describe('EmailRendererService', () => {
       message: 'We have received your request.',
       link: '/requests',
     },
+    account_exists: { firstName: 'Ada' },
+    staff_account_exists: { firstName: 'Ada' },
   };
 
   it.each(Object.keys(fixtures) as EmailTemplateKey[])(
@@ -157,6 +159,66 @@ describe('EmailRendererService', () => {
         payload: {},
       }),
     ).toThrow('Unsupported email template: unsupported');
+  });
+
+  describe('account_exists', () => {
+    const recipientEmail = 'ada+secret@example.com';
+
+    it('links to sign in and password reset without the recipient email', () => {
+      const result = renderer.render({
+        recipientEmail,
+        templateKey: 'account_exists',
+        payload: { firstName: 'Ada' },
+      });
+
+      expect(result.subject).toBe('You already have an Xpro account');
+      expect(result.html).toContain('https://app.example.com/login"');
+      expect(result.html).toContain(
+        'https://app.example.com/auth/forgot-password"',
+      );
+      expect(result.text).toContain('https://app.example.com/login');
+      expect(result.text).toContain(
+        'https://app.example.com/auth/forgot-password',
+      );
+      expect(result.html).not.toContain('scheduled for deletion');
+      expect(result.html).not.toContain('ada+secret');
+      expect(result.html).not.toContain('ada%2Bsecret');
+      expect(result.text).not.toContain('ada+secret');
+    });
+
+    it('shows the deletion notice only when a deletion date is given', () => {
+      const result = renderer.render({
+        recipientEmail,
+        templateKey: 'account_exists',
+        payload: { deletionScheduledFor: '2026-11-20T10:00:00.000Z' },
+      });
+
+      expect(result.html).toContain('Your account is scheduled for deletion');
+      expect(result.html).toContain(
+        'Sign in before 20 November 2026 to cancel your account deletion.',
+      );
+      expect(result.text).toContain(
+        'Sign in before 20 November 2026 to cancel your account deletion.',
+      );
+    });
+  });
+
+  describe('staff_account_exists', () => {
+    it('explains that no account was created and links nowhere in the app', () => {
+      const result = renderer.render({
+        recipientEmail: 'alex+secret@example.com',
+        templateKey: 'staff_account_exists',
+        payload: {},
+      });
+
+      expect(result.subject).toBe(
+        'This email is used by an Xpro staff account',
+      );
+      expect(result.html).toContain('This email belongs to a staff account');
+      expect(result.html).not.toContain('href="https://app.example.com');
+      expect(result.html).not.toContain('alex+secret');
+      expect(result.text).not.toContain('alex+secret');
+    });
   });
 
   describe('request_update', () => {

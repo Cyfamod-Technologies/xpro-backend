@@ -5,6 +5,8 @@ export const EMAIL_TEMPLATE_KEYS = [
   'custom_email',
   'staff_invite',
   'request_update',
+  'account_exists',
+  'staff_account_exists',
 ] as const;
 
 export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[number];
@@ -36,6 +38,16 @@ export interface RequestUpdatePayload {
   link?: string;
 }
 
+export interface AccountExistsPayload {
+  firstName?: string;
+  /** ISO timestamp, set when the account is scheduled for deletion. */
+  deletionScheduledFor?: string;
+}
+
+export interface StaffAccountExistsPayload {
+  firstName?: string;
+}
+
 /**
  * Pre-rendered HTML/text supplied by trusted server-side callers only. Never
  * populate this from user input — the body is injected into the email shell
@@ -55,6 +67,8 @@ export interface EmailTemplatePayloadMap {
   custom_email: TrustedCustomEmailPayload;
   staff_invite: StaffInvitePayload;
   request_update: RequestUpdatePayload;
+  account_exists: AccountExistsPayload;
+  staff_account_exists: StaffAccountExistsPayload;
 }
 
 export interface EmailRenderContext {

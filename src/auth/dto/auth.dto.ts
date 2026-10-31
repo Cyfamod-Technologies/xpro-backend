@@ -205,3 +205,28 @@ export class ReauthenticateDto {
   @Matches(/^\d{6}$/, { message: 'MFA code must be 6 digits' })
   code?: string;
 }
+
+export class AddRoleDto {
+  @ApiProperty({ enum: ['customer', 'provider'] })
+  @IsString()
+  @Matches(/^(customer|provider)$/)
+  role: 'customer' | 'provider';
+
+  @ApiPropertyOptional({
+    description:
+      'Required for the provider role: the provider agreement version the user accepted.',
+    example: { providerAgreementVersion: '2026-10-01' },
+  })
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => AcceptedTermsDto)
+  acceptedTerms?: AcceptedTermsDto;
+}
+
+export class SetActiveRoleDto {
+  @ApiProperty({ enum: ['customer', 'provider'] })
+  @IsString()
+  @Matches(/^(customer|provider)$/)
+  role: 'customer' | 'provider';
+}

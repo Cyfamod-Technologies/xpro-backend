@@ -7,6 +7,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { RedisModule } from '../redis/redis.module';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { MeRolesController } from './me-roles.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { RedisAuthService } from './redis-auth.service';
 
@@ -26,7 +27,7 @@ import { RedisAuthService } from './redis-auth.service';
       }),
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, MeRolesController],
   providers: [AuthService, JwtStrategy, RedisAuthService],
   exports: [AuthService, RedisAuthService],
 })
