@@ -7,6 +7,7 @@ import { PlatformModule } from '../platform/platform.module';
 import { TimersModule } from '../platform/timers/timers.module';
 import { UploadsModule } from '../uploads/uploads.module';
 import { RequestEventsModule } from '../requests/events/request-events.module';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import {
   AdminFinanceController,
   AdminPaymentsController,
@@ -61,6 +62,7 @@ import { TestPaymentGateway } from './test-payment.gateway';
     FinanceService,
     RefundsService,
     NotificationDispatcher,
+    Phase2OnlyGuard,
   ],
   exports: [PaymentsService, FinanceService, RefundsService],
 })

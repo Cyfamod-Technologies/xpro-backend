@@ -18,6 +18,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import type { RequestUser } from '../common/types/request-user';
 import { formatEtag } from '../platform/concurrency/etag.util';
 import { IfMatch } from '../platform/concurrency/if-match.decorator';
@@ -52,7 +53,7 @@ function withEtag<T>(res: Response, result: T): T {
 @ApiTags('Payments')
 @ApiBearerAuth()
 @Controller('requests/:id/payments')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, Phase2OnlyGuard)
 export class RequestPaymentsController {
   constructor(private readonly payments: PaymentsService) {}
   @Get() get(@CurrentUser() user: RequestUser, @Param('id') id: string) {
@@ -81,7 +82,7 @@ export class RequestPaymentsController {
 @ApiTags('Payments')
 @ApiBearerAuth()
 @Controller('admin')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, Phase2OnlyGuard)
 export class AdminPaymentsController {
   constructor(
     private readonly payments: PaymentsService,
@@ -171,7 +172,7 @@ export class PaystackWebhookController {
 @ApiTags('Finance')
 @ApiBearerAuth()
 @Controller('admin')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, Phase2OnlyGuard)
 export class AdminFinanceController {
   constructor(
     private readonly finance: FinanceService,
@@ -455,7 +456,7 @@ export class AdminFinanceController {
 @ApiTags('Provider earnings')
 @ApiBearerAuth()
 @Controller('providers/me/earnings')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, Phase2OnlyGuard)
 export class ProviderEarningsController {
   constructor(private readonly finance: FinanceService) {}
   @Get() get(@CurrentUser() user: RequestUser, @Query('page') page?: string) {

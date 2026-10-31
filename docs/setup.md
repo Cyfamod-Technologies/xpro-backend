@@ -23,6 +23,9 @@ Only four variables must be set for the app to boot: `DATABASE_URL`, `JWT_SECRET
 `REDIS_HOST` and `ENCRYPTION_KEY`. Everything else has a working default or belongs
 to an optional subsystem. See [`.env.example`](../.env.example) for the annotated list.
 
+`REQUEST_FLOW` defaults to `v1`. Set it to `phase2` to mount the preserved legacy
+request routes and expose the Phase 2-only APIs again.
+
 ## Renaming the template
 
 ```bash

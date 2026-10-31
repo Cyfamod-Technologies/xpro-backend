@@ -10,6 +10,7 @@ import {
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import { RequestUser } from '../common/types/request-user';
 import {
   ListNotificationsQueryDto,
@@ -19,7 +20,7 @@ import { InboxService } from './inbox.service';
 
 @ApiTags('Notifications')
 @Controller('notifications')
-@UseGuards(JwtAuthGuard)
+@UseGuards(Phase2OnlyGuard, JwtAuthGuard)
 export class InboxController {
   constructor(private readonly inbox: InboxService) {}
 
