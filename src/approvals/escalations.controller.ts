@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import type { RequestUser } from '../common/types/request-user';
 import { IfMatch } from '../platform/concurrency/if-match.decorator';
 import { IdempotencyKey } from '../platform/idempotency/idempotency-key.decorator';
@@ -22,7 +23,7 @@ import { RaiseEscalationDto, ResolveEscalationDto } from './escalations.dto';
 @ApiTags('Request escalations')
 @ApiBearerAuth()
 @Controller('requests/:id/escalations')
-@UseGuards(JwtAuthGuard)
+@UseGuards(Phase2OnlyGuard, JwtAuthGuard)
 export class EscalationsController {
   constructor(private readonly escalations: EscalationsService) {}
 

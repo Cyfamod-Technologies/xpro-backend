@@ -34,6 +34,13 @@ export class RequestFileAccess implements OnModuleInit {
         where: { id: upload.entityId },
         select: {
           ownerId: true,
+          workflowMode: true,
+          staffOwnerId: true,
+          providerAssignments: {
+            where: { endedAt: null },
+            select: { providerUserId: true },
+            take: 1,
+          },
           assignments: {
             orderBy: { createdAt: 'desc' },
             take: 1,
@@ -51,6 +58,17 @@ export class RequestFileAccess implements OnModuleInit {
       });
       if (!request) return false;
       if (request.ownerId === user.id) return true;
+      if (request.workflowMode === 'v1') {
+        if (actor.staff?.status === 'active')
+          return (
+            actor.staff.permissions.has('staff.manage') ||
+            request.staffOwnerId === user.id
+          );
+        return (
+          actor.kind === 'provider' &&
+          request.providerAssignments[0]?.providerUserId === user.id
+        );
+      }
       if (actor.kind === 'staff' && actor.staff?.status === 'active')
         return true;
       const currentAssignment = request.assignments[0];
@@ -81,6 +99,8 @@ export class RequestFileAccess implements OnModuleInit {
           request: {
             select: {
               ownerId: true,
+              workflowMode: true,
+              staffOwnerId: true,
               assignments: {
                 orderBy: { createdAt: 'desc' },
                 select: {
@@ -100,6 +120,12 @@ export class RequestFileAccess implements OnModuleInit {
           message.request.ownerId === user.id
         )
           return true;
+        if (message.request.workflowMode === 'v1')
+          return Boolean(
+            actor.staff?.status === 'active' &&
+            (actor.staff.permissions.has('staff.manage') ||
+              message.request.staffOwnerId === user.id),
+          );
         if (actor.kind === 'staff')
           return (
             actor.staff?.status === 'active' &&

@@ -14,6 +14,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import { RequestUser } from '../common/types/request-user';
 import {
   ProviderAvailabilityDto,
@@ -51,11 +52,13 @@ export class ProvidersController {
   }
 
   @Get('banks')
+  @UseGuards(Phase2OnlyGuard)
   banks(@CurrentUser() user: RequestUser) {
     return this.providers.listBanks(user.id);
   }
 
   @Post('banks/resolve')
+  @UseGuards(Phase2OnlyGuard)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   resolveBank(
     @CurrentUser() user: RequestUser,
@@ -97,6 +100,7 @@ export class ProvidersController {
   }
 
   @Post('me/bank')
+  @UseGuards(Phase2OnlyGuard)
   @ApiOperation({ summary: 'Submit payout account details for review' })
   updateBank(
     @CurrentUser() user: RequestUser,
@@ -157,6 +161,7 @@ export class ProviderReviewController {
   }
 
   @Post(':id/bank/review')
+  @UseGuards(Phase2OnlyGuard)
   reviewBank(
     @CurrentUser() user: RequestUser,
     @Param('id') id: string,
@@ -211,6 +216,7 @@ export class ProviderReviewController {
   }
 
   @Post(':id/bank/reveal')
+  @UseGuards(Phase2OnlyGuard)
   @ApiOperation({
     summary: 'Reveal full provider bank details with an audit reason',
   })

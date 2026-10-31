@@ -1,6 +1,6 @@
 import { BullModule } from '@nestjs/bullmq';
 import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConditionalModule, ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { validateEnv } from './config/env.validation';
@@ -28,6 +28,9 @@ import { RequestsModule } from './requests/requests.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { PaymentsModule } from './payments/payments.module';
 import { PhoneModule } from './phone/phone.module';
+import { Phase2RequestRoutesModule } from './requests/phase2-request-routes.module';
+import { V1Module } from './v1/v1.module';
+import { requestFlowFrom } from './common/utils/request-flow';
 
 @Module({
   imports: [
@@ -70,6 +73,14 @@ import { PhoneModule } from './phone/phone.module';
     ProvidersModule,
     UploadsModule,
     RequestsModule,
+    ConditionalModule.registerWhen(
+      V1Module,
+      (env) => requestFlowFrom(env) === 'v1',
+    ),
+    ConditionalModule.registerWhen(
+      Phase2RequestRoutesModule,
+      (env) => requestFlowFrom(env) === 'phase2',
+    ),
     ApprovalsModule,
     PaymentsModule,
     UsersModule,

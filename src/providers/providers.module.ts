@@ -4,6 +4,7 @@ import { PlatformModule } from '../platform/platform.module';
 import { LocationsModule } from '../platform/locations/locations.module';
 import { StorageModule } from '../storage/storage.module';
 import { RequestEventsModule } from '../requests/events/request-events.module';
+import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import {
   ProvidersController,
   ProviderReviewController,
@@ -30,7 +31,7 @@ import { FeaturedProvidersService } from './featured-providers.service';
     FeaturedProvidersAdminController,
     ProviderReviewController,
   ],
-  providers: [ProvidersService, FeaturedProvidersService],
+  providers: [ProvidersService, FeaturedProvidersService, Phase2OnlyGuard],
   exports: [ProvidersService],
 })
 export class ProvidersModule {}

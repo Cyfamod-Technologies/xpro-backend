@@ -14,6 +14,7 @@ export const REQUEST_STATUSES = [
   'closed',
   'cancelled',
   'rejected',
+  'approved',
 ] as const;
 
 export type RequestStatus = (typeof REQUEST_STATUSES)[number];
@@ -22,6 +23,7 @@ export const TERMINAL: ReadonlySet<RequestStatus> = new Set([
   'closed',
   'cancelled',
   'rejected',
+  'approved',
 ]);
 
 export const FROZEN: ReadonlySet<RequestStatus> = new Set([
