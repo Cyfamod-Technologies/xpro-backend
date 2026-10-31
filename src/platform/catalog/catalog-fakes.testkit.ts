@@ -104,7 +104,7 @@ export function fakeCatalog(options: FakeOptions = {}) {
       Promise.resolve([
         {
           key: 'catalog.maxDepth',
-          value: options.maxDepth ?? 2,
+          value: options.maxDepth ?? 3,
           version: 4,
         },
       ]),

@@ -39,12 +39,6 @@ export class CreateServiceDto {
   @MaxLength(500)
   description?: string;
 
-  @ApiPropertyOptional({ example: 'tabler-tools' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  icon?: string;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
@@ -69,12 +63,6 @@ export class UpdateServiceDto {
   @IsString()
   @MaxLength(500)
   description?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(60)
-  icon?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -199,11 +187,6 @@ export class CreateQuestionDto {
   @IsOptional()
   @IsBoolean()
   sensitive?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  matchesSkill?: boolean;
 }
 
 export class UpdateQuestionDto {
@@ -263,11 +246,6 @@ export class UpdateQuestionDto {
   @IsOptional()
   @IsBoolean()
   sensitive?: boolean;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  matchesSkill?: boolean;
 }
 
 export class ReorderQuestionsDto {

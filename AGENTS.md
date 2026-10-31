@@ -13,7 +13,7 @@ Read the relevant docs before making changes.
 | [docs/code-style.md](docs/code-style.md)             | TypeScript, NestJS, naming, diff scope      |
 | [docs/security.md](docs/security.md)                 | Guards, roles, surfaces, sessions, secrets  |
 | [docs/background-jobs.md](docs/background-jobs.md)   | BullMQ queues, processors, how to add jobs  |
-| [docs/database.md](docs/database.md)                 | Prisma conventions, migrations, seeding     |
+| [docs/database.md](docs/database.md)                 | Prisma, migrations, seeds (`npm run seed`)  |
 | [docs/deployment.md](docs/deployment.md)             | Docker, compose, CI/CD, production checks   |
 | [docs/email/](docs/email/README.md)                  | Email rendering and provider setup          |
 | [docs/storage/](docs/storage/README.md)              | Object storage setup (opt-in)               |

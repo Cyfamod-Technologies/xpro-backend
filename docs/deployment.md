@@ -57,6 +57,10 @@ npx prisma migrate deploy && node dist/main.js
 `migrate deploy` is non-interactive and never generates migrations — it only
 applies what is committed. Never run `migrate dev` against production.
 
+Data seeds (the service catalog) are not migrations. After `migrate deploy`, run
+`npm run seed:prod` (`node dist/seeds/run.js`); the runner image has no `ts-node`,
+so `npm run seed` does not work there. See [database.md](database.md#seeding).
+
 With more than one API replica, run migrations as a separate step before rolling
 out rather than in each container's start command, or concurrent replicas will race.
 

@@ -6,7 +6,6 @@ import { dispatchRequestFor } from '../../requests/domain/dispatch-request';
 import { evaluateEligibility } from '../../requests/domain/eligibility';
 import { validateIntake } from '../../requests/domain/intake-validation';
 import { resolveServiceInput } from '../../requests/domain/legacy-service-input';
-import { CatalogQuestionService } from './catalog-question.service';
 import { CatalogService } from './catalog.service';
 import { loadCatalog } from './catalog.tree';
 
@@ -17,36 +16,108 @@ afterAll(async () => {
 });
 
 describe('seeded service catalog (integration)', () => {
-  it('seeds the six roots, their sub-services and the Hire skill questions', async () => {
+  it('has the five website roots, six Construction groups of six leaves and no active Procurement', async () => {
     const catalog = await loadCatalog(prisma);
-    expect(catalog.roots.map(({ name }) => name)).toEqual([
+    const active = catalog.roots.filter(({ active: on }) => on);
+    expect(active.map(({ name }) => name)).toEqual([
       'Design',
       'Construction',
-      'Hire',
-      'Procurement',
-      'Facility management',
-      'Waste management',
+      'Hiring',
+      'Facility Management',
+      'Waste Management',
     ]);
-    const hire = catalog.roots[2];
-    expect(hire.requiresStartDate).toBe(true);
-    expect(hire.children.map(({ name }) => name)).toEqual([
-      'Professional',
-      'Vocational worker',
-      'Heavy equipment',
+    expect(
+      catalog.roots.filter(
+        ({ name, active: on }) => name === 'Procurement' && on,
+      ),
+    ).toEqual([]);
+
+    const construction = active[1];
+    const groups = construction.children.filter(({ active: on }) => on);
+    expect(groups.map(({ name }) => name)).toEqual([
+      'Floor Finishing',
+      'Wall Finishing',
+      'Ceiling Finishing',
+      'Roof Finishing',
+      'Final Finishing',
+      'Facade Finishing',
     ]);
-    const trades = hire.children.flatMap(({ questions }) =>
-      questions.filter(({ key }) => key === 'trade'),
-    );
-    expect(trades.map(({ label }) => label)).toEqual([
-      'Professional required',
-      'Trade required',
-      'Equipment required',
+    for (const group of groups) {
+      expect(group.children).toHaveLength(6);
+      expect(group.children.every(({ depth }) => depth === 2)).toBe(true);
+    }
+    expect(groups[0].children.map(({ name }) => name)).toEqual([
+      'Tiling',
+      'Concrete Paving/Interlocking',
+      'Wood Floor Covering & Epoxy',
+      'Asphalt Covering',
+      'Gabion Flooring',
+      'Skirting Installation',
     ]);
-    expect(trades.flatMap(({ options }) => options)).toHaveLength(22);
-    expect(catalog.byId.size).toBe(33);
   });
 
-  it('accepts a legacy Construction request and a Hire request against the database catalog', async () => {
+  it('turns the Hiring trades into 19, 20 and 19 leaves and asks no skill question', async () => {
+    const catalog = await loadCatalog(prisma);
+    const hiring = catalog.roots.find(({ name }) => name === 'Hiring')!;
+    expect(hiring.requiresStartDate).toBe(true);
+    expect(hiring.children.map(({ name }) => name)).toEqual([
+      'Professionals',
+      'Vocational Workers',
+      'Heavy Equipment',
+    ]);
+    expect(
+      hiring.children.map(
+        ({ children }) => children.filter(({ active }) => active).length,
+      ),
+    ).toEqual([19, 20, 19]);
+    expect(hiring.questions.map(({ key }) => key)).toEqual([
+      'quantity',
+      'endDate',
+    ]);
+    const heavy = hiring.children[2];
+    expect(heavy.children.some(({ name }) => name === 'Tipper truck')).toBe(
+      false,
+    );
+    expect(
+      heavy.questions.filter(({ active }) => active).map(({ key }) => key),
+    ).toEqual(['operator']);
+    expect(
+      await prisma.serviceQuestion.count({
+        where: { active: true, matchesSkill: true },
+      }),
+    ).toBe(0);
+  });
+
+  it('keeps Facility Management and Waste Management in the new order', async () => {
+    const catalog = await loadCatalog(prisma);
+    const names = (root: string) =>
+      catalog.roots
+        .find(({ name }) => name === root)!
+        .children.filter(({ active }) => active)
+        .map(({ name }) => name);
+    expect(names('Facility Management')).toEqual([
+      'Cleaning & Janitorial',
+      'Building Maintenance & Repairs',
+      'Security Services',
+      'Landscaping & Grounds Keeping',
+      'Pest Control',
+      'HVAC Servicing & Maintenance',
+      'Property/Facility Management',
+      'Facility Inspections & Reporting',
+    ]);
+    expect(names('Waste Management')).toEqual([
+      'Residential',
+      'Commercial',
+      'Construction debris',
+    ]);
+    expect(names('Design')).toEqual([
+      'Architectural Designs',
+      'Interior Designs',
+      'Structural Designs',
+    ]);
+  });
+
+  it('accepts legacy-shaped Construction and Hire input against the database catalog', async () => {
     const catalog = await loadCatalog(prisma);
     const base = {
       title: 'Repair a leaking roof',
@@ -73,9 +144,9 @@ describe('seeded service catalog (integration)', () => {
       run({
         ...base,
         service: 'Construction',
-        details: { workType: 'Roof and ceiling', area: 42 },
+        details: { workType: 'Tiling', area: 42 },
       }),
-    ).toMatchObject({ skill: 'Roof and ceiling', details: { area: 42 } });
+    ).toMatchObject({ skill: 'Tiling', details: { area: 42 } });
     expect(
       run({
         ...base,
@@ -90,36 +161,25 @@ describe('seeded service catalog (integration)', () => {
 describe('provider skills by id (integration)', () => {
   const districtId = randomUUID();
   const cityId = randomUUID();
-  let optionId = '';
-  let questionId = '';
+  let leafId = '';
 
   afterAll(async () => {
     await deleteTestUsers(prisma);
-    if (questionId) {
-      const question = await prisma.serviceQuestion.findUniqueOrThrow({
-        where: { id: questionId },
+    if (leafId)
+      await prisma.catalogService.update({
+        where: { id: leafId },
+        data: { name: 'Excavator' },
       });
-      const options = (question.options as Array<{ id: string }>).map(
-        (option) =>
-          option.id === optionId ? { ...option, label: 'Excavator' } : option,
-      );
-      await prisma.serviceQuestion.update({
-        where: { id: questionId },
-        data: { options },
-      });
-    }
   });
 
-  it('keeps a provider eligible after the skill option is renamed, with no name rewrite', async () => {
+  it('keeps a provider eligible after the skill leaf is renamed, with no name rewrite', async () => {
     const catalog = await loadCatalog(prisma);
-    const hire = catalog.roots.find(({ name }) => name === 'Hire')!;
-    const heavy = hire.children.find(({ name }) => name === 'Heavy equipment')!;
-    const question = heavy.questions.find(({ matchesSkill }) => matchesSkill)!;
-    const excavator = question.options.find(
-      ({ label }) => label === 'Excavator',
+    const hiring = catalog.roots.find(({ name }) => name === 'Hiring')!;
+    const heavy = hiring.children.find(
+      ({ name }) => name === 'Heavy Equipment',
     )!;
-    optionId = excavator.id;
-    questionId = question.id;
+    const excavator = heavy.children.find(({ name }) => name === 'Excavator')!;
+    leafId = excavator.id;
 
     const owner = await createUser(prisma);
     const user = await createUser(prisma);
@@ -133,8 +193,8 @@ describe('provider skills by id (integration)', () => {
         // The names match nothing, so only the ids can make this provider eligible.
         services: ['Legacy name'],
         skills: { 'Legacy name': ['Legacy skill'] },
-        serviceIds: [hire.id],
-        skillIds: { [hire.id]: [optionId] },
+        serviceIds: [hiring.id],
+        skillIds: { [hiring.id]: [leafId] },
         serviceAreas: [],
         serviceAreaIds: [districtId],
         workingHours: { mon: everyDay },
@@ -167,26 +227,13 @@ describe('provider skills by id (integration)', () => {
       { record: jest.fn() } as never,
       {} as never,
     );
-    const questions = new CatalogQuestionService(
-      prisma as never,
-      catalogService,
-    );
-    await questions.update(owner.id, question.id, {
-      version: question.version,
-      options: question.options.map((option) =>
-        option.id === optionId
-          ? { ...option, label: 'Excavator (20t)' }
-          : option,
-      ),
+    await catalogService.updateService(owner.id, leafId, {
+      version: excavator.version,
+      name: 'Excavator (20t)',
     });
 
     const renamed = await loadCatalog(prisma);
-    expect(
-      renamed.byId
-        .get(heavy.id)!
-        .questions.find(({ id }) => id === question.id)!
-        .options.find(({ id }) => id === optionId)!.label,
-    ).toBe('Excavator (20t)');
+    expect(renamed.byId.get(leafId)!.name).toBe('Excavator (20t)');
 
     const loader = new ProviderDispatchLoader(prisma as never);
     const provider = await loader.one(
@@ -196,8 +243,8 @@ describe('provider skills by id (integration)', () => {
       prisma,
     );
     expect(provider).toMatchObject({
-      serviceIds: [hire.id],
-      skillIds: { [hire.id]: [optionId] },
+      serviceIds: [hiring.id],
+      skillIds: { [hiring.id]: [leafId] },
     });
 
     const request = await dispatchRequestFor(
@@ -205,34 +252,20 @@ describe('provider skills by id (integration)', () => {
       {
         id: randomUUID(),
         ownerId: owner.id,
-        service: 'Hire',
-        serviceId: heavy.id,
+        service: 'Hiring',
+        serviceId: leafId,
         districtId,
         cityId,
         startDate: null,
         details: {},
-        answers: [
-          {
-            questionId: question.id,
-            serviceId: heavy.id,
-            serviceName: heavy.name,
-            key: question.key,
-            label: question.label,
-            type: 'single_choice',
-            value: 'Excavator',
-            display: 'Excavator',
-            optionIds: [optionId],
-            sensitive: false,
-            matchesSkill: true,
-          },
-        ],
+        answers: [],
       },
       { districtName: 'Test district' },
     );
     expect(request).toMatchObject({
-      serviceId: hire.id,
+      serviceId: hiring.id,
       skill: 'Excavator (20t)',
-      skillId: optionId,
+      skillId: leafId,
     });
     expect(
       evaluateEligibility(provider!, request, { requireVerifiedBank: false }),

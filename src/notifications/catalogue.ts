@@ -37,6 +37,7 @@ function entry<P>(definition: CatalogueEntry<P>): CatalogueEntry<P> {
 }
 
 type RequestParams = { requestCode: string };
+type RequestGroupParams = { count: number; projectTitle: string };
 type RequestUpdateParams = { requestCode: string; fields?: string[] };
 type RequestReasonParams = { requestCode: string; reason: string };
 type EscalationParams = RequestParams & { title: string; note: string };
@@ -86,6 +87,16 @@ export const NOTIFICATION_CATALOGUE = {
     // new message: not in spec
     message: ({ requestCode }) =>
       `We have received your request ${requestCode}.`,
+    link: () => '/requests',
+  }),
+  // The one receipt for a multi-service submission (04 §6.2); the per-request receipt is not sent for its children.
+  'request.group_received': entry<RequestGroupParams>({
+    key: 'request.group_received',
+    audience: { kind: 'customer' },
+    mandatory: true,
+    title: () => 'Request received',
+    message: ({ count, projectTitle }) =>
+      `We received ${count} requests for ${projectTitle}.`,
     link: () => '/requests',
   }),
   'request.needs_owner': entry<RequestParams>({

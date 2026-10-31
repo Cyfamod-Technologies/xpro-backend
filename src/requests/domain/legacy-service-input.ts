@@ -1,4 +1,5 @@
 import {
+  descendants,
   resolveService,
   skillQuestion,
 } from '../../platform/catalog/catalog.tree';
@@ -10,10 +11,17 @@ import type {
 const LEGACY_SKILL_KEY: Record<string, string> = {
   Design: 'designType',
   Construction: 'workType',
-  Hire: 'trade',
+  Hiring: 'trade',
   Procurement: 'category',
-  'Facility management': 'serviceNeeds',
-  'Waste management': 'wasteType',
+  'Facility Management': 'serviceNeeds',
+  'Waste Management': 'wasteType',
+};
+
+/** Service names used before the catalog renamed them; legacy input and old rows may still carry these. */
+const RENAMED_SERVICES: Record<string, string> = {
+  Hire: 'Hiring',
+  'Facility management': 'Facility Management',
+  'Waste management': 'Waste Management',
 };
 
 const LEGACY_ONLY_KEYS = new Set([
@@ -37,7 +45,7 @@ export function legacySkill(
   service: string,
   details: Record<string, unknown>,
 ): string | null {
-  const key = LEGACY_SKILL_KEY[service];
+  const key = LEGACY_SKILL_KEY[RENAMED_SERVICES[service] ?? service];
   const value = key ? details[key] : undefined;
   return typeof value === 'string' && value ? value : null;
 }
@@ -60,21 +68,29 @@ export function resolveServiceInput(
   if (typeof input.serviceId === 'string' && input.serviceId)
     return resolveService(catalog, input.serviceId, options);
   if (typeof input.service !== 'string') return null;
-  const root = catalog.roots.find(({ name }) => name === input.service);
+  const serviceName = RENAMED_SERVICES[input.service] ?? input.service;
+  const root = catalog.roots.find(({ name }) => name === serviceName);
   if (!root) return null;
   const details =
     input.details && typeof input.details === 'object'
       ? (input.details as Record<string, unknown>)
       : {};
   const skill = legacySkill(root.name, details);
+  const named = skill
+    ? descendants(root).filter(
+        ({ name }) => name.toLowerCase() === skill.toLowerCase(),
+      )
+    : [];
   const child = skill
-    ? root.children.find(
+    ? (named.find(({ children }) => !children.length) ??
+      named[0] ??
+      root.children.find(
         (node) =>
           node.name === skill ||
           skillQuestion(node.questions)?.options.some(
             ({ label }) => label === skill,
           ),
-      )
+      ))
     : undefined;
   return resolveService(catalog, child?.id ?? root.id, options);
 }

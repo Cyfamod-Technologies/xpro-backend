@@ -2,6 +2,7 @@ import type { RequestDetailDto } from '../dto/request-detail.dto';
 import {
   commonProjection,
   effectiveDates,
+  groupProjection,
   cancellationProjection,
   completionProjection,
   issueProjection,
@@ -49,6 +50,7 @@ export function customerProjection(
     servicePath: row.servicePath,
     answers: answerSnapshots(row.answers),
     customerName: row.customerName,
+    ...groupProjection(context),
     intake: {
       state: row.intakeState,
       clarificationCount: row.clarificationCount,

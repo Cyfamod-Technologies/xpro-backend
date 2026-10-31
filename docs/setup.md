@@ -50,6 +50,7 @@ after cloning, then delete `scripts/init-template.ts`.
 | `npm run generate` | `prisma generate` |
 | `npm run migrate` | `prisma migrate dev` |
 | `npm run studio` | Prisma Studio |
+| `npm run seed` | Apply the data seeds in `src/seeds` (the service catalog); safe to re-run |
 | `npm run seed:super-admin` | Create/update a `super_admin` user |
 | `npm run seed:sample-user` | Create/update an ordinary verified user |
 | `npm run email:preview` | Render every email template to `.email-previews/` |

@@ -951,7 +951,7 @@ export class DispatchService {
         });
         if (!request) throw requestNotFound();
         const hireQuantity =
-          request.service === 'Hire'
+          request.service === 'Hiring'
             ? Number(object(request.details).quantity ?? 1)
             : 1;
         if (hireQuantity > 1 && dto.crewSize !== hireQuantity)

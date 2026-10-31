@@ -156,6 +156,153 @@ describe('request role projections', () => {
     expect(summary).not.toHaveProperty('title');
   });
 
+  it("adds the owner's open-request limit to the staff projection only (MS-7)", () => {
+    const customerRequestLimit = {
+      userId: 'customer-1',
+      override: 2,
+      effective: 2,
+      open: 1,
+    };
+    const staff = context('staff', {}, {}, ['dispatch.manage']);
+    expect(staffProjection(staff)).not.toHaveProperty('customerRequestLimit');
+    expect(
+      staffProjection({ ...staff, customerRequestLimit }).customerRequestLimit,
+    ).toEqual(customerRequestLimit);
+    for (const role of ['customer', 'provider'] as const) {
+      const base = { ...context(role), customerRequestLimit };
+      const dto =
+        role === 'customer'
+          ? customerProjection(base)
+          : providerProjection(base);
+      expect(dto).not.toHaveProperty('customerRequestLimit');
+    }
+  });
+
+  describe('request groups (MS-2)', () => {
+    const group = {
+      id: 'group-1',
+      ref: 'XPG-00007',
+      title: 'Bathroom fit-out',
+    };
+    const siblings = [
+      {
+        id: 'XPR-00043',
+        title: 'Bathroom fit-out — Tiling',
+        serviceName: 'Tiling',
+        status: 'quoted' as const,
+        stage: 'quote_with_customer' as const,
+      },
+      {
+        id: 'XPR-00044',
+        title: 'Bathroom fit-out — Plumbing',
+        serviceName: 'Plumbing',
+        status: 'submitted' as const,
+        stage: 'intake_review' as const,
+      },
+    ];
+    const GROUP_KEYS = [
+      'group',
+      'siblings',
+      'groupId',
+      'groupRef',
+      'groupPosition',
+    ];
+
+    it('gives the customer and staff detail the group and siblings in order', () => {
+      const groupView = { group, siblings };
+      const customer = customerProjection({
+        ...context('customer'),
+        groupView,
+      });
+      const staff = staffProjection({
+        ...context('staff', {}, {}, ['dispatch.manage']),
+        groupView,
+      });
+      for (const dto of [customer, staff]) {
+        expect(dto.group).toEqual(group);
+        expect(dto.siblings).toEqual(siblings);
+        expect(dto.siblings?.map(({ id }) => id)).toEqual([
+          'XPR-00043',
+          'XPR-00044',
+        ]);
+        expect(dto.siblings?.map(({ id }) => id)).not.toContain(dto.id);
+      }
+    });
+
+    it('gives an ungrouped request group: null and no siblings', () => {
+      const groupView = { group: null, siblings: [] };
+      expect(
+        customerProjection({ ...context('customer'), groupView }),
+      ).toMatchObject({ group: null, siblings: [] });
+      expect(
+        staffProjection({
+          ...context('staff', {}, {}, ['dispatch.manage']),
+          groupView,
+        }),
+      ).toMatchObject({ group: null, siblings: [] });
+    });
+
+    it('leaves both keys out when the caller supplied no group view', () => {
+      const dto = customerProjection(context('customer'));
+      expect(dto).not.toHaveProperty('group');
+      expect(dto).not.toHaveProperty('siblings');
+    });
+
+    it('never puts a group key in a provider detail or summary', () => {
+      const providerContext = {
+        ...context(
+          'provider',
+          { groupId: 'group-1', groupPosition: 1 },
+          { status: 'matched' },
+        ),
+        groupView: { group, siblings },
+      };
+      const detail = providerProjection(providerContext);
+      const summary = listProjection(
+        {
+          ...providerContext.row,
+          group: { ref: 'XPG-00007' },
+        },
+        providerContext.snapshot,
+        providerContext.actor,
+        now,
+        {},
+      );
+      for (const key of GROUP_KEYS) {
+        expect(detail).not.toHaveProperty(key);
+        expect(summary).not.toHaveProperty(key);
+      }
+      expect(JSON.stringify(detail)).not.toContain('XPG-00007');
+      expect(JSON.stringify(detail)).not.toContain('group-1');
+    });
+
+    it('adds groupId, groupRef and groupPosition to customer and staff summaries', () => {
+      const grouped = { groupId: 'group-1', groupPosition: 1 };
+      for (const role of ['customer', 'staff'] as const) {
+        const base = context(role, grouped, {}, ['dispatch.manage']);
+        const summary = listProjection(
+          { ...base.row, group: { ref: 'XPG-00007' } },
+          base.snapshot,
+          base.actor,
+          now,
+          {},
+        );
+        expect(summary).toMatchObject({
+          groupId: 'group-1',
+          groupRef: 'XPG-00007',
+          groupPosition: 1,
+        });
+      }
+    });
+
+    it('gives an ungrouped summary null group fields', () => {
+      const base = context('customer');
+      expect(
+        listProjection(base.row, base.snapshot, base.actor, now, {}),
+      ).toMatchObject({ groupId: null, groupRef: null, groupPosition: null });
+    });
+  });
+
   it('omits staff-only fields from the customer response', () => {
     const dto = customerProjection(context('customer'));
     expect(dto).not.toHaveProperty('contributions');
@@ -744,10 +891,10 @@ describe('request role projections', () => {
       },
       answers,
       servicePath: [
-        { id: 'svc-root', name: 'Hire' },
+        { id: 'svc-root', name: 'Hiring' },
         { id: 'svc-leaf', name: 'Heavy equipment' },
       ],
-      service: 'Hire',
+      service: 'Hiring',
       startDate: '2026-11-10',
     } as unknown as Partial<LoadedRequest>;
 

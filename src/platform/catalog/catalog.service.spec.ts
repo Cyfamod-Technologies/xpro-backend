@@ -20,11 +20,11 @@ describe('CatalogService', () => {
   describe('public tree', () => {
     it('lists only active nodes and options and hides nothing needed by the form', async () => {
       const { service, catalog } = fakeCatalog();
-      const hire = catalog.byId.get('svc:Hire')!;
+      const hire = catalog.byId.get('svc:Hiring')!;
       hire.children[0].active = false;
       hire.children[1].questions[0].options[0].active = false;
       const tree = await service.publicTree();
-      const publicHire = tree.find(({ name }) => name === 'Hire')!;
+      const publicHire = tree.find(({ name }) => name === 'Hiring')!;
       expect(publicHire.children.map(({ name }) => name)).toEqual([
         'Vocational worker',
         'Heavy equipment',
@@ -37,7 +37,6 @@ describe('CatalogService', () => {
       expect(trade.options).toHaveLength(7);
       expect(trade).toMatchObject({
         sensitive: false,
-        matchesSkill: true,
         type: 'single_choice',
       });
       expect(Object.keys(trade.options[0])).toEqual(['id', 'label']);
@@ -46,10 +45,10 @@ describe('CatalogService', () => {
 
   describe('createService', () => {
     it('rejects a level beyond the depth limit and allows it once raised', async () => {
-      const blocked = fakeCatalog();
+      const blocked = fakeCatalog({ maxDepth: 2 });
       await expect(
         blocked.service.createService(user.id, {
-          parentId: 'svc:Hire/Professional',
+          parentId: 'svc:Hiring/Professional',
           name: 'Junior',
         }),
       ).rejects.toThrow('Services can be nested up to 2 levels');
@@ -57,7 +56,7 @@ describe('CatalogService', () => {
       const raised = fakeCatalog({ maxDepth: 3 });
       jest.spyOn(raised.service, 'adminNode').mockResolvedValue({} as never);
       await raised.service.createService(user.id, {
-        parentId: 'svc:Hire/Professional',
+        parentId: 'svc:Hiring/Professional',
         name: 'Junior',
       });
       expect(
@@ -75,18 +74,15 @@ describe('CatalogService', () => {
     it('appends after its siblings and refuses a duplicate name under the same parent', async () => {
       const { service, tx } = fakeCatalog();
       jest.spyOn(service, 'adminNode').mockResolvedValue({} as never);
-      await service.createService(user.id, {
-        name: 'Roofing',
-        icon: 'tabler-home',
-      });
+      await service.createService(user.id, { name: 'Roofing' });
       expect(tx.catalogService.create.mock.calls[0][0].data).toMatchObject({
         parentId: null,
         depth: 0,
-        sortOrder: 6,
+        sortOrder: 5,
       });
       await expect(
-        service.createService(user.id, { name: ' hire ' }),
-      ).rejects.toThrow('A service called "hire" already exists here.');
+        service.createService(user.id, { name: ' hiring ' }),
+      ).rejects.toThrow('A service called "hiring" already exists here.');
     });
   });
 
@@ -94,7 +90,7 @@ describe('CatalogService', () => {
     it('returns 409 for a stale version', async () => {
       const { service } = fakeCatalog();
       await expect(
-        service.updateService(user.id, 'svc:Hire', {
+        service.updateService(user.id, 'svc:Hiring', {
           version: 9,
           active: false,
         }),
@@ -103,22 +99,19 @@ describe('CatalogService', () => {
 
     it('increments the version and treats an empty string as clearing', async () => {
       const { service, tx, catalog } = fakeCatalog();
-      Object.assign(catalog.byId.get('svc:Hire')!, {
+      Object.assign(catalog.byId.get('svc:Hiring')!, {
         description: 'Trades',
-        icon: 'tabler-tools',
       });
       jest.spyOn(service, 'adminNode').mockResolvedValue({} as never);
-      await service.updateService(user.id, 'svc:Hire', {
+      await service.updateService(user.id, 'svc:Hiring', {
         version: 1,
         description: '',
-        icon: '',
         active: false,
       });
       expect(tx.catalogService.update).toHaveBeenCalledWith({
-        where: { id: 'svc:Hire' },
+        where: { id: 'svc:Hiring' },
         data: {
           description: null,
-          icon: null,
           active: false,
           version: { increment: 1 },
         },
@@ -130,15 +123,18 @@ describe('CatalogService', () => {
         profiles: [
           {
             id: 'p1',
-            services: ['Hire', 'Design'],
-            skills: { Hire: ['Mason'], Design: ['Interior design'] },
-            pendingChanges: { services: ['Hire'], skills: { Hire: ['Mason'] } },
+            services: ['Hiring', 'Design'],
+            skills: { Hiring: ['Mason'], Design: ['Interior design'] },
+            pendingChanges: {
+              services: ['Hiring'],
+              skills: { Hiring: ['Mason'] },
+            },
           },
           { id: 'p2', services: ['Design'], skills: [], pendingChanges: null },
         ],
       });
       jest.spyOn(service, 'adminNode').mockResolvedValue({} as never);
-      await service.updateService(user.id, 'svc:Hire', {
+      await service.updateService(user.id, 'svc:Hiring', {
         version: 1,
         name: 'Equipment and labour',
       });
@@ -184,7 +180,7 @@ describe('CatalogService', () => {
 
       const parent = fakeCatalog({ profiles });
       jest.spyOn(parent.service, 'adminNode').mockResolvedValue({} as never);
-      await parent.service.updateService(user.id, 'svc:Hire/Professional', {
+      await parent.service.updateService(user.id, 'svc:Hiring/Professional', {
         version: 1,
         name: 'Consultants',
       });
@@ -195,9 +191,9 @@ describe('CatalogService', () => {
   describe('deleteService', () => {
     it('refuses a service with children or requests and deletes an unused leaf', async () => {
       const { service, tx } = fakeCatalog();
-      await expect(service.deleteService(user.id, 'svc:Hire')).rejects.toThrow(
-        'Delete its sub-services first',
-      );
+      await expect(
+        service.deleteService(user.id, 'svc:Hiring'),
+      ).rejects.toThrow('Delete its sub-services first');
       const used = fakeCatalog({ requests: 2 });
       await expect(
         used.service.deleteService(user.id, 'svc:Design/Interior design'),
@@ -294,25 +290,25 @@ describe('CatalogService', () => {
     it('returns the limit and the full tree with usage counts', async () => {
       const { service, prisma, catalog } = fakeCatalog({
         profiles: [
-          { services: ['Hire'], skills: { Hire: ['Mason'] } },
+          { services: ['Hiring'], skills: { Hiring: ['Mason'] } },
           {
-            services: ['Hire', 'Design'],
-            skills: { Hire: ['Excavator'], Design: ['Interior design'] },
+            services: ['Hiring', 'Design'],
+            skills: { Hiring: ['Excavator'], Design: ['Interior design'] },
           },
         ],
       });
       catalog.byId.get('svc:Design/Interior design')!.active = false;
       prisma.serviceRequest.groupBy
         .mockResolvedValueOnce([
-          { serviceId: 'svc:Hire/Vocational worker', _count: { _all: 2 } },
-          { serviceId: 'svc:Hire/Heavy equipment', _count: { _all: 1 } },
+          { serviceId: 'svc:Hiring/Vocational worker', _count: { _all: 2 } },
+          { serviceId: 'svc:Hiring/Heavy equipment', _count: { _all: 1 } },
         ] as never)
         .mockResolvedValueOnce([
-          { serviceRootId: 'svc:Hire', _count: { _all: 4 } },
+          { serviceRootId: 'svc:Hiring', _count: { _all: 4 } },
         ] as never);
       const result = await service.adminCatalog(user.id);
-      expect(result.maxDepth).toBe(2);
-      const hire = result.services.find(({ name }) => name === 'Hire')!;
+      expect(result.maxDepth).toBe(3);
+      const hire = result.services.find(({ name }) => name === 'Hiring')!;
       expect(hire.usage).toEqual({ requests: 7, providers: 2 });
       const vocational = hire.children.find(
         ({ name }) => name === 'Vocational worker',
@@ -322,33 +318,33 @@ describe('CatalogService', () => {
       const design = result.services.find(({ name }) => name === 'Design')!;
       expect(design.children.some(({ active }) => !active)).toBe(true);
       expect(design.usage.providers).toBe(1);
-      expect(seededCatalog().roots).toHaveLength(6);
+      expect(seededCatalog().roots).toHaveLength(5);
     });
 
     it('counts providers by stored ids, so renamed nodes and options still count', async () => {
-      const excavator = 'svc:Hire/Heavy equipment:trade:Excavator';
+      const excavator = 'svc:Hiring/Heavy equipment:trade:Excavator';
       const { service, catalog } = fakeCatalog({
         profiles: [
           {
             services: ['Stale name'],
             skills: { 'Stale name': ['Stale skill'] },
-            serviceIds: ['svc:Hire'],
-            skillIds: { 'svc:Hire': [excavator] },
+            serviceIds: ['svc:Hiring'],
+            skillIds: { 'svc:Hiring': [excavator] },
           },
           {
-            services: ['Hire'],
-            skills: { Hire: ['Excavator'] },
+            services: ['Hiring'],
+            skills: { Hiring: ['Excavator'] },
             serviceIds: ['svc:Design'],
             skillIds: { 'svc:Design': ['svc:Design/Structural plan'] },
           },
         ],
       });
-      catalog.byId.get('svc:Hire')!.name = 'Hire and rental';
+      catalog.byId.get('svc:Hiring')!.name = 'Hire and rental';
       catalog.byId.get(
-        'svc:Hire/Heavy equipment',
+        'svc:Hiring/Heavy equipment',
       )!.questions[0].options[0].label = 'Excavator (20t)';
       const result = await service.adminCatalog(user.id);
-      const hire = result.services.find(({ id }) => id === 'svc:Hire')!;
+      const hire = result.services.find(({ id }) => id === 'svc:Hiring')!;
       expect(hire.usage.providers).toBe(1);
       expect(
         hire.children.map(({ name, usage }) => [name, usage.providers]),

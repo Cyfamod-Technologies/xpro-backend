@@ -6,7 +6,9 @@ import { requirePermission } from '../platform/actor/actor.guards';
 import type { ActorContext } from '../platform/actor/actor.types';
 import { AppError } from '../platform/errors/app-error';
 import { IdempotencyService } from '../platform/idempotency/idempotency.service';
+import { claimGroupSiblings } from './sibling-claim';
 import { canOwnRequests } from '../staff/staff-permissions';
+import { ApprovalsHooks } from './approvals.hooks';
 import { RequestCommandRunner, type CommandContext } from './command-runner';
 import type {
   RequestHandoffDto,
@@ -36,6 +38,7 @@ export class OwnershipService {
     private readonly actors: ActorService,
     private readonly runner: RequestCommandRunner,
     private readonly idempotency: IdempotencyService,
+    private readonly approvalsHooks: ApprovalsHooks,
   ) {}
 
   async claim(
@@ -83,6 +86,16 @@ export class OwnershipService {
             after: { staffOwnerId: user.id },
           },
         });
+        if (row.groupId)
+          await claimGroupSiblings(ctx.tx, this.approvalsHooks, {
+            groupId: row.groupId,
+            trigger: { id: row.id, number: row.number },
+            staffId: user.id,
+            actorType: ctx.actor.kind,
+            now: ctx.now,
+            action: 'request.claimed',
+            command: 'request.claim',
+          });
       },
     );
   }
@@ -304,6 +317,8 @@ async function requestRow(tx: Prisma.TransactionClient, id: string) {
     where: { id },
     select: {
       id: true,
+      number: true,
+      groupId: true,
       status: true,
       staffOwnerId: true,
       ownershipVersion: true,

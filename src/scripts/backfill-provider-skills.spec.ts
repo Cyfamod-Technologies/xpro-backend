@@ -1,12 +1,12 @@
 import { seededCatalog } from '../platform/catalog/catalog.testkit';
 import { backfillSkills, type ProfileSkills } from './backfill-provider-skills';
 
-const EXCAVATOR = 'svc:Hire/Heavy equipment:trade:Excavator';
-const MASON = 'svc:Hire/Vocational worker:trade:Mason';
+const EXCAVATOR = 'svc:Hiring/Heavy equipment:trade:Excavator';
+const MASON = 'svc:Hiring/Vocational worker:trade:Mason';
 
 const profile = (over: Partial<ProfileSkills> = {}): ProfileSkills => ({
-  services: ['Hire', 'Design'],
-  skills: { Hire: ['Excavator', 'Mason'], Design: ['Interior design'] },
+  services: ['Hiring', 'Design'],
+  skills: { Hiring: ['Excavator', 'Mason'], Design: ['Interior design'] },
   serviceIds: null,
   skillIds: null,
   pendingChanges: null,
@@ -18,9 +18,9 @@ describe('backfillSkills', () => {
 
   it('maps the live name columns to ids', () => {
     expect(backfillSkills(catalog, profile())).toEqual({
-      serviceIds: ['svc:Hire', 'svc:Design'],
+      serviceIds: ['svc:Hiring', 'svc:Design'],
       skillIds: {
-        'svc:Hire': [EXCAVATOR, MASON],
+        'svc:Hiring': [EXCAVATOR, MASON],
         'svc:Design': ['svc:Design/Interior design'],
       },
       pendingChanges: null,
@@ -34,28 +34,28 @@ describe('backfillSkills', () => {
       profile({
         pendingChanges: {
           trade: 'Builder',
-          services: ['Hire'],
-          skills: { Hire: ['Excavator'] },
+          services: ['Hiring'],
+          skills: { Hiring: ['Excavator'] },
           submittedAt: 'earlier',
         },
       }),
     );
     expect(result?.pendingChanges).toEqual({
       trade: 'Builder',
-      services: ['Hire'],
-      skills: { Hire: ['Excavator'] },
+      services: ['Hiring'],
+      skills: { Hiring: ['Excavator'] },
       submittedAt: 'earlier',
-      serviceIds: ['svc:Hire'],
-      skillIds: { 'svc:Hire': [EXCAVATOR] },
+      serviceIds: ['svc:Hiring'],
+      skillIds: { 'svc:Hiring': [EXCAVATOR] },
     });
   });
 
   it('leaves pendingChanges that already carry ids, or are not name-shaped, alone', () => {
     const withIds = {
-      services: ['Hire'],
-      skills: { Hire: [] },
-      serviceIds: ['svc:Hire'],
-      skillIds: { 'svc:Hire': [] },
+      services: ['Hiring'],
+      skills: { Hiring: [] },
+      serviceIds: ['svc:Hiring'],
+      skillIds: { 'svc:Hiring': [] },
     };
     expect(
       backfillSkills(catalog, profile({ pendingChanges: withIds }))
@@ -71,18 +71,18 @@ describe('backfillSkills', () => {
     const result = backfillSkills(
       catalog,
       profile({
-        services: ['Hire', 'Gardening'],
-        skills: { Hire: ['Excavator', 'Wizard'] },
+        services: ['Hiring', 'Gardening'],
+        skills: { Hiring: ['Excavator', 'Wizard'] },
         pendingChanges: {
           services: ['Design'],
           skills: { Design: ['Moon plan'] },
         },
       }),
     );
-    expect(result?.serviceIds).toEqual(['svc:Hire']);
-    expect(result?.skillIds).toEqual({ 'svc:Hire': [EXCAVATOR] });
+    expect(result?.serviceIds).toEqual(['svc:Hiring']);
+    expect(result?.skillIds).toEqual({ 'svc:Hiring': [EXCAVATOR] });
     expect(result?.unmatched).toEqual([
-      'Hire › Wizard',
+      'Hiring › Wizard',
       'Gardening',
       'Design › Moon plan',
     ]);
@@ -104,7 +104,7 @@ describe('backfillSkills', () => {
 
   it('treats a profile with only one of the two columns as not yet backfilled', () => {
     expect(
-      backfillSkills(catalog, profile({ serviceIds: ['svc:Hire'] })),
+      backfillSkills(catalog, profile({ serviceIds: ['svc:Hiring'] })),
     ).not.toBeNull();
   });
 

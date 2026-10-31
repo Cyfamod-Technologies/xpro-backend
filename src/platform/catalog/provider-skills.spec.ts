@@ -9,7 +9,7 @@ import {
   skillEntries,
 } from './provider-skills';
 
-const EXCAVATOR = 'svc:Hire/Heavy equipment:trade:Excavator';
+const EXCAVATOR = 'svc:Hiring/Heavy equipment:trade:Excavator';
 
 describe('skillEntries', () => {
   it('produces exactly the names skillNames does, for every root of the seeded catalog', () => {
@@ -26,12 +26,12 @@ describe('skillEntries', () => {
 
   it('uses option ids for a skill question and node ids for skill leaves', () => {
     const catalog = seededCatalog();
-    const hire = skillEntries(catalog.byId.get('svc:Hire')!);
+    const hire = skillEntries(catalog.byId.get('svc:Hiring')!);
     expect(hire).toHaveLength(Object.values(hireTradeGroups).flat().length);
     expect(hire).toContainEqual({
       id: EXCAVATOR,
       name: 'Excavator',
-      rootId: 'svc:Hire',
+      rootId: 'svc:Hiring',
     });
     expect(skillEntries(catalog.byId.get('svc:Design')!)).toContainEqual({
       id: 'svc:Design/Interior design',
@@ -73,14 +73,14 @@ describe('skillEntries', () => {
     it('skips inactive nodes, questions and options', () => {
       const catalog = seededCatalog();
       catalog.byId.get('svc:Design/Interior design')!.active = false;
-      const heavy = catalog.byId.get('svc:Hire/Heavy equipment')!;
+      const heavy = catalog.byId.get('svc:Hiring/Heavy equipment')!;
       heavy.questions[0].options[0].active = false;
-      catalog.byId.get('svc:Hire/Professional')!.active = false;
+      catalog.byId.get('svc:Hiring/Professional')!.active = false;
 
-      const all = skillEntries(catalog.byId.get('svc:Hire')!).map(
+      const all = skillEntries(catalog.byId.get('svc:Hiring')!).map(
         ({ id }) => id,
       );
-      const active = skillEntries(catalog.byId.get('svc:Hire')!, {
+      const active = skillEntries(catalog.byId.get('svc:Hiring')!, {
         activeOnly: true,
       }).map(({ id }) => id);
       expect(all).toContain(EXCAVATOR);
@@ -128,13 +128,13 @@ describe('skillEntries', () => {
 describe('catalogNames', () => {
   it('names every node and option, inactive ones included', () => {
     const catalog = seededCatalog();
-    catalog.byId.get('svc:Hire/Heavy equipment')!.active = false;
+    catalog.byId.get('svc:Hiring/Heavy equipment')!.active = false;
     catalog.byId.get(
-      'svc:Hire/Heavy equipment',
+      'svc:Hiring/Heavy equipment',
     )!.questions[0].options[0].active = false;
     const names = catalogNames(catalog);
-    expect(names.get('svc:Hire')).toBe('Hire');
-    expect(names.get('svc:Hire/Heavy equipment')).toBe('Heavy equipment');
+    expect(names.get('svc:Hiring')).toBe('Hiring');
+    expect(names.get('svc:Hiring/Heavy equipment')).toBe('Heavy equipment');
     expect(names.get(EXCAVATOR)).toBe('Excavator');
     expect(names.get('delivery:Design only')).toBe('Design only');
   });
@@ -145,30 +145,30 @@ describe('idsFromNames and namesFromIds', () => {
 
   it('round-trips names through ids', () => {
     const skills = {
-      Hire: ['Excavator', 'Mason'],
+      Hiring: ['Excavator', 'Mason'],
       Design: ['Interior design'],
     };
-    const ids = idsFromNames(catalog, ['Hire', 'Design'], skills);
+    const ids = idsFromNames(catalog, ['Hiring', 'Design'], skills);
     expect(ids).toEqual({
-      serviceIds: ['svc:Hire', 'svc:Design'],
+      serviceIds: ['svc:Hiring', 'svc:Design'],
       skillIds: {
-        'svc:Hire': [EXCAVATOR, 'svc:Hire/Vocational worker:trade:Mason'],
+        'svc:Hiring': [EXCAVATOR, 'svc:Hiring/Vocational worker:trade:Mason'],
         'svc:Design': ['svc:Design/Interior design'],
       },
       unmatched: [],
     });
     expect(namesFromIds(catalog, ids.serviceIds, ids.skillIds)).toEqual({
-      services: ['Hire', 'Design'],
+      services: ['Hiring', 'Design'],
       skills,
     });
   });
 
   it('matches case-insensitively and trimmed after an exact match fails', () => {
     expect(
-      idsFromNames(catalog, [' hire '], { ' hire ': [' excavator '] }),
+      idsFromNames(catalog, [' hiring '], { ' hiring ': [' excavator '] }),
     ).toMatchObject({
-      serviceIds: ['svc:Hire'],
-      skillIds: { 'svc:Hire': [EXCAVATOR] },
+      serviceIds: ['svc:Hiring'],
+      skillIds: { 'svc:Hiring': [EXCAVATOR] },
       unmatched: [],
     });
   });
@@ -183,14 +183,14 @@ describe('idsFromNames and namesFromIds', () => {
 
   it('reports names that match nothing and still returns the ids that matched', () => {
     expect(
-      idsFromNames(catalog, ['Hire', 'Plumbing'], {
-        Hire: ['Excavator', 'Wizard'],
+      idsFromNames(catalog, ['Hiring', 'Plumbing'], {
+        Hiring: ['Excavator', 'Wizard'],
         Plumbing: ['Pipes'],
       }),
     ).toEqual({
-      serviceIds: ['svc:Hire'],
-      skillIds: { 'svc:Hire': [EXCAVATOR] },
-      unmatched: ['Hire › Wizard', 'Plumbing'],
+      serviceIds: ['svc:Hiring'],
+      skillIds: { 'svc:Hiring': [EXCAVATOR] },
+      unmatched: ['Hiring › Wizard', 'Plumbing'],
     });
   });
 
@@ -243,16 +243,16 @@ describe('idsFromNames and namesFromIds', () => {
 
   it('drops ids the catalog no longer knows, and shows the current names', () => {
     const tree = seededCatalog();
-    tree.byId.get('svc:Hire/Heavy equipment')!.questions[0].options[0].label =
+    tree.byId.get('svc:Hiring/Heavy equipment')!.questions[0].options[0].label =
       'Excavator (20t)';
     expect(
-      namesFromIds(tree, ['svc:Hire', 'gone'], {
-        'svc:Hire': [EXCAVATOR, 'deleted-option'],
+      namesFromIds(tree, ['svc:Hiring', 'gone'], {
+        'svc:Hiring': [EXCAVATOR, 'deleted-option'],
         gone: ['x'],
       }),
     ).toEqual({
-      services: ['Hire'],
-      skills: { Hire: ['Excavator (20t)'] },
+      services: ['Hiring'],
+      skills: { Hiring: ['Excavator (20t)'] },
     });
   });
 });
@@ -263,14 +263,14 @@ describe('profileSkillIds', () => {
   it('returns the stored ids when the profile has them, whatever its names say', () => {
     expect(
       profileSkillIds(catalog, {
-        serviceIds: ['svc:Hire'],
-        skillIds: { 'svc:Hire': [EXCAVATOR] },
+        serviceIds: ['svc:Hiring'],
+        skillIds: { 'svc:Hiring': [EXCAVATOR] },
         services: ['Design'],
         skills: { Design: ['Interior design'] },
       }),
     ).toEqual({
-      serviceIds: ['svc:Hire'],
-      skillIds: { 'svc:Hire': [EXCAVATOR] },
+      serviceIds: ['svc:Hiring'],
+      skillIds: { 'svc:Hiring': [EXCAVATOR] },
     });
   });
 
@@ -290,7 +290,7 @@ describe('profileSkillIds', () => {
     expect(
       profileSkillIds(catalog, {
         ...names,
-        serviceIds: ['svc:Hire'],
+        serviceIds: ['svc:Hiring'],
         skillIds: null,
       }),
     ).toEqual(expected);

@@ -122,7 +122,6 @@ export class CatalogService {
           parentId: parent?.id ?? null,
           name,
           description: dto.description?.trim() || null,
-          icon: dto.icon?.trim() || null,
           depth,
           sortOrder: Math.max(-1, ...siblings.map((s) => s.sortOrder)) + 1,
           requiresStartDate: dto.requiresStartDate ?? false,
@@ -151,11 +150,11 @@ export class CatalogService {
           data.name = name;
         }
       }
-      for (const field of ['description', 'icon'] as const) {
-        const value = dto[field];
-        if (value !== undefined && (value.trim() || null) !== node[field])
-          data[field] = value.trim() || null;
-      }
+      if (
+        dto.description !== undefined &&
+        (dto.description.trim() || null) !== node.description
+      )
+        data.description = dto.description.trim() || null;
       for (const field of ['active', 'requiresStartDate'] as const) {
         const value = dto[field];
         if (value !== undefined && value !== node[field]) data[field] = value;

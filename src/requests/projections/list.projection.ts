@@ -8,7 +8,10 @@ import type { SettingsSnapshot } from '../domain/guards/types';
 export type ListProjectionRow = Pick<
   LoadedRequest,
   'version' | 'status' | 'createdAt' | 'updatedAt' | 'title' | 'service'
->;
+> &
+  Partial<Pick<LoadedRequest, 'groupId' | 'groupPosition'>> & {
+    group?: { ref: string } | null;
+  };
 
 export function listProjection(
   row: ListProjectionRow,
@@ -35,5 +38,12 @@ export function listProjection(
     ...commonProjection({ row, snapshot, actor, role, now, settings }),
     ...(showTitle ? { title: row.title } : {}),
     service: row.service,
+    ...(role === 'provider'
+      ? {}
+      : {
+          groupId: row.groupId ?? null,
+          groupRef: row.group?.ref ?? null,
+          groupPosition: row.groupPosition ?? null,
+        }),
   };
 }

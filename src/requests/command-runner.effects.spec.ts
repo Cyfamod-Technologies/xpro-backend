@@ -22,7 +22,10 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
   throw new Error('Expected the promise to reject.');
 }
 
-function setup(snapshotOverrides: Record<string, unknown> = {}) {
+function setup(
+  snapshotOverrides: Record<string, unknown> = {},
+  rowOverrides: Record<string, unknown> = {},
+) {
   const calls: string[] = [];
   const row = {
     id: 'request-1',
@@ -31,6 +34,7 @@ function setup(snapshotOverrides: Record<string, unknown> = {}) {
     status: 'submitted',
     staffOwnerId: null,
     ownershipVersion: 1,
+    ...rowOverrides,
   };
   const snapshot = { ownerId: 'customer-1', ...snapshotOverrides };
   const tx = {
@@ -594,12 +598,15 @@ describe('RequestCommandRunner auto-claim (02 §6.5)', () => {
     },
   };
 
-  function withClaim() {
-    const kit = setup();
+  function withClaim(rowOverrides: Record<string, unknown> = {}) {
+    const kit = setup({}, rowOverrides);
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
-    Object.assign(kit.tx.serviceRequest, { updateMany });
+    const findMany = jest.fn();
+    const queryRaw = jest.fn().mockResolvedValue([]);
+    Object.assign(kit.tx.serviceRequest, { updateMany, findMany });
     Object.assign(kit.tx.auditLog, { create: jest.fn() });
-    return { ...kit, updateMany };
+    Object.assign(kit.tx, { $queryRaw: queryRaw });
+    return { ...kit, updateMany, findMany, queryRaw };
   }
 
   it('claims for the actor and closes the unclaimed item', async () => {
@@ -638,5 +645,84 @@ describe('RequestCommandRunner auto-claim (02 §6.5)', () => {
     } as never);
     expect(approve.updateMany).not.toHaveBeenCalled();
     expect(approve.calls).not.toContain('close:unclaimed:request-1');
+  });
+
+  it('claims the unowned open siblings of a grouped request, with request.auto_claimed rows (bundles)', async () => {
+    const kit = withClaim({ number: 5, groupId: 'group-1' });
+    kit.queryRaw.mockResolvedValue([
+      { id: 'sibling-1', ownershipVersion: 4 },
+      { id: 'sibling-2', ownershipVersion: 1 },
+    ]);
+
+    await kit.run(() => Promise.resolve(), {
+      actor: operations,
+      command: 'request.review',
+      autoClaim: true,
+    } as never);
+
+    expect(kit.queryRaw).toHaveBeenCalledTimes(1);
+    expect(kit.updateMany).toHaveBeenCalledTimes(3);
+    expect(kit.calls).toEqual(
+      expect.arrayContaining([
+        'close:unclaimed:request-1',
+        'close:unclaimed:sibling-1',
+        'close:unclaimed:sibling-2',
+      ]),
+    );
+    const audit = (kit.tx.auditLog as unknown as { create: jest.Mock }).create;
+    const rows = audit.mock.calls.map(
+      ([arg]) =>
+        (
+          arg as {
+            data: {
+              action: string;
+              entityId: string;
+              metadata: { note?: string };
+            };
+          }
+        ).data,
+    );
+    expect(rows.map(({ action, entityId }) => [action, entityId])).toEqual([
+      ['request.auto_claimed', 'request-1'],
+      ['request.auto_claimed', 'sibling-1'],
+      ['request.auto_claimed', 'sibling-2'],
+    ]);
+    expect(rows[1].metadata.note).toBe('with XPR-00005 in the same project');
+    expect(rows[0].metadata.note).toBeUndefined();
+  });
+
+  it('touches no sibling when the request has no group or the command does not auto-claim', async () => {
+    const ungrouped = withClaim({ number: 5, groupId: null });
+    await ungrouped.run(() => Promise.resolve(), {
+      actor: operations,
+      command: 'request.review',
+      autoClaim: true,
+    } as never);
+    expect(ungrouped.queryRaw).not.toHaveBeenCalled();
+    expect(ungrouped.updateMany).toHaveBeenCalledTimes(1);
+
+    const message = withClaim({ number: 5, groupId: 'group-1' });
+    await message.run(() => Promise.resolve(), {
+      actor: operations,
+      command: 'message.send',
+      autoClaim: true,
+    } as never);
+    expect(message.queryRaw).not.toHaveBeenCalled();
+    expect(message.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not claim siblings when the actor is already the owner or cannot auto-claim', async () => {
+    const owned = withClaim({
+      number: 5,
+      groupId: 'group-1',
+      staffOwnerId: 'staff-2',
+    });
+    await owned.run(() => Promise.resolve(), {
+      actor: operations,
+      command: 'request.review',
+      autoClaim: true,
+    } as never);
+    expect(owned.queryRaw).not.toHaveBeenCalled();
+    expect(owned.updateMany).not.toHaveBeenCalled();
   });
 });

@@ -129,7 +129,7 @@ describe('pricing and quotes (integration)', () => {
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for pricing.',
-        details: { designType: 'Architectural plan' },
+        details: { designType: 'Architectural Designs' },
         status,
         intakeState: 'approved',
       },
@@ -146,7 +146,7 @@ describe('pricing and quotes (integration)', () => {
         services: ['Design'],
         serviceAreas: [],
         serviceAreaIds: [districtId],
-        skills: { Design: ['Architectural plan'] },
+        skills: { Design: ['Architectural Designs'] },
         workingHours: {
           mon: everyDay,
           tue: everyDay,

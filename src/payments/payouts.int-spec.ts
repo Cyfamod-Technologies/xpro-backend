@@ -183,7 +183,7 @@ describe('payouts (integration)', () => {
         city: 'Test city',
         services: ['Design'],
         serviceAreas: [],
-        skills: { Design: ['Architectural plan'] },
+        skills: { Design: ['Architectural Designs'] },
         workingHours: {},
         bio: 'Integration test provider.',
         verification: 'approved',

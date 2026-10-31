@@ -146,7 +146,7 @@ const areaCheck: Check = (provider, request) =>
 const dayCheck: Check = (provider, request) => {
   const start = request.effectiveStartDate;
   if (!start) return null;
-  const end = request.service === 'Hire' ? request.effectiveEndDate : null;
+  const end = request.service === 'Hiring' ? request.effectiveEndDate : null;
   const availability = dayAvailability(
     provider.workingHours,
     provider.timeOff,

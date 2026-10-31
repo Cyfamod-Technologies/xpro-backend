@@ -8,8 +8,8 @@ import type { CatalogIndex } from '../platform/catalog/catalog.types';
 import type { ProviderProfileSubmissionDto } from './dto/provider.dto';
 import { ProvidersService } from './providers.service';
 
-const EXCAVATOR = 'svc:Hire/Heavy equipment:trade:Excavator';
-const MASON = 'svc:Hire/Vocational worker:trade:Mason';
+const EXCAVATOR = 'svc:Hiring/Heavy equipment:trade:Excavator';
+const MASON = 'svc:Hiring/Vocational worker:trade:Mason';
 const INTERIOR = 'svc:Design/Interior design';
 
 const file = (id: string, type = 'image/png') => ({
@@ -286,22 +286,22 @@ describe('ProvidersService', () => {
       await service.submit(
         'user-1',
         submission({
-          serviceIds: ['svc:Hire', 'svc:Design', 'svc:Hire'],
+          serviceIds: ['svc:Hiring', 'svc:Design', 'svc:Hiring'],
           skillIds: {
-            'svc:Hire': [EXCAVATOR, MASON, EXCAVATOR],
+            'svc:Hiring': [EXCAVATOR, MASON, EXCAVATOR],
             'svc:Design': [INTERIOR],
           },
         }),
       );
       const data = created(tx);
-      expect(data.serviceIds).toEqual(['svc:Hire', 'svc:Design']);
+      expect(data.serviceIds).toEqual(['svc:Hiring', 'svc:Design']);
       expect(data.skillIds).toEqual({
-        'svc:Hire': [EXCAVATOR, MASON],
+        'svc:Hiring': [EXCAVATOR, MASON],
         'svc:Design': [INTERIOR],
       });
-      expect(data.services).toEqual(['Hire', 'Design']);
+      expect(data.services).toEqual(['Hiring', 'Design']);
       expect(data.skills).toEqual({
-        Hire: ['Excavator', 'Mason'],
+        Hiring: ['Excavator', 'Mason'],
         Design: ['Interior design'],
       });
       const { update } = upserted(tx);
@@ -315,7 +315,7 @@ describe('ProvidersService', () => {
         'user-1',
         submission({
           serviceIds: ['svc:Design'],
-          skillIds: { 'svc:Design': [INTERIOR], 'svc:Hire': [EXCAVATOR] },
+          skillIds: { 'svc:Design': [INTERIOR], 'svc:Hiring': [EXCAVATOR] },
         }),
       );
       expect(created(tx).skillIds).toEqual({ 'svc:Design': [INTERIOR] });
@@ -329,7 +329,7 @@ describe('ProvidersService', () => {
       ],
       [
         'a service that is not a top-level service',
-        { serviceIds: ['svc:Hire/Professional'], skillIds: {} },
+        { serviceIds: ['svc:Hiring/Professional'], skillIds: {} },
         'Choose services from the list.',
       ],
       [
@@ -375,7 +375,7 @@ describe('ProvidersService', () => {
       const catalog = seededCatalog();
       catalog.byId.get('svc:Design')!.active = false;
       catalog.byId.get(
-        'svc:Hire/Heavy equipment',
+        'svc:Hiring/Heavy equipment',
       )!.questions[0].options[0].active = false;
       const { service } = setup({ catalog });
       await expect(
@@ -388,11 +388,11 @@ describe('ProvidersService', () => {
         service.submit(
           'user-1',
           submission({
-            serviceIds: ['svc:Hire'],
-            skillIds: { 'svc:Hire': [EXCAVATOR] },
+            serviceIds: ['svc:Hiring'],
+            skillIds: { 'svc:Hiring': [EXCAVATOR] },
           }),
         ),
-      ).rejects.toThrow('Choose Hire skills from the list.');
+      ).rejects.toThrow('Choose Hiring skills from the list.');
     });
 
     it('needs no skill for a service that has none to choose', async () => {
@@ -415,17 +415,17 @@ describe('ProvidersService', () => {
       await service.submit(
         'user-1',
         submission({
-          services: ['Hire', 'Design'],
-          skills: { Hire: ['Excavator'], Design: ['Interior design'] },
+          services: ['Hiring', 'Design'],
+          skills: { Hiring: ['Excavator'], Design: ['Interior design'] },
         }),
       );
       const data = created(tx);
-      expect(data.serviceIds).toEqual(['svc:Hire', 'svc:Design']);
+      expect(data.serviceIds).toEqual(['svc:Hiring', 'svc:Design']);
       expect(data.skillIds).toEqual({
-        'svc:Hire': [EXCAVATOR],
+        'svc:Hiring': [EXCAVATOR],
         'svc:Design': [INTERIOR],
       });
-      expect(data.services).toEqual(['Hire', 'Design']);
+      expect(data.services).toEqual(['Hiring', 'Design']);
     });
 
     it('prefers ids when both are sent', async () => {
@@ -433,8 +433,8 @@ describe('ProvidersService', () => {
       await service.submit(
         'user-1',
         submission({
-          services: ['Hire'],
-          skills: { Hire: ['Excavator'] },
+          services: ['Hiring'],
+          skills: { Hiring: ['Excavator'] },
           serviceIds: ['svc:Design'],
           skillIds: { 'svc:Design': [INTERIOR] },
         }),
@@ -450,8 +450,8 @@ describe('ProvidersService', () => {
       ],
       [
         'an unknown skill name',
-        { services: ['Hire'], skills: { Hire: ['Wizard'] } },
-        'Choose Hire skills from the list.',
+        { services: ['Hiring'], skills: { Hiring: ['Wizard'] } },
+        'Choose Hiring skills from the list.',
       ],
       [
         'a skill that belongs to another service',
@@ -460,8 +460,8 @@ describe('ProvidersService', () => {
       ],
       [
         'no skills for a service that has skills',
-        { services: ['Hire'], skills: {} },
-        'Choose at least one skill for Hire.',
+        { services: ['Hiring'], skills: {} },
+        'Choose at least one skill for Hiring.',
       ],
       ['no services at all', {}, 'Choose at least one service.'],
     ])('rejects %s', async (_name, input, message) => {
@@ -480,8 +480,8 @@ describe('ProvidersService', () => {
       await service.submit(
         'user-1',
         submission({
-          serviceIds: ['svc:Hire'],
-          skillIds: { 'svc:Hire': [EXCAVATOR] },
+          serviceIds: ['svc:Hiring'],
+          skillIds: { 'svc:Hiring': [EXCAVATOR] },
         }),
       );
       const data = (
@@ -493,10 +493,10 @@ describe('ProvidersService', () => {
         }
       ).data;
       expect(data.pendingChanges).toMatchObject({
-        serviceIds: ['svc:Hire'],
-        skillIds: { 'svc:Hire': [EXCAVATOR] },
-        services: ['Hire'],
-        skills: { Hire: ['Excavator'] },
+        serviceIds: ['svc:Hiring'],
+        skillIds: { 'svc:Hiring': [EXCAVATOR] },
+        services: ['Hiring'],
+        skills: { Hiring: ['Excavator'] },
       });
       expect(data).not.toHaveProperty('serviceIds');
       expect(data).not.toHaveProperty('skillIds');
@@ -536,21 +536,21 @@ describe('ProvidersService', () => {
 
     it('copies the ids next to the names when it approves', async () => {
       const data = await reviewer({
-        services: ['Hire'],
-        serviceIds: ['svc:Hire'],
-        skills: { Hire: ['Excavator'] },
-        skillIds: { 'svc:Hire': [EXCAVATOR] },
+        services: ['Hiring'],
+        serviceIds: ['svc:Hiring'],
+        skills: { Hiring: ['Excavator'] },
+        skillIds: { 'svc:Hiring': [EXCAVATOR] },
       });
-      expect(data.serviceIds).toEqual(['svc:Hire']);
-      expect(data.skillIds).toEqual({ 'svc:Hire': [EXCAVATOR] });
-      expect(data.services).toEqual(['Hire']);
+      expect(data.serviceIds).toEqual(['svc:Hiring']);
+      expect(data.skillIds).toEqual({ 'svc:Hiring': [EXCAVATOR] });
+      expect(data.services).toEqual(['Hiring']);
       expect(data.pendingChanges).toBe(Prisma.DbNull);
     });
 
     it('clears the live ids when the change predates them, so readers use its names', async () => {
       const data = await reviewer({
-        services: ['Hire'],
-        skills: { Hire: ['Excavator'] },
+        services: ['Hiring'],
+        skills: { Hiring: ['Excavator'] },
       });
       expect(data.serviceIds).toBe(Prisma.DbNull);
       expect(data.skillIds).toBe(Prisma.DbNull);
@@ -561,23 +561,23 @@ describe('ProvidersService', () => {
     it('returns the current names for stored ids, so a rename shows at once', async () => {
       const catalog = seededCatalog();
       catalog.byId.get(
-        'svc:Hire/Heavy equipment',
+        'svc:Hiring/Heavy equipment',
       )!.questions[0].options[0].label = 'Excavator (20t)';
-      catalog.byId.get('svc:Hire')!.name = 'Hire and rental';
+      catalog.byId.get('svc:Hiring')!.name = 'Hire and rental';
       const row = {
         id: 'profile-1',
         userId: 'user-1',
-        services: ['Hire'],
-        serviceIds: ['svc:Hire'],
-        skills: { Hire: ['Excavator'] },
-        skillIds: { 'svc:Hire': [EXCAVATOR] },
+        services: ['Hiring'],
+        serviceIds: ['svc:Hiring'],
+        skills: { Hiring: ['Excavator'] },
+        skillIds: { 'svc:Hiring': [EXCAVATOR] },
         pendingChanges: {
           trade: 'Builder',
           submittedAt: 'earlier',
-          services: ['Hire'],
-          serviceIds: ['svc:Hire'],
-          skills: { Hire: ['Excavator', 'Mason'] },
-          skillIds: { 'svc:Hire': [EXCAVATOR, MASON] },
+          services: ['Hiring'],
+          serviceIds: ['svc:Hiring'],
+          skills: { Hiring: ['Excavator', 'Mason'] },
+          skillIds: { 'svc:Hiring': [EXCAVATOR, MASON] },
         },
         bankAccounts: [],
         reviews: [],
@@ -589,14 +589,14 @@ describe('ProvidersService', () => {
       >;
       expect(profile).toMatchObject({
         services: ['Hire and rental'],
-        serviceIds: ['svc:Hire'],
+        serviceIds: ['svc:Hiring'],
         skills: { 'Hire and rental': ['Excavator (20t)'] },
-        skillIds: { 'svc:Hire': [EXCAVATOR] },
+        skillIds: { 'svc:Hiring': [EXCAVATOR] },
         pendingChanges: {
           submittedAt: 'earlier',
           services: ['Hire and rental'],
           skills: { 'Hire and rental': ['Excavator (20t)', 'Mason'] },
-          skillIds: { 'svc:Hire': [EXCAVATOR, MASON] },
+          skillIds: { 'svc:Hiring': [EXCAVATOR, MASON] },
         },
       });
     });
@@ -605,9 +605,9 @@ describe('ProvidersService', () => {
       const row = {
         id: 'profile-1',
         userId: 'user-1',
-        services: ['Hire'],
+        services: ['Hiring'],
         serviceIds: null,
-        skills: { Hire: ['Excavator'] },
+        skills: { Hiring: ['Excavator'] },
         skillIds: null,
         pendingChanges: null,
         bankAccounts: [],
@@ -619,10 +619,10 @@ describe('ProvidersService', () => {
         unknown
       >;
       expect(profile).toMatchObject({
-        serviceIds: ['svc:Hire'],
-        skillIds: { 'svc:Hire': [EXCAVATOR] },
-        services: ['Hire'],
-        skills: { Hire: ['Excavator'] },
+        serviceIds: ['svc:Hiring'],
+        skillIds: { 'svc:Hiring': [EXCAVATOR] },
+        services: ['Hiring'],
+        skills: { Hiring: ['Excavator'] },
       });
     });
   });

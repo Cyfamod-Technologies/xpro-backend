@@ -439,15 +439,15 @@ describe('dispatch.cascade offers', () => {
 
   it('uses the effective start date for E7', async () => {
     const tx = designTx({
-      service: 'Waste management',
+      service: 'Waste Management',
       details: { wasteType: 'Commercial', pickupDate: '2026-11-01' },
       startDate: '2026-11-03',
     });
     // 2026-11-01 is a Sunday; the provider has no Sunday hours.
     const provider = dispatchProvider('p1', {
-      serviceIds: ['svc:Waste management'],
+      serviceIds: ['svc:Waste Management'],
       skillIds: {
-        'svc:Waste management': ['svc:Waste management/Commercial'],
+        'svc:Waste Management': ['svc:Waste Management/Commercial'],
       },
     });
     const { fire, effects } = setup({ tx, settings, providers: [provider] });

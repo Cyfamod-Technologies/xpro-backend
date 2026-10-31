@@ -29,6 +29,10 @@ import {
 } from './request-list.loader';
 import { listOrderBy, ownerFilter } from './request-list-query';
 import { resolveRequestId } from './request-ref';
+import { resolveRequestGroup } from './request-group-ref';
+import { loadGroupView } from './request-group-view';
+import { loadCustomerRequestLimit } from './open-request-limit';
+import { servicesLimit } from './domain/request-group';
 import { RequestSnapshotLoader } from './snapshot.loader';
 import { customerProjection } from './projections/customer.projection';
 import { listProjection } from './projections/list.projection';
@@ -55,6 +59,11 @@ export class RequestsReadService {
     private readonly listLoader: RequestListLoader,
     private readonly settingsService: SettingsService,
   ) {}
+
+  async publicConfig() {
+    const settings = await this.settingsMap();
+    return { maxServicesPerSubmission: servicesLimit(settings) };
+  }
 
   async list(user: RequestUser, query: RequestListQueryDto) {
     const actor = await this.actors.resolve(user.id);
@@ -101,10 +110,15 @@ export class RequestsReadService {
             : [{ number: parseRequestId(query.q)! }]),
         ],
       });
-    const where: Prisma.ServiceRequestWhereInput = { AND: filters };
-    const orderBy = listOrderBy(query.sort);
     const page = query.page ?? 1;
     const limit = query.itemsPerPage ?? 20;
+    if (query.group && !providerScoped) {
+      const group = await resolveRequestGroup(this.prisma, query.group);
+      if (!group) return toPaginatedResult([], 0, page, limit);
+      filters.push({ groupId: group.id });
+    }
+    const where: Prisma.ServiceRequestWhereInput = { AND: filters };
+    const orderBy = listOrderBy(query.sort);
     // status, service, owner and q are in SQL. The stage inside a status, the
     // next actor and a provider's title search depend on child rows, so those
     // filter a light snapshot of at most one maximum-size page of the
@@ -180,16 +194,24 @@ export class RequestsReadService {
     );
   }
 
-  /** Whether the account owns a request that is still open (not closed, cancelled or rejected). */
+  /** The account's open requests and what it may still start (04 §11.2); the server enforces the limit on create. */
   async pending(user: RequestUser): Promise<PendingRequestResponseDto> {
-    const open = await this.prisma.serviceRequest.findFirst({
-      where: { ownerId: user.id, status: { notIn: [...TERMINAL] } },
-      orderBy: { createdAt: 'desc' },
-      select: { number: true },
-    });
-    return open
-      ? { hasPending: true, requestId: formatRequestId(open.number) }
-      : { hasPending: false };
+    const settings = await this.settingsMap();
+    const [latest, { open, effective: limit }] = await Promise.all([
+      this.prisma.serviceRequest.findFirst({
+        where: { ownerId: user.id, status: { notIn: [...TERMINAL] } },
+        orderBy: { createdAt: 'desc' },
+        select: { number: true },
+      }),
+      loadCustomerRequestLimit(this.prisma, user.id, settings),
+    ]);
+    return {
+      hasPending: open > 0,
+      ...(latest ? { requestId: formatRequestId(latest.number) } : {}),
+      openCount: open,
+      limit,
+      remaining: Math.max(0, limit - open),
+    };
   }
 
   async detail(user: RequestUser, id: string) {
@@ -204,12 +226,7 @@ export class RequestsReadService {
           : actor.platformRoles.includes('provider')
             ? 'provider'
             : 'customer';
-    const settings = Object.fromEntries(
-      (await this.settingsService.snapshot()).map(({ key, value }) => [
-        key,
-        value,
-      ]),
-    );
+    const settings = await this.settingsMap();
     const context: ProjectionContext = {
       ...loaded,
       actor,
@@ -217,9 +234,25 @@ export class RequestsReadService {
       now: new Date(),
       settings,
     };
-    if (role === 'staff') return staffProjection(context);
     if (role === 'provider') return providerProjection(context);
-    return customerProjection(context);
+    const groupView = await loadGroupView(
+      this.prisma,
+      this.listLoader,
+      loaded.row,
+      role,
+      context.now,
+    );
+    if (role === 'staff')
+      return staffProjection({
+        ...context,
+        groupView,
+        customerRequestLimit: await loadCustomerRequestLimit(
+          this.prisma,
+          loaded.row.ownerId,
+          settings,
+        ),
+      });
+    return customerProjection({ ...context, groupView });
   }
 
   async activity(
@@ -265,6 +298,15 @@ export class RequestsReadService {
       total,
       query.page,
       20,
+    );
+  }
+
+  private async settingsMap(): Promise<Record<string, unknown>> {
+    return Object.fromEntries(
+      (await this.settingsService.snapshot()).map(({ key, value }) => [
+        key,
+        value,
+      ]),
     );
   }
 

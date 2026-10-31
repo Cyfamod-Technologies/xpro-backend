@@ -75,6 +75,7 @@ describe('OwnershipService', () => {
       actors as never,
       runner as never,
       idempotency as never,
+      { close: jest.fn() } as never,
     );
 
     await expect(
@@ -124,6 +125,7 @@ describe('OwnershipService', () => {
       { resolve: jest.fn().mockResolvedValue(actor) } as never,
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('hash') } as never,
+      { close: jest.fn() } as never,
     );
 
     await service.release(
@@ -215,6 +217,7 @@ describe('OwnershipService unclaimed deadline (A-20, 02 §6.5-6.7)', () => {
       { resolve: jest.fn().mockResolvedValue(staff) } as never,
       runner as never,
       { hashRequest: jest.fn().mockReturnValue('hash') } as never,
+      { close: jest.fn() } as never,
     );
     return { service, opens, closes };
   }
@@ -260,5 +263,166 @@ describe('OwnershipService unclaimed deadline (A-20, 02 §6.5-6.7)', () => {
     );
 
     expect(closes).toEqual([['unclaimed', 'request-1', 'reassigned']]);
+  });
+});
+
+describe('OwnershipService bundles (02 §6.5)', () => {
+  const staff: ActorContext = {
+    userId: 'ops-1',
+    kind: 'staff',
+    displayName: 'Operations',
+    platformRoles: ['staff'],
+    accountActive: true,
+    staff: {
+      status: 'active',
+      roles: ['operations'],
+      permissions: new Set(['request.claim', 'request.reassign']),
+      canOwn: true,
+      isSuperAdmin: false,
+      permVersion: 1,
+    },
+  };
+  const now = new Date('2026-10-30T12:00:00Z');
+
+  function setup(
+    row: { groupId: string | null; staffOwnerId?: string | null },
+    siblings: Array<{ id: string; ownershipVersion: number }> = [
+      { id: 'sibling-1', ownershipVersion: 2 },
+    ],
+  ) {
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue(siblings),
+      serviceRequest: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'request-1',
+          number: 7,
+          status: 'submitted',
+          staffOwnerId: row.staffOwnerId ?? null,
+          ownershipVersion: 2,
+          groupId: row.groupId,
+        }),
+        findMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: { create: jest.fn() },
+      requestMessage: { create: jest.fn() },
+      staffMember: {
+        findFirst: jest.fn().mockResolvedValue({
+          userId: 'target-1',
+          roles: [{ role: 'operations' }],
+          user: { firstName: 'T', lastName: 'G', name: null, email: 't@x' },
+        }),
+      },
+    };
+    const context = {
+      tx,
+      snap: { id: 'request-1', number: 'XPR-00007', status: 'submitted' },
+      now,
+      audit: jest.fn(),
+      notify: jest.fn(),
+      approvals: { open: jest.fn(), close: jest.fn() },
+    };
+    const runner = {
+      run: jest.fn(
+        async (
+          options: { actor: ActorContext },
+          fn: (value: unknown) => Promise<void>,
+        ) => {
+          await fn({ ...context, actor: options.actor });
+          return { status: 200, body: {}, etag: 'W/"2"' };
+        },
+      ),
+    };
+    const hooks = { close: jest.fn().mockResolvedValue(undefined) };
+    const service = new OwnershipService(
+      { resolve: jest.fn().mockResolvedValue(staff) } as never,
+      runner as never,
+      { hashRequest: jest.fn().mockReturnValue('hash') } as never,
+      hooks as never,
+    );
+    return { service, tx, context, hooks };
+  }
+  const user = { id: 'ops-1' } as never;
+
+  it('claims the unclaimed open siblings in the same transaction, with the XPR id of the claimed request', async () => {
+    const { service, tx, hooks } = setup({ groupId: 'group-1' });
+    await service.claim(user, 'XPR-00007', 1, '/claim');
+    expect(tx.serviceRequest.updateMany).toHaveBeenCalledTimes(2);
+    expect(tx.serviceRequest.updateMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: 'sibling-1' }) as unknown,
+        data: expect.objectContaining({ staffOwnerId: 'ops-1' }) as unknown,
+      }),
+    );
+    expect(hooks.close).toHaveBeenCalledWith(
+      tx,
+      'unclaimed',
+      'sibling-1',
+      now,
+      'claimed',
+    );
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entityId: 'sibling-1',
+        action: 'request.claimed',
+        metadata: expect.objectContaining({
+          note: 'with XPR-00007 in the same project',
+        }) as unknown,
+      }) as unknown,
+    });
+  });
+
+  it('looks for no siblings when the request has no group', async () => {
+    const { service, tx, hooks } = setup({ groupId: null });
+    await service.claim(user, 'XPR-00007', 1, '/claim');
+    expect(tx.serviceRequest.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(tx.serviceRequest.findMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(hooks.close).not.toHaveBeenCalled();
+  });
+
+  it('keeps release, hand-off and reassign on the one request', async () => {
+    const calls = [
+      (service: OwnershipService) =>
+        service.release(
+          user,
+          'XPR-00007',
+          { note: 'Handing back to the queue.', expectedOwnerId: 'ops-1' },
+          1,
+          '/release',
+        ),
+      (service: OwnershipService) =>
+        service.handoff(
+          user,
+          'XPR-00007',
+          { note: 'Please take this.', toStaffId: 'target-1' },
+          1,
+          '/handoff',
+        ),
+      (service: OwnershipService) =>
+        service.reassign(
+          user,
+          'XPR-00007',
+          {
+            staffId: 'target-1',
+            note: 'Please take this.',
+            expectedOwnerId: 'ops-1',
+          },
+          1,
+          '/reassign',
+        ),
+    ];
+    for (const call of calls) {
+      const { service, tx, hooks } = setup({
+        groupId: 'group-1',
+        staffOwnerId: 'ops-1',
+      });
+      await call(service);
+      expect(tx.serviceRequest.updateMany).toHaveBeenCalledTimes(1);
+      expect(tx.serviceRequest.findMany).not.toHaveBeenCalled();
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+      expect(hooks.close).not.toHaveBeenCalled();
+    }
   });
 });
