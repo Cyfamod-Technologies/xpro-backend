@@ -113,8 +113,9 @@ const SEARCH_COLUMNS = [
   Prisma.sql`r.service`,
   Prisma.sql`cs.name`,
   Prisma.sql`csr.name`,
-  Prisma.sql`city.name`,
-  Prisma.sql`district.name`,
+  Prisma.sql`place.name`,
+  Prisma.sql`place_parent.name`,
+  Prisma.sql`place_root.name`,
   Prisma.sql`r.customer_name`,
   Prisma.sql`pp.business_name`,
 ];
@@ -149,8 +150,9 @@ function searchClause(q: string | undefined): {
     joins: Prisma.sql`
       LEFT JOIN catalog_services cs ON cs.id = r.service_id
       LEFT JOIN catalog_services csr ON csr.id = r.service_root_id
-      LEFT JOIN locations city ON city.id = r.city_id
-      LEFT JOIN locations district ON district.id = r.district_id
+      LEFT JOIN locations place ON place.id = r.location_id
+      LEFT JOIN locations place_parent ON place_parent.id = place.parent_id
+      LEFT JOIN locations place_root ON place_root.id = place.ancestor_ids[1]
       LEFT JOIN provider_profiles pp ON pp.id = cur.provider_id`,
     where: Prisma.sql`WHERE (${Prisma.join(matches, ' OR ')})`,
   };

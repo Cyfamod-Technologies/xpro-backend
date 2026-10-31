@@ -73,22 +73,12 @@ export class ProviderProfileSubmissionDto {
   trade: string;
 
   @ApiPropertyOptional({
-    description: 'Nigerian state, as in the built-in list. Needed with city.',
+    description:
+      'Required to submit: the id of an active LGA, chosen from GET /locations.',
   })
   @IsOptional()
-  @IsString()
-  state?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MinLength(2)
-  city?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
   @IsUUID()
-  cityId?: string;
+  locationId?: string;
 
   @ApiPropertyOptional({
     type: [String],
@@ -108,13 +98,11 @@ export class ProviderProfileSubmissionDto {
   @IsUUID('all', { each: true })
   serviceIds?: string[];
 
-  @ApiPropertyOptional({ type: [String] })
-  @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
-  serviceAreas?: string[];
-
-  @ApiPropertyOptional({ type: [String] })
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Required to submit, at least one: ids of the active places the provider covers. A place covers everything under it.',
+  })
   @IsOptional()
   @IsArray()
   @IsUUID(undefined, { each: true })

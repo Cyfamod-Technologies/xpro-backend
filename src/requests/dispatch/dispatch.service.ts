@@ -26,6 +26,7 @@ import {
   OFFER_STALE_MESSAGE,
 } from '../domain/assignment-rules';
 import { dispatchRequestFor } from '../domain/dispatch-request';
+import { loadLocationChain } from '../../platform/locations/location-path';
 import { offerExpiry } from '../domain/offer-expiry';
 import {
   evaluateAll,
@@ -93,13 +94,8 @@ export class DispatchService {
         value,
       ]),
     );
-    const locations = await this.prisma.location.findMany({
-      where: { id: { in: [row.districtId, row.cityId] } },
-      select: { id: true, name: true },
-    });
     const request = await dispatchRequestFor(this.prisma, row, {
-      districtName: locations.find(({ id }) => id === row.districtId)?.name,
-      cityName: locations.find(({ id }) => id === row.cityId)?.name,
+      locationPath: await loadLocationChain(this.prisma, row.locationId),
     });
     const providers = await this.providers.list(at, row.id);
     const weights = (settings['assignment.weights'] ??
@@ -277,8 +273,7 @@ export class DispatchService {
           failures: evaluateAll(
             provider,
             await dispatchRequestFor(ctx.tx, requestRow, {
-              districtName: ctx.snap.districtName,
-              cityName: ctx.snap.cityName,
+              locationPath: ctx.snap.locationPath,
             }),
             {
               requireVerifiedBank:
@@ -454,8 +449,7 @@ export class DispatchService {
           'withdrawn',
         );
         const dispatchRequest = await dispatchRequestFor(ctx.tx, request, {
-          districtName: ctx.snap.districtName,
-          cityName: ctx.snap.cityName,
+          locationPath: ctx.snap.locationPath,
         });
         ctx.audit('Assignment withdrawn', {
           resourceType: 'assignment',
@@ -471,7 +465,7 @@ export class DispatchService {
           providerUserId: assignment.providerUserId,
           requestCode: ctx.snap.number,
           service: request.service,
-          district: ctx.snap.districtName ?? '',
+          district: ctx.snap.locationName ?? '',
           skill: dispatchRequest.skill ?? request.service,
         });
       },
@@ -563,8 +557,7 @@ export class DispatchService {
         });
         ctx.timers.stop(['T7.reminder24h', 'T7.stall48h'], assignment.id);
         const dispatchRequest = await dispatchRequestFor(ctx.tx, request, {
-          districtName: ctx.snap.districtName,
-          cityName: ctx.snap.cityName,
+          locationPath: ctx.snap.locationPath,
         });
         ctx.audit('Assignment replaced', {
           resourceType: 'assignment',
@@ -584,7 +577,7 @@ export class DispatchService {
           providerUserId: assignment.providerUserId,
           requestCode: ctx.snap.number,
           service: request.service,
-          district: ctx.snap.districtName ?? '',
+          district: ctx.snap.locationName ?? '',
           skill: dispatchRequest.skill ?? request.service,
         });
       },
@@ -748,8 +741,7 @@ export class DispatchService {
         const failures = evaluateAll(
           provider,
           await dispatchRequestFor(ctx.tx, request, {
-            districtName: ctx.snap.districtName,
-            cityName: ctx.snap.cityName,
+            locationPath: ctx.snap.locationPath,
           }),
           {
             requireVerifiedBank:
@@ -844,12 +836,11 @@ export class DispatchService {
           providerUserId: provider.userId,
           requestCode: ctx.snap.number,
           service: request.service,
-          district: ctx.snap.districtName ?? '',
+          district: ctx.snap.locationName ?? '',
           skill:
             (
               await dispatchRequestFor(ctx.tx, request, {
-                districtName: ctx.snap.districtName,
-                cityName: ctx.snap.cityName,
+                locationPath: ctx.snap.locationPath,
               })
             ).skill ?? request.service,
         });

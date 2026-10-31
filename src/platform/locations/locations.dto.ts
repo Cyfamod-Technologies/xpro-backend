@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
@@ -18,12 +18,27 @@ export class LocationListQueryDto {
   @IsOptional()
   @IsUUID()
   parentId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Only places that are served: the place and every ancestor are active and serviceable.',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' || value === '1' || value === true
+      ? true
+      : value === 'false' || value === '0' || value === false
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  serviceable?: boolean;
 }
 
 export class SaveLocationDto {
-  @ApiProperty({ enum: ['city', 'district'] })
-  @IsIn(['city', 'district'])
-  kind: 'city' | 'district';
+  @ApiProperty({ enum: ['state', 'lga', 'area'] })
+  @IsIn(['state', 'lga', 'area'])
+  kind: 'state' | 'lga' | 'area';
 
   @ApiProperty()
   @IsString()
@@ -44,6 +59,13 @@ export class SaveLocationDto {
   @ApiProperty()
   @IsBoolean()
   active: boolean;
+
+  @ApiProperty({
+    description:
+      'Customers can request this place when it and every ancestor are active and serviceable.',
+  })
+  @IsBoolean()
+  serviceable: boolean;
 
   @ApiProperty()
   @Type(() => Number)

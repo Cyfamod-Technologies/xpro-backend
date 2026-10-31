@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { isOverlapViolation, mapOverlapViolation } from './overlap-violation';
+import { LIFE_CAMP_ID } from '../../platform/locations/locations.testkit';
 
 const prisma = new PrismaClient();
 
@@ -15,8 +16,7 @@ describe('schedule confirmation race (04 §6.13, D-04)', () => {
         customerName: 'Integration customer',
         title: 'Schedule race',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for schedule confirmation.',

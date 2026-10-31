@@ -415,11 +415,8 @@ model ProviderProfile {
   userId             String                    @unique @map("user_id")
   phone              String
   trade              String
-  city               String
-  state              String?
-  cityId             String?                  @map("city_id")
+  locationId         String?                  @map("location_id")
   services           Json
-  serviceAreas       Json                     @map("service_areas")
   serviceAreaIds     String[]                 @default([]) @map("service_area_ids")
   businessName       String?                  @map("business_name")
   skills             Json
@@ -448,7 +445,7 @@ model ProviderProfile {
   updatedAt          DateTime                 @updatedAt @map("updated_at")
 
   user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cityLocation Location?     @relation("ProviderCity", fields: [cityId], references: [id], onDelete: SetNull)
+  location   Location?       @relation("ProviderLocation", fields: [locationId], references: [id], onDelete: SetNull)
   bankAccounts ProviderBankAccount[]
   reviews    ProviderReview[]
   payouts    Payout[]
@@ -478,8 +475,9 @@ model FeaturedProvider {
 }
 
 enum LocationKind {
-  city
-  district
+  state
+  lga
+  area
 }
 
 model Location {
@@ -488,14 +486,17 @@ model Location {
   name      String
   parentId  String?  @map("parent_id")
   aliases   String[] @default([])
-  active    Boolean  @default(true)
-  sort      Int      @default(0)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  active      Boolean  @default(true)
+  serviceable Boolean  @default(false)
+  ancestorIds String[] @default([]) @map("ancestor_ids")
+  sort        Int      @default(0)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
   children Location[] @relation("LocationHierarchy")
-  providers ProviderProfile[] @relation("ProviderCity")
+  providers ProviderProfile[] @relation("ProviderLocation")
+  requests  ServiceRequest[]  @relation("RequestLocation")
 
   @@unique([parentId, name])
   @@index([kind, active])
@@ -1110,8 +1111,7 @@ model ServiceRequest {
   customerName          String                  @map("customer_name")
   title                 String
   service               String
-  cityId                String                  @map("city_id")
-  districtId            String                  @map("district_id")
+  locationId            String                  @map("location_id")
   address               String
   phone                 String
   contactMethod         ContactMethod           @default(phone) @map("contact_method")
@@ -1165,6 +1165,7 @@ model ServiceRequest {
   catalogService CatalogService? @relation("RequestService", fields: [serviceId], references: [id], onDelete: Restrict)
   catalogRoot    CatalogService? @relation("RequestServiceRoot", fields: [serviceRootId], references: [id], onDelete: Restrict)
   group         RequestGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  location      Location      @relation("RequestLocation", fields: [locationId], references: [id], onDelete: Restrict)
   attachments   RequestAttachment[]
   edits         RequestEdit[]
   runs          DispatchRun[]
@@ -1184,7 +1185,7 @@ model ServiceRequest {
   @@index([ownerId, status])
   @@index([status, intakeState])
   @@index([staffOwnerId, status])
-  @@index([service, districtId, createdAt])
+  @@index([service, locationId, createdAt])
   @@index([serviceRootId])
   @@index([groupId])
   @@map("service_requests")

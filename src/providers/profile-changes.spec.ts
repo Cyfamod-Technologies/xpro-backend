@@ -4,7 +4,6 @@ const live = {
   trade: 'Plumbing',
   services: ['Plumbing'],
   serviceIds: ['svc-1'],
-  serviceAreas: ['Wuse', 'Garki'],
   serviceAreaIds: ['a-1', 'a-2'],
   skills: { Plumbing: ['Pipe fitting'] },
   skillIds: { 'svc-1': ['sk-1'] },
@@ -18,7 +17,6 @@ describe('changedProfileFields', () => {
     expect(
       changedProfileFields(live, {
         ...live,
-        serviceAreas: ['garki', 'WUSE'],
         serviceAreaIds: ['a-2', 'a-1'],
       }),
     ).toEqual([]);
@@ -30,7 +28,6 @@ describe('changedProfileFields', () => {
         ...live,
         trade: 'Electrical',
         serviceIds: ['svc-1', 'svc-2'],
-        serviceAreas: ['Wuse'],
         serviceAreaIds: ['a-1'],
         skillIds: { 'svc-1': ['sk-1', 'sk-2'] },
         capacity: 5,

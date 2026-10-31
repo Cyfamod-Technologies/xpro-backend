@@ -33,8 +33,11 @@ export class RequestGroupCreateDto {
   @ApiProperty({ description: 'The project title, shared by every service' })
   @Allow()
   title!: string;
-  @ApiProperty() @Allow() cityId!: string;
-  @ApiProperty() @Allow() districtId!: string;
+  @ApiProperty({
+    description: 'A served LGA or area, chosen from GET /locations',
+  })
+  @Allow()
+  locationId!: string;
   @ApiProperty() @Allow() address!: string;
   @ApiProperty() @Allow() phone!: string;
   @ApiPropertyOptional({ enum: ['email', 'phone', 'both'], default: 'phone' })

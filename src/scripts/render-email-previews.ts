@@ -29,6 +29,11 @@ const fixtures: {
     message: 'We have received your request and will review it shortly.',
     link: '/requests',
   },
+  account_exists: {
+    firstName: 'Ada',
+    deletionScheduledFor: '2026-11-20T10:00:00.000Z',
+  },
+  staff_account_exists: { firstName: 'Ada' },
 };
 
 async function main() {

@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 const prisma = new PrismaClient();
 
@@ -13,8 +14,7 @@ describe('request schema constraints', () => {
         customerName: 'Integration customer',
         title: 'Schema constraint test',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for database constraints.',

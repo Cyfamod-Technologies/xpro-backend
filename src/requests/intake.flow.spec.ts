@@ -1,5 +1,6 @@
 import type { RequestUser } from '../common/types/request-user';
 import type { ActorContext } from '../platform/actor/actor.types';
+import { locationStub } from '../platform/locations/locations.testkit';
 import { TimerKinds } from '../platform/timers/timer-kinds';
 import { contactFieldsChanged, IntakeService } from './intake.service';
 import { RequestCommandRunner } from './command-runner';
@@ -92,8 +93,7 @@ describe('request intake command flows', () => {
       service: 'Construction',
       serviceId: null,
       answers: [],
-      cityId: 'city-1',
-      districtId: 'district-1',
+      locationId: 'district-1',
       address: '12 Example Road',
       phone: '+2348031234567',
       contactMethod: 'phone',
@@ -122,17 +122,7 @@ describe('request intake command flows', () => {
       catalogService: {
         findMany: jest.fn().mockResolvedValue(catalogRows(seededCatalog())),
       },
-      location: {
-        findMany: jest.fn().mockResolvedValue([
-          { id: 'city-1', kind: 'city', parentId: null, active: true },
-          {
-            id: 'district-1',
-            kind: 'district',
-            parentId: 'city-1',
-            active: true,
-          },
-        ]),
-      },
+      location: locationStub(),
     };
     const timers = { stop: jest.fn() };
     const approvals = { open: jest.fn(), close: jest.fn() };
@@ -143,7 +133,7 @@ describe('request intake command flows', () => {
         id: 'request-42',
         number: 'XPR-00042',
         ownerId,
-        districtName: 'Example District',
+        locationName: 'Example District',
         currentAssignment: null,
       },
       now: new Date('2026-10-23T10:00:00.000Z'),
@@ -466,8 +456,7 @@ describe('request intake command flows', () => {
             service: 'Construction',
             serviceId: null,
             answers: [],
-            cityId: 'city-1',
-            districtId: 'district-1',
+            locationId: 'district-1',
             address: '12 Example Road',
             phone: '+2348031234567',
             contactMethod: 'phone',
@@ -488,17 +477,7 @@ describe('request intake command flows', () => {
         catalogService: {
           findMany: jest.fn().mockResolvedValue(catalogRows(seededCatalog())),
         },
-        location: {
-          findMany: jest.fn().mockResolvedValue([
-            { id: 'city-1', kind: 'city', parentId: null, active: true },
-            {
-              id: 'district-1',
-              kind: 'district',
-              parentId: 'city-1',
-              active: true,
-            },
-          ]),
-        },
+        location: locationStub(),
         requestEdit: { create: jest.fn() },
       };
       const context = {

@@ -131,8 +131,7 @@ export function intakeFieldPath(
     'XPro assigns a verified provider for you. Remove the provider preference.'
   )
     return context.providerField;
-  if (message === 'Choose your city and district from the list.')
-    return 'districtId';
+  if (message === 'Choose your location from the list.') return 'locationId';
   if (message === 'Complete your contact and site details.')
     return lengthOutside(context.address, 5, 300) ? 'address' : 'phone';
   if (message === 'Enter a valid Nigerian phone number.') return 'phone';

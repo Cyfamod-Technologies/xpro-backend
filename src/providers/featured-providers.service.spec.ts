@@ -31,7 +31,7 @@ type ProfileOverrides = {
   services?: unknown;
   serviceIds?: unknown;
   skillIds?: unknown;
-  serviceAreas?: unknown;
+  serviceAreaIds?: string[];
   reviewedAt?: Date | null;
   createdAt?: Date;
 };
@@ -41,12 +41,16 @@ function profile(id: string, o: ProfileOverrides = {}) {
     id,
     userId: `user-${id}`,
     trade: o.trade ?? 'Plumbing',
-    city: o.city ?? 'Lagos',
+    location: o.city === '' ? null : { name: o.city ?? 'Lagos' },
     services: o.services ?? ['Design', 7, 'Hiring'],
     serviceIds: o.serviceIds ?? null,
     skills: {},
     skillIds: o.skillIds ?? null,
-    serviceAreas: o.serviceAreas ?? ['Ikeja', null, 'Yaba'],
+    serviceAreaIds: o.serviceAreaIds ?? [
+      'area-ikeja',
+      'area-gone',
+      'area-yaba',
+    ],
     businessName: o.businessName ?? null,
     bio: o.bio ?? LONG_BIO,
     photo: 'photo' in o ? o.photo : { id: `photo-${id}`, name: 'a.png' },
@@ -88,6 +92,12 @@ function setup(options: Setup = {}) {
   const prisma = {
     catalogService: {
       findMany: jest.fn().mockResolvedValue(catalogRows(seededCatalog())),
+    },
+    location: {
+      findMany: jest.fn().mockResolvedValue([
+        { id: 'area-ikeja', name: 'Ikeja' },
+        { id: 'area-yaba', name: 'Yaba' },
+      ]),
     },
     featuredProvider: {
       findMany: jest.fn().mockResolvedValue(rows),

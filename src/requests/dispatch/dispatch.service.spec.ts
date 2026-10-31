@@ -48,7 +48,7 @@ function build<T extends Mocks = Mocks>(
   const kit = systemCommandKit({
     now,
     tx,
-    snap: { cityName: 'Lagos', ...options.snap },
+    snap: options.snap,
     settings: options.settings,
   });
   const runner = {
@@ -491,9 +491,25 @@ describe('DispatchService.rankingRun', () => {
           update: jest.fn(),
         },
         location: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'district-1',
+            kind: 'area',
+            name: 'Ikeja',
+            parentId: 'city-1',
+            active: true,
+            serviceable: true,
+            ancestorIds: ['city-1'],
+          }),
           findMany: jest.fn().mockResolvedValue([
-            { id: 'district-1', name: 'Ikeja' },
-            { id: 'city-1', name: 'Lagos' },
+            {
+              id: 'city-1',
+              kind: 'lga',
+              name: 'Lagos',
+              parentId: null,
+              active: true,
+              serviceable: true,
+              ancestorIds: [],
+            },
           ]),
         },
         dispatchRun: { create: jest.fn().mockResolvedValue({ id: 'run-9' }) },

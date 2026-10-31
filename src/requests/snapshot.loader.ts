@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, type AssignmentStatus } from '@prisma/client';
+import {
+  loadLocationChain,
+  locationLabelOf,
+  locationPathOf,
+} from '../platform/locations/location-path';
 import { providerBlocked } from './domain/provider-standing';
 import { parseRequestId } from './domain/statuses';
 import type {
@@ -101,8 +106,7 @@ export class RequestSnapshotLoader {
     const assignment = currentAssignmentOf(row.assignments);
     const [
       providerCardRow,
-      city,
-      district,
+      locationChain,
       customer,
       providerUser,
       cascadeTimer,
@@ -122,14 +126,7 @@ export class RequestSnapshotLoader {
             },
           })
         : null,
-      tx.location.findUnique({
-        where: { id: row.cityId },
-        select: { name: true },
-      }),
-      tx.location.findUnique({
-        where: { id: row.districtId },
-        select: { name: true },
-      }),
+      loadLocationChain(tx, row.locationId),
       tx.user.findUnique({
         where: { id: row.ownerId },
         select: { status: true },
@@ -183,8 +180,7 @@ export class RequestSnapshotLoader {
       row,
       snapshot: buildSnapshot(row, {
         providerCard: providerCardRow,
-        city,
-        district,
+        locationChain,
         customerStatus: customer?.status ?? null,
         providerUserStatus: providerUser?.status ?? null,
         cascadePending: cascadeTimer !== null,
@@ -287,8 +283,7 @@ export type SnapshotLookups = {
     raisedBy: string | null;
   }>;
   /** The list loader leaves these out: no summary field reads them. */
-  city?: { name: string } | null;
-  district?: { name: string } | null;
+  locationChain?: ReadonlyArray<{ id: string; kind: string; name: string }>;
   uploads?: Array<{
     id: string;
     fileName: string;
@@ -312,7 +307,7 @@ export function buildSnapshot(
   row: SnapshotSource,
   lookups: SnapshotLookups,
 ): RequestSnapshot {
-  const { providerCard: providerCardRow, city, district, uploads } = lookups;
+  const { providerCard: providerCardRow, locationChain, uploads } = lookups;
   const { payments, refundsOutstanding } = lookups;
   const assignment = currentAssignmentOf(row.assignments);
   const schedules = row.schedules;
@@ -369,8 +364,11 @@ export function buildSnapshot(
           lastName: providerCardRow.user.lastName,
         }
       : null,
-    cityName: city?.name ?? null,
-    districtName: district?.name ?? null,
+    locationPath: locationChain ? locationPathOf(locationChain) : [],
+    locationLabel: locationChain?.length
+      ? locationLabelOf(locationChain)
+      : null,
+    locationName: locationChain?.at(-1)?.name ?? null,
     attachmentInfo: (uploads ?? []).map((upload) => ({
       id: upload.id,
       name: upload.fileName,

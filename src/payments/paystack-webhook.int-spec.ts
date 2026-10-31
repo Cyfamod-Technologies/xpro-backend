@@ -21,6 +21,7 @@ import { GATEWAY_EVENT_BACKOFF_MS } from './domain/webhook-reclaim';
 import type { VerifiedTransaction } from './payment-gateway';
 import { PAYMENT_GATEWAY, PaymentsService } from './payments.service';
 import { PaystackEventsService } from './paystack-events.service';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 const SECRET = 'sk_test_webhook_secret';
 
@@ -98,8 +99,7 @@ describe('Paystack webhook settlement (integration)', () => {
         customerName: 'Webhook customer',
         title: 'Webhook test',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for the Paystack webhook.',

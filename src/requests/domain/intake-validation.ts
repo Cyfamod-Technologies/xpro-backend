@@ -6,6 +6,7 @@ import type {
   QuestionConfig,
   ResolvedService,
 } from '../../platform/catalog/catalog.types';
+import { isServedLocation } from '../../platform/locations/location-path';
 import type { AnswerSnapshot, AnswerValue } from './answers';
 
 export type IntakeValidationInput = {
@@ -14,8 +15,7 @@ export type IntakeValidationInput = {
   serviceId?: unknown;
   preferredProviderId?: unknown;
   providerId?: unknown;
-  cityId?: unknown;
-  districtId?: unknown;
+  locationId?: unknown;
   address?: unknown;
   phone?: unknown;
   contactMethod?: unknown;
@@ -27,11 +27,13 @@ export type IntakeValidationInput = {
   attachments?: unknown;
 };
 
+/** The chosen place and its ancestors, as `loadLocationChain` returns them. */
 export type IntakeLocation = {
   id: string;
   kind: string;
-  parentId: string | null;
   active: boolean;
+  serviceable: boolean;
+  ancestorIds: string[];
 };
 
 export type ValidatedIntake = {
@@ -41,8 +43,7 @@ export type ValidatedIntake = {
   serviceRootId: string;
   servicePath: Array<{ id: string; name: string }>;
   skill: string | null;
-  cityId: string;
-  districtId: string;
+  locationId: string;
   address: string;
   phone: string;
   contactMethod: 'email' | 'phone' | 'both';
@@ -117,21 +118,13 @@ export function validateIntake(
       'XPro assigns a verified provider for you. Remove the provider preference.',
     );
 
-  const city = locations.find(
-    (location) =>
-      location.id === input.cityId &&
-      location.kind === 'city' &&
-      location.active &&
-      location.parentId === null,
-  );
-  const district = locations.find(
-    (location) =>
-      location.id === input.districtId &&
-      location.kind === 'district' &&
-      location.active,
-  );
-  if (!city || !district || district.parentId !== city.id)
-    return fail('Choose your city and district from the list.');
+  const place = locations.find((location) => location.id === input.locationId);
+  if (
+    !place ||
+    (place.kind !== 'lga' && place.kind !== 'area') ||
+    !isServedLocation(place, locations)
+  )
+    return fail('Choose your location from the list.');
 
   const address = text(input.address) ? input.address.trim() : '';
   const phoneInput = text(input.phone) ? input.phone.trim() : '';
@@ -359,8 +352,7 @@ export function validateIntake(
     serviceRootId: root.id,
     servicePath: path.map(({ id, name }) => ({ id, name })),
     skill,
-    cityId: city.id,
-    districtId: district.id,
+    locationId: place.id,
     address,
     phone,
     contactMethod,

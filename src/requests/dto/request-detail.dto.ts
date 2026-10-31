@@ -66,10 +66,11 @@ export interface RequestDetailDto {
   };
   title?: string;
   service?: string;
-  cityId?: string;
-  districtId?: string;
-  cityName?: string | null;
-  districtName?: string | null;
+  locationId?: string;
+  /** Root first, ending with the chosen place. */
+  locationPath?: ReadonlyArray<{ id: string; kind: string; name: string }>;
+  /** Names from the chosen place to the state, e.g. `Life Camp, Abuja Municipal, FCT`. */
+  locationLabel?: string | null;
   address?: string;
   phone?: string;
   contactMethod?: string;

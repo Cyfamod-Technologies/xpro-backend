@@ -21,6 +21,7 @@ import { createUser, deleteTestUsers } from '../../../test/integration/users';
 import { DispatchTimerHandlers } from './dispatch-timer-handlers';
 import { DispatchService } from './dispatch.service';
 import { ProviderDispatchLoader } from './provider-dispatch.loader';
+import { LIFE_CAMP_ID } from '../../platform/locations/locations.testkit';
 
 /**
  * Integration cases for the dispatch engine (audit B-28). Authored under
@@ -33,8 +34,6 @@ describe('dispatch engine (integration)', () => {
   const dispatch = jest.fn().mockResolvedValue(undefined);
   let staffId = '';
   const actors = new Map<string, ActorContext>();
-  const districtId = randomUUID();
-  const cityId = randomUUID();
   const createdRequests: string[] = [];
 
   const staffActor = (userId: string): ActorContext =>
@@ -119,7 +118,7 @@ describe('dispatch engine (integration)', () => {
       await prisma.serviceRequest.deleteMany({ where: { id: requestId } });
     }
     await prisma.providerProfile.deleteMany({
-      where: { serviceAreaIds: { has: districtId } },
+      where: { serviceAreaIds: { has: LIFE_CAMP_ID } },
     });
   });
 
@@ -138,8 +137,7 @@ describe('dispatch engine (integration)', () => {
         customerName: 'Dispatch customer',
         title: 'Dispatch test',
         service: 'Design',
-        cityId,
-        districtId,
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for dispatch.',
@@ -164,10 +162,8 @@ describe('dispatch engine (integration)', () => {
         userId: user.id,
         phone: '+2348000000000',
         trade: 'Architect',
-        city: 'Test city',
         services: ['Design'],
-        serviceAreas: [],
-        serviceAreaIds: [districtId],
+        serviceAreaIds: [LIFE_CAMP_ID],
         skills: { Design: ['Architectural Designs'] },
         capacity: patch.capacity ?? 3,
         lastOfferedAt: patch.lastOfferedAt ?? null,

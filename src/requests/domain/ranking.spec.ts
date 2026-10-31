@@ -8,9 +8,10 @@ const request: DispatchRequest = {
   service: 'Design',
   serviceId: 'svc:Design',
   skillId: null,
-  districtId: 'd1',
-  districtName: 'Wuse',
-  cityId: 'city',
+  locationId: 'd1',
+  locationName: 'Wuse',
+  locationIds: ['d1', 'state', 'city'],
+  locationParentId: 'city',
 };
 const now = new Date('2026-10-23T12:00:00Z');
 const weights: DispatchWeights = {
@@ -64,16 +65,37 @@ const hash = (providerId: string) =>
 
 describe('rankProviders (04 §6.6)', () => {
   describe('area factor', () => {
-    it('is 1 when the provider lists the request district', () => {
+    it('is 1 when the provider lists the request place', () => {
       expect(factorsOf({ serviceAreaIds: ['d1'] }).area).toBe(1);
     });
 
-    it('is 0.6 when only the request city is in serviceAreaIds', () => {
+    it('is 0.6 when only the direct parent is in serviceAreaIds', () => {
       expect(factorsOf({ serviceAreaIds: ['city'] }).area).toBe(0.6);
     });
 
-    it('prefers the district over the city when both are listed', () => {
+    it('is 0.4 when only a higher ancestor is in serviceAreaIds', () => {
+      expect(factorsOf({ serviceAreaIds: ['state'] }).area).toBe(0.4);
+    });
+
+    it('prefers the closest match when several are listed', () => {
       expect(factorsOf({ serviceAreaIds: ['city', 'd1'] }).area).toBe(1);
+      expect(factorsOf({ serviceAreaIds: ['state', 'city'] }).area).toBe(0.6);
+    });
+
+    it('is 0.4 for a state when the request is an LGA with no area', () => {
+      const lgaRequest: DispatchRequest = {
+        ...request,
+        locationId: 'city',
+        locationIds: ['city', 'state'],
+        locationParentId: 'state',
+      };
+      const [ranked] = rankProviders(
+        [provider('p', { serviceAreaIds: ['state'] })],
+        lgaRequest,
+        weights,
+        now,
+      );
+      expect(ranked.factors.area).toBe(0.6);
     });
 
     it('is 0 for neither', () => {

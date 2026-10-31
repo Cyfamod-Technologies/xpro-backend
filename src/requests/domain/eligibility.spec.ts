@@ -13,9 +13,10 @@ const request: DispatchRequest = {
   serviceId: 'svc:Design',
   skill: 'Architectural plan',
   skillId: 'skill:architectural-plan',
-  districtId: 'district-1',
-  districtName: 'Wuse II',
-  cityId: 'city-1',
+  locationId: 'district-1',
+  locationName: 'Wuse II',
+  locationIds: ['district-1', 'state-1', 'city-1'],
+  locationParentId: 'city-1',
   effectiveStartDate: null,
 };
 const provider: DispatchProvider = {
@@ -96,21 +97,29 @@ describe('evaluateEligibility (04 §6.5)', () => {
     );
   });
 
-  describe('E6 area (04 §4.3: a city id covers every district)', () => {
-    it('is satisfied by the request district', () => {
+  describe('E6 area (04 §4.3: a place id covers everything under it)', () => {
+    it('is satisfied by the request place', () => {
       expect(evaluate({ serviceAreaIds: ['district-1'] })).toEqual({
         eligible: true,
       });
     });
 
-    it('is satisfied by the request city in serviceAreaIds, whatever the base city', () => {
+    it('is satisfied by the request LGA in serviceAreaIds', () => {
       expect(evaluate({ serviceAreaIds: ['city-1'] })).toEqual({
         eligible: true,
       });
     });
 
-    it('is not satisfied by another district or another city', () => {
-      expect(evaluate({ serviceAreaIds: ['district-9', 'city-9'] })).toEqual({
+    it('is satisfied through any ancestor: a provider covering the state covers an area in it', () => {
+      expect(evaluate({ serviceAreaIds: ['state-1'] })).toEqual({
+        eligible: true,
+      });
+    });
+
+    it('is not satisfied by another area, LGA or state', () => {
+      expect(
+        evaluate({ serviceAreaIds: ['district-9', 'city-9', 'state-9'] }),
+      ).toEqual({
         eligible: false,
         rule: 'area',
         reason: 'Doesn’t cover Wuse II',

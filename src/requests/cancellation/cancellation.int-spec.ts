@@ -24,6 +24,7 @@ import { RequestEventsService } from '../events/request-events.service';
 import { IntakeService } from '../intake.service';
 import { RequestSnapshotLoader } from '../snapshot.loader';
 import { CancellationService } from './cancellation.service';
+import { LIFE_CAMP_ID } from '../../platform/locations/locations.testkit';
 
 /**
  * Cancellation at four stages against a real database (04 §5.2 #6, #12, #24,
@@ -162,8 +163,7 @@ describe('cancellation at every stage (integration)', () => {
         customerName: 'Cancellation customer',
         title: 'Cancellation test',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for cancellation.',

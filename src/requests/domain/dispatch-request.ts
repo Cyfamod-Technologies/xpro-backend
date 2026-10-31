@@ -15,8 +15,7 @@ export type DispatchRequestRow = {
   ownerId: string;
   service: string;
   serviceId?: string | null;
-  districtId: string;
-  cityId: string;
+  locationId: string;
   startDate: string | null;
   details: unknown;
   answers?: unknown;
@@ -24,8 +23,8 @@ export type DispatchRequestRow = {
 };
 
 export type DispatchLocations = {
-  districtName?: string | null;
-  cityName?: string | null;
+  /** The chosen place and its ancestors, root first. */
+  locationPath?: ReadonlyArray<{ id: string; name: string }> | null;
 };
 
 export function storedSkill(
@@ -97,6 +96,24 @@ function storedService(
   };
 }
 
+function dispatchLocation(
+  locationId: string,
+  locations: DispatchLocations,
+): Pick<
+  DispatchRequest,
+  'locationId' | 'locationName' | 'locationIds' | 'locationParentId'
+> {
+  const path = locations.locationPath ?? [];
+  const index = path.findIndex(({ id }) => id === locationId);
+  const ancestors = index > 0 ? path.slice(0, index) : [];
+  return {
+    locationId,
+    locationName: (index >= 0 && path[index].name) || 'this area',
+    locationIds: [locationId, ...ancestors.map(({ id }) => id)],
+    locationParentId: ancestors.at(-1)?.id ?? null,
+  };
+}
+
 export async function dispatchRequestFor(
   db: CatalogDb,
   row: DispatchRequestRow,
@@ -108,7 +125,7 @@ export async function dispatchRequestFor(
 /**
  * The one place the eligibility input is assembled (C.6): the root service and
  * skill, as names and ids, from the live catalog by id (04 §4.9), the
- * effective start and end dates, and the district name staff see in an `area`
+ * effective start and end dates, and the place name staff see in an `area`
  * exclusion. Rows without a `serviceId`, or whose path no longer resolves,
  * resolve the stored service name and details to ids. The
  * dispatch service, the cascade handler and staff runs all use it.
@@ -132,10 +149,7 @@ export function buildDispatchRequest(
     id: row.id,
     ownerId: row.ownerId,
     ...resolved,
-    districtId: row.districtId,
-    districtName: locations.districtName || 'this district',
-    cityId: row.cityId,
-    cityName: locations.cityName ?? null,
+    ...dispatchLocation(row.locationId, locations),
     effectiveStartDate: dates.effectiveStartDate,
     effectiveEndDate: dates.effectiveEndDate,
   };

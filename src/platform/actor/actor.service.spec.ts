@@ -10,6 +10,7 @@ type UserRow = {
   lastName: string | null;
   name: string | null;
   email: string;
+  lastActiveRole?: 'customer' | 'provider' | null;
   platformRoles: { role: string }[];
   staffMember: {
     status: string;
@@ -54,13 +55,29 @@ describe('ActorService.resolve', () => {
     expect(actor.staff).toBeUndefined();
   });
 
-  it('treats a provider who is also a customer as a provider with both roles', async () => {
+  it('treats a provider who is also a customer as a provider until they switch', async () => {
     const { service } = setup({
       platformRoles: [{ role: 'customer' }, { role: 'provider' }],
     });
     const actor = await service.resolve('u1');
     expect(actor.kind).toBe('provider');
     expect(actor.platformRoles).toEqual(['customer', 'provider']);
+  });
+
+  it('uses the last active role when the account holds both roles', async () => {
+    const { service } = setup({
+      platformRoles: [{ role: 'customer' }, { role: 'provider' }],
+      lastActiveRole: 'customer',
+    });
+    expect((await service.resolve('u1')).kind).toBe('customer');
+  });
+
+  it('ignores a last active role the account no longer holds', async () => {
+    const { service } = setup({
+      platformRoles: [{ role: 'provider' }],
+      lastActiveRole: 'customer',
+    });
+    expect((await service.resolve('u1')).kind).toBe('provider');
   });
 
   it('resolves active staff with permissions from their roles', async () => {

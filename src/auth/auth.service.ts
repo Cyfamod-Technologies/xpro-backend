@@ -5,21 +5,27 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import {
+  AccountStatus,
   AppRole,
   AppSurface,
   AuthTokenPurpose,
   LegalDocumentKind,
   Prisma,
   RoleAddedVia,
+  StaffStatus,
+  WorkspaceRole,
 } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import { generateRawToken, hashToken } from '../common/utils/token.util';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { activeWorkspaceRole } from '../platform/actor/active-role';
+import { AppError } from '../platform/errors/app-error';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStore } from '../redis/session-store.service';
 import {
+  AddRoleDto,
   ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
@@ -137,14 +143,9 @@ export class AuthService {
     const email = dto.email.toLowerCase().trim();
     const firstName = dto.firstName.trim();
     const lastName = dto.lastName.trim();
-    const existing = await this.prisma.user.findUnique({
-      where: { email },
-      select: { id: true },
-    });
-    // Keep registration responses non-enumerating, including for existing accounts.
-    if (existing)
-      return { statusCode: 202, email, status: 'pending_verification' };
 
+    // Validate before the account lookup so a request behaves the same whether
+    // or not the email is already registered.
     const documents = await this.prisma.legalDocument.findMany({
       where: {
         kind: {
@@ -172,6 +173,35 @@ export class AuthService {
       throw new BadRequestException('Accept the current terms to continue.');
     }
 
+    // The response never reveals whether the email is already registered: every
+    // branch returns the same body and existing accounts are told by email.
+    const response = { statusCode: 202, email, status: 'pending_verification' };
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        name: true,
+        status: true,
+        deletionScheduledFor: true,
+        staffMember: { select: { status: true } },
+      },
+    });
+    if (existing) {
+      if (existing.status === 'unverified' && !existing.staffMember) {
+        await this.replaceUnverifiedSignup(existing, {
+          dto,
+          firstName,
+          lastName,
+          documents,
+        });
+      } else {
+        await this.notifyExistingAccount(existing);
+      }
+      return response;
+    }
+
     const passwordHash = await bcrypt.hash(dto.password, 12);
     const rawToken = generateRawToken();
     const user = await this.prisma.$transaction(async (tx) => {
@@ -191,13 +221,7 @@ export class AuthService {
         },
       });
       await tx.authToken.create({
-        data: {
-          userId: created.id,
-          purpose: AuthTokenPurpose.email_verify,
-          tokenHash: Buffer.from(hashToken(rawToken), 'hex'),
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          metadata: dto.returnTo ? { returnTo: dto.returnTo } : undefined,
-        },
+        data: this.emailVerifyTokenData(created.id, rawToken, dto.returnTo),
       });
       if (documents.length > 0)
         await tx.legalAcceptance.createMany({
@@ -224,7 +248,140 @@ export class AuthService {
       entityId: user.id,
       action: 'signup_created',
     });
-    return { statusCode: 202, email, status: 'pending_verification' };
+    return response;
+  }
+
+  private emailVerifyTokenData(
+    userId: string,
+    rawToken: string,
+    returnTo?: string,
+  ) {
+    return {
+      userId,
+      purpose: AuthTokenPurpose.email_verify,
+      tokenHash: Buffer.from(hashToken(rawToken), 'hex'),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      metadata: returnTo ? { returnTo } : undefined,
+    };
+  }
+
+  /**
+   * A signup for an unverified email replaces the abandoned attempt, so the
+   * person who completes verification is the one who last submitted the form.
+   */
+  private async replaceUnverifiedSignup(
+    user: { id: string; email: string },
+    input: {
+      dto: RegisterDto;
+      firstName: string;
+      lastName: string;
+      documents: { id: string }[];
+    },
+  ) {
+    const { dto, firstName, lastName, documents } = input;
+    const passwordHash = await bcrypt.hash(dto.password, 12);
+    const rawToken = generateRawToken();
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { firstName, lastName, passwordHash },
+      });
+      await tx.userRole.deleteMany({ where: { userId: user.id } });
+      await tx.userRole.create({
+        data: {
+          userId: user.id,
+          role: dto.role,
+          addedVia: RoleAddedVia.signup,
+        },
+      });
+      await tx.legalAcceptance.deleteMany({ where: { userId: user.id } });
+      if (documents.length > 0)
+        await tx.legalAcceptance.createMany({
+          data: documents.map((document) => ({
+            userId: user.id,
+            documentId: document.id,
+            source: 'signup',
+          })),
+        });
+      await tx.authToken.updateMany({
+        where: {
+          userId: user.id,
+          purpose: AuthTokenPurpose.email_verify,
+          usedAt: null,
+        },
+        data: { usedAt: now },
+      });
+      await tx.authToken.create({
+        data: this.emailVerifyTokenData(user.id, rawToken, dto.returnTo),
+      });
+    });
+
+    await this.notifications.queueEmail({
+      recipientEmail: user.email,
+      recipientUserId: user.id,
+      type: 'email_verification',
+      templateKey: 'email_verification',
+      payload: { token: rawToken, firstName },
+    });
+    this.auditLogs.record({
+      actorType: 'user',
+      actorId: user.id,
+      entityType: 'auth',
+      entityId: user.id,
+      action: 'signup_replaced',
+    });
+  }
+
+  /**
+   * Tells the owner of an existing account that someone tried to sign up with
+   * their email. Nothing about the account changes.
+   */
+  private async notifyExistingAccount(user: {
+    id: string;
+    email: string;
+    firstName: string | null;
+    name: string | null;
+    status: AccountStatus;
+    deletionScheduledFor: Date | null;
+    staffMember: { status: StaffStatus } | null;
+  }) {
+    const firstName = user.firstName ?? user.name ?? undefined;
+    const base = {
+      recipientEmail: user.email,
+      recipientUserId: user.id,
+      cooldown: { key: `account_exists:${user.id}`, seconds: 600 },
+    };
+
+    if (user.staffMember) {
+      if (['invited', 'active', 'suspended'].includes(user.staffMember.status))
+        await this.notifications.queueEmail({
+          ...base,
+          type: 'staff_account_exists',
+          templateKey: 'staff_account_exists',
+          payload: { firstName },
+        });
+      return;
+    }
+
+    if (user.status === 'active' || user.status === 'suspended') {
+      await this.notifications.queueEmail({
+        ...base,
+        type: 'account_exists',
+        templateKey: 'account_exists',
+        payload: { firstName },
+      });
+    } else if (user.status === 'pending_deletion') {
+      await this.notifications.queueEmail({
+        ...base,
+        type: 'account_exists',
+        templateKey: 'account_exists',
+        payload: {
+          firstName,
+          deletionScheduledFor: user.deletionScheduledFor?.toISOString(),
+        },
+      });
+    }
   }
 
   async verifyEmailToken(dto: VerifyEmailTokenDto) {
@@ -298,6 +455,19 @@ export class AuthService {
     });
     if (user && !user.emailVerifiedAt && user.status === 'unverified') {
       const rawToken = generateRawToken();
+      // Keep the latest returnTo so verifying a resent link still resumes the
+      // flow the person started from.
+      const previous = await this.prisma.authToken.findFirst({
+        where: {
+          userId: user.id,
+          purpose: AuthTokenPurpose.email_verify,
+          usedAt: null,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { metadata: true },
+      });
+      const returnTo = (previous?.metadata as { returnTo?: string } | null)
+        ?.returnTo;
       await this.prisma.$transaction([
         this.prisma.authToken.updateMany({
           where: {
@@ -308,12 +478,7 @@ export class AuthService {
           data: { usedAt: new Date() },
         }),
         this.prisma.authToken.create({
-          data: {
-            userId: user.id,
-            purpose: AuthTokenPurpose.email_verify,
-            tokenHash: Buffer.from(hashToken(rawToken), 'hex'),
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          },
+          data: this.emailVerifyTokenData(user.id, rawToken, returnTo),
         }),
       ]);
       await this.notifications.queueEmail({
@@ -410,6 +575,10 @@ export class AuthService {
         email: user.email,
         role: user.role,
         platformRoles: user.platformRoles.map(({ role }) => role),
+        activeRole: activeWorkspaceRole(
+          user.platformRoles.map(({ role }) => role),
+          user.lastActiveRole,
+        ),
         staffStatus: user.staffMember?.status ?? null,
         emailVerified: !!user.emailVerifiedAt,
         phone: user.phoneE164,
@@ -466,6 +635,7 @@ export class AuthService {
         language: true,
         timezone: true,
         notificationPreferences: true,
+        lastActiveRole: true,
         platformRoles: { select: { role: true } },
         staffMember: { select: { status: true } },
         createdAt: true,
@@ -482,6 +652,10 @@ export class AuthService {
       email: user.email,
       role: user.role,
       platformRoles: user.platformRoles.map(({ role }) => role),
+      activeRole: activeWorkspaceRole(
+        user.platformRoles.map(({ role }) => role),
+        user.lastActiveRole,
+      ),
       staffStatus: user.staffMember?.status ?? null,
       emailVerified: !!user.emailVerifiedAt,
       phone: user.phoneE164,
@@ -497,6 +671,112 @@ export class AuthService {
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };
+  }
+
+  /**
+   * Adds the customer or provider role to the signed-in account (01 §6.16) and
+   * makes it the active workspace. Sessions stay valid: no new registration.
+   */
+  async addRole(userId: string, dto: AddRoleDto) {
+    const user = await this.workspaceAccount(userId);
+    if (user.status !== 'active')
+      throw new AppError(403, 'FORBIDDEN', 'This account is not active.');
+    if (user.roles.includes(dto.role))
+      throw new AppError(409, 'STATE_CONFLICT', 'You already have this role.', {
+        current: { platformRoles: user.roles },
+      });
+
+    // Terms and privacy were accepted at signup; only the provider role adds an agreement.
+    const agreement =
+      dto.role === 'provider'
+        ? await this.prisma.legalDocument.findFirst({
+            where: {
+              kind: 'provider_agreement',
+              publishedAt: { lte: new Date() },
+            },
+            orderBy: { publishedAt: 'desc' },
+          })
+        : null;
+    if (
+      agreement &&
+      dto.acceptedTerms?.providerAgreementVersion !== agreement.version
+    )
+      throw new BadRequestException('Accept the current terms to continue.');
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.userRole.create({
+          data: { userId, role: dto.role, addedVia: RoleAddedVia.self_service },
+        });
+        if (agreement)
+          await tx.legalAcceptance.create({
+            data: { userId, documentId: agreement.id, source: 'role_added' },
+          });
+        await tx.user.update({
+          where: { id: userId },
+          data: { lastActiveRole: dto.role },
+        });
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      )
+        throw new AppError(
+          409,
+          'STATE_CONFLICT',
+          'You already have this role.',
+          { current: { platformRoles: [...user.roles, dto.role] } },
+        );
+      throw error;
+    }
+
+    this.auditLogs.record({
+      actorType: 'user',
+      actorId: userId,
+      entityType: 'user',
+      entityId: userId,
+      action: 'account.role_added',
+      metadata: { role: dto.role },
+    });
+    return this.me(userId);
+  }
+
+  /** Switches the workspace of an account holding both roles (ROLE-1). */
+  async setActiveRole(userId: string, role: WorkspaceRole) {
+    const user = await this.workspaceAccount(userId);
+    if (!user.roles.includes(role))
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        "This account doesn't have that role.",
+      );
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { lastActiveRole: role },
+    });
+    return this.me(userId);
+  }
+
+  /** The account's customer/provider roles; staff accounts are refused (Q11). */
+  private async workspaceAccount(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        status: true,
+        platformRoles: { select: { role: true } },
+        staffMember: { select: { status: true } },
+      },
+    });
+    if (!user) throw new UnauthorizedException('Authentication failed');
+    const roles = user.platformRoles.map(({ role }) => role);
+    if (roles.includes('staff') || user.staffMember)
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        "Staff accounts can't add customer or provider roles.",
+      );
+    return { status: user.status, roles };
   }
 
   async logout(userId: string, sid: string | undefined, role: AppRole) {

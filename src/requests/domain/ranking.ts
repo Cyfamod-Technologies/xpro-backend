@@ -40,11 +40,16 @@ export function rankProviders(
         : Number.POSITIVE_INFINITY;
       const offers = provider.reliability.offers;
       const factors = {
-        area: provider.serviceAreaIds.includes(request.districtId)
+        area: provider.serviceAreaIds.includes(request.locationId)
           ? 1
-          : provider.serviceAreaIds.includes(request.cityId)
+          : request.locationParentId &&
+              provider.serviceAreaIds.includes(request.locationParentId)
             ? 0.6
-            : 0,
+            : request.locationIds.some((id) =>
+                  provider.serviceAreaIds.includes(id),
+                )
+              ? 0.4
+              : 0,
         capacity:
           provider.capacity > 0
             ? clamp01(1 - provider.committedJobs / provider.capacity)

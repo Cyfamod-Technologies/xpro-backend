@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type {
+  AccountExistsPayload,
   EmailRenderContext,
   EmailTemplateKey,
   EmailVerificationPayload,
   PasswordResetPayload,
   RenderedEmail,
   RequestUpdatePayload,
+  StaffAccountExistsPayload,
   StaffInvitePayload,
   TrustedCustomEmailPayload,
   WelcomeEmailPayload,
@@ -17,11 +19,13 @@ import {
   optionalString,
   requiredString,
 } from './email-template.utils';
+import { renderAccountExists } from './templates/account-exists.template';
 import { renderTrustedCustomEmail } from './templates/custom-email.template';
 import { renderEmailVerification } from './templates/email-verification.template';
 import { renderPasswordReset } from './templates/password-reset.template';
 import { renderWelcomeEmail } from './templates/welcome.template';
 import { renderRequestUpdate } from './templates/request-update.template';
+import { renderStaffAccountExists } from './templates/staff-account-exists.template';
 import { renderStaffInvite } from './templates/staff-invite.template';
 
 /**
@@ -61,6 +65,13 @@ export class EmailRendererService {
         return renderStaffInvite(this.staffInvitePayload(payload), context);
       case 'request_update':
         return renderRequestUpdate(this.requestUpdatePayload(payload), context);
+      case 'account_exists':
+        return renderAccountExists(this.accountExistsPayload(payload), context);
+      case 'staff_account_exists':
+        return renderStaffAccountExists(
+          this.staffAccountExistsPayload(payload),
+          context,
+        );
       default:
         return this.unsupportedTemplate(input.templateKey);
     }
@@ -130,6 +141,23 @@ export class EmailRendererService {
   ): PasswordResetPayload {
     return {
       resetToken: requiredString(payload, 'resetToken'),
+      firstName: optionalString(payload, 'firstName'),
+    };
+  }
+
+  private accountExistsPayload(
+    payload: Record<string, unknown>,
+  ): AccountExistsPayload {
+    return {
+      firstName: optionalString(payload, 'firstName'),
+      deletionScheduledFor: optionalString(payload, 'deletionScheduledFor'),
+    };
+  }
+
+  private staffAccountExistsPayload(
+    payload: Record<string, unknown>,
+  ): StaffAccountExistsPayload {
+    return {
       firstName: optionalString(payload, 'firstName'),
     };
   }

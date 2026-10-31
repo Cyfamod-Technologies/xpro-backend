@@ -46,6 +46,7 @@ function setup(
     requirePhoneVerification?: boolean;
     requireEmailVerification?: boolean;
     emailVerified?: boolean;
+    outsideServed?: boolean;
   } = {},
 ) {
   const catalog = options.catalog ?? seededCatalog();
@@ -93,6 +94,13 @@ function setup(
     },
     providerReview: { create: jest.fn() },
     providerUpload: { updateMany: jest.fn() },
+    location: {
+      findMany: jest.fn(({ where }: { where: { id: { in: string[] } } }) =>
+        Promise.resolve(
+          where.id.in.filter((id) => id === 'lga-1').map((id) => ({ id })),
+        ),
+      ),
+    },
   };
   const prisma = {
     setting: { findUnique: jest.fn(settingLookup) },
@@ -105,13 +113,19 @@ function setup(
     $transaction: jest.fn((run: (client: typeof tx) => unknown) => run(tx)),
   };
   const audit = { record: jest.fn() };
+  const names = new Map([
+    ['city-1', { id: 'city-1', name: 'Ikeja', stateName: 'Lagos' }],
+    ['district-1', { id: 'district-1', name: 'Alausa', stateName: 'Lagos' }],
+  ]);
   const locations = {
-    resolveProviderLocationIds: jest.fn().mockResolvedValue({
-      cityName: 'Lagos',
-      cityId: 'city-1',
-      serviceAreaNames: ['Ikeja'],
+    validateProviderLocations: jest.fn().mockResolvedValue({
+      locationId: 'city-1',
       serviceAreaIds: ['district-1'],
     }),
+    summaries: jest.fn().mockResolvedValue(names),
+    outsideServedAreasFor: jest.fn((lists: string[][]) =>
+      Promise.resolve(lists.map(() => options.outsideServed ?? false)),
+    ),
   };
   const service = new ProvidersService(
     prisma as never,
@@ -138,7 +152,7 @@ function setup(
   } as never);
   if (options.stubProfile !== false)
     jest.spyOn(service, 'myProfile').mockResolvedValue({} as never);
-  return { service, prisma, tx, catalog };
+  return { service, prisma, tx, catalog, locations };
 }
 
 describe('ProvidersService', () => {
@@ -409,6 +423,66 @@ describe('ProvidersService', () => {
     });
   });
 
+  describe('submit locations', () => {
+    it('stores only the validated ids', async () => {
+      const { service, tx, locations } = setup();
+      await service.submit(
+        'user-1',
+        submission({
+          locationId: 'city-1',
+          serviceIds: ['svc:Design'],
+          skillIds: { 'svc:Design': [INTERIOR] },
+        }),
+      );
+      expect(locations.validateProviderLocations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          locationId: 'city-1',
+          serviceAreaIds: ['district-1'],
+        }),
+      );
+      const data = created(tx);
+      expect(data).toMatchObject({
+        locationId: 'city-1',
+        serviceAreaIds: ['district-1'],
+      });
+      expect(data).not.toHaveProperty('city');
+      expect(data).not.toHaveProperty('state');
+      expect(data).not.toHaveProperty('serviceAreas');
+    });
+
+    it('refuses a profile without service areas before looking at anything else', async () => {
+      const { service, locations } = setup();
+      await expect(
+        service.submit(
+          'user-1',
+          submission({
+            serviceAreaIds: [],
+            serviceIds: ['svc:Design'],
+            skillIds: { 'svc:Design': [INTERIOR] },
+          }),
+        ),
+      ).rejects.toThrow('Add at least one service area.');
+      expect(locations.validateProviderLocations).not.toHaveBeenCalled();
+    });
+
+    it('lets the location check refuse an unknown LGA', async () => {
+      const { service, tx, locations } = setup();
+      locations.validateProviderLocations.mockRejectedValueOnce(
+        new BadRequestException('Choose your state and LGA from the list.'),
+      );
+      await expect(
+        service.submit(
+          'user-1',
+          submission({
+            serviceIds: ['svc:Design'],
+            skillIds: { 'svc:Design': [INTERIOR] },
+          }),
+        ),
+      ).rejects.toThrow('Choose your state and LGA from the list.');
+      expect(tx.providerProfile.upsert).not.toHaveBeenCalled();
+    });
+  });
+
   describe('submit by legacy names', () => {
     it('converts names to ids and keeps the names as the snapshot', async () => {
       const { service, tx } = setup();
@@ -498,6 +572,11 @@ describe('ProvidersService', () => {
         services: ['Hiring'],
         skills: { Hiring: ['Excavator'] },
       });
+      expect(data.pendingChanges).toMatchObject({
+        locationId: 'city-1',
+        serviceAreaIds: ['district-1'],
+      });
+      expect(data.pendingChanges).not.toHaveProperty('serviceAreas');
       expect(data).not.toHaveProperty('serviceIds');
       expect(data).not.toHaveProperty('skillIds');
       expect(tx.providerProfile.upsert).not.toHaveBeenCalled();
@@ -512,7 +591,8 @@ describe('ProvidersService', () => {
         version: 4,
         pendingChanges: {
           trade: 'Builder',
-          serviceAreas: ['Ikeja'],
+          locationId: 'lga-1',
+          serviceAreaIds: ['district-1'],
           capacity: 2,
           documents: [],
           photo: file('photo-1'),
@@ -547,6 +627,34 @@ describe('ProvidersService', () => {
       expect(data.pendingChanges).toBe(Prisma.DbNull);
     });
 
+    it('applies the held location and service area ids', async () => {
+      const data = await reviewer({
+        services: ['Hiring'],
+        locationId: 'lga-1',
+        serviceAreaIds: ['district-1', 'lga-1'],
+      });
+      expect(data.locationId).toBe('lga-1');
+      expect(data.serviceAreaIds).toEqual(['district-1', 'lga-1']);
+      expect(data).not.toHaveProperty('serviceAreas');
+      expect(data).not.toHaveProperty('city');
+    });
+
+    it('falls back to a legacy cityId when it is an LGA', async () => {
+      const data = await reviewer({ cityId: 'lga-1', city: 'Old name' });
+      expect(data.locationId).toBe('lga-1');
+      expect(data).not.toHaveProperty('city');
+    });
+
+    it('ignores a legacy cityId that is not an LGA (the old Abuja city is now a state)', async () => {
+      const data = await reviewer({
+        locationId: undefined,
+        cityId: 'state-fct',
+        state: 'FCT',
+      });
+      expect(data).not.toHaveProperty('locationId');
+      expect(data).not.toHaveProperty('state');
+    });
+
     it('clears the live ids when the change predates them, so readers use its names', async () => {
       const data = await reviewer({
         services: ['Hiring'],
@@ -567,6 +675,8 @@ describe('ProvidersService', () => {
       const row = {
         id: 'profile-1',
         userId: 'user-1',
+        locationId: 'city-1',
+        serviceAreaIds: ['district-1'],
         services: ['Hiring'],
         serviceIds: ['svc:Hiring'],
         skills: { Hiring: ['Excavator'] },
@@ -601,10 +711,80 @@ describe('ProvidersService', () => {
       });
     });
 
+    it('returns ids plus read-only names for the location and service areas', async () => {
+      const row = {
+        id: 'profile-1',
+        userId: 'user-1',
+        locationId: 'city-1',
+        serviceAreaIds: ['district-1', 'gone', 'city-1'],
+        services: ['Hiring'],
+        serviceIds: ['svc:Hiring'],
+        skills: { Hiring: ['Excavator'] },
+        skillIds: { 'svc:Hiring': [EXCAVATOR] },
+        pendingChanges: {
+          trade: 'Builder',
+          locationId: 'city-1',
+          serviceAreaIds: ['city-1'],
+        },
+        bankAccounts: [],
+        reviews: [],
+      };
+      const { service, locations } = setup({
+        live: row,
+        stubProfile: false,
+        outsideServed: true,
+      });
+      const profile = (await service.myProfile('user-1')) as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(profile).toMatchObject({
+        locationId: 'city-1',
+        state: 'Lagos',
+        city: 'Ikeja',
+        serviceAreaIds: ['district-1', 'gone', 'city-1'],
+        serviceAreas: ['Alausa', 'Ikeja'],
+        outsideServedAreas: true,
+        pendingChanges: { serviceAreas: ['Ikeja'] },
+      });
+      expect(profile).not.toHaveProperty('cityId');
+      expect(locations.summaries).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not flag a profile with no service areas as outside the served areas', async () => {
+      const row = {
+        id: 'profile-1',
+        userId: 'user-1',
+        locationId: null,
+        serviceAreaIds: [],
+        services: [],
+        serviceIds: null,
+        skills: {},
+        skillIds: null,
+        pendingChanges: null,
+        bankAccounts: [],
+        reviews: [],
+      };
+      const { service } = setup({
+        live: row,
+        stubProfile: false,
+        outsideServed: true,
+      });
+      await expect(service.myProfile('user-1')).resolves.toMatchObject({
+        locationId: null,
+        city: '',
+        state: null,
+        serviceAreas: [],
+        outsideServedAreas: false,
+      });
+    });
+
     it('resolves a not-yet-backfilled profile from its names', async () => {
       const row = {
         id: 'profile-1',
         userId: 'user-1',
+        locationId: 'city-1',
+        serviceAreaIds: ['district-1'],
         services: ['Hiring'],
         serviceIds: null,
         skills: { Hiring: ['Excavator'] },

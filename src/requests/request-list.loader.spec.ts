@@ -1,4 +1,5 @@
 import type { ActorContext } from '../platform/actor/actor.types';
+import { locationStub } from '../platform/locations/locations.testkit';
 import { listProjection } from './projections/list.projection';
 import {
   LIST_ROW_SELECT,
@@ -33,8 +34,7 @@ const base = (overrides: Record<string, unknown>) => ({
   reportApprovedAt: null,
   createdAt: at(1),
   updatedAt: at(2),
-  cityId: 'city-1',
-  districtId: 'district-1',
+  locationId: 'district-1',
   address: 'Not selected by the list',
   description: 'Not selected by the list',
   ...overrides,
@@ -274,9 +274,7 @@ function fakeDb() {
         ),
       ),
     },
-    location: {
-      findUnique: jest.fn().mockResolvedValue({ name: 'Lagos' }),
-    },
+    location: locationStub(),
     user: {
       findUnique: jest.fn(({ where }: { where: { id: string } }) =>
         Promise.resolve(
@@ -475,14 +473,15 @@ describe('RequestListLoader', () => {
     return { db, full, light };
   }
 
-  it('builds the same snapshot as the full loader, minus names and attachments the summary never reads', async () => {
+  it('builds the same snapshot as the full loader, minus the location path and attachments the summary never reads', async () => {
     const { full, light } = await both();
     expect(light).toHaveLength(3);
     light.forEach((item, index) => {
       expect(item.snapshot).toEqual({
         ...full[index].snapshot,
-        cityName: null,
-        districtName: null,
+        locationPath: [],
+        locationLabel: null,
+        locationName: null,
         attachmentInfo: [],
       });
     });
