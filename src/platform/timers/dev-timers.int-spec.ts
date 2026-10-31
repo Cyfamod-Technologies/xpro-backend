@@ -19,6 +19,7 @@ import { PlatformModule } from '../platform.module';
 import { DevTimersController } from './dev-timers.controller';
 import { DevToolsGuard } from './dev-tools.guard';
 import { TimersService } from './timers.service';
+import { LIFE_CAMP_ID } from '../locations/locations.testkit';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const request = require('supertest') as typeof import('supertest');
 
@@ -102,8 +103,7 @@ describe('POST /admin/dev/timers/fire (integration)', () => {
         customerName: 'Integration customer',
         title: 'Dev timer test',
         service: 'Design',
-        cityId: owner.id,
-        districtId: owner.id,
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for the dev timer endpoint.',

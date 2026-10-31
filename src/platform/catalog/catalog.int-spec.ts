@@ -8,6 +8,7 @@ import { validateIntake } from '../../requests/domain/intake-validation';
 import { resolveServiceInput } from '../../requests/domain/legacy-service-input';
 import { CatalogService } from './catalog.service';
 import { loadCatalog } from './catalog.tree';
+import { LIFE_CAMP_ID } from '../locations/locations.testkit';
 
 const prisma = new PrismaClient();
 
@@ -121,8 +122,7 @@ describe('seeded service catalog (integration)', () => {
     const catalog = await loadCatalog(prisma);
     const base = {
       title: 'Repair a leaking roof',
-      cityId: 'city',
-      districtId: 'district',
+      locationId: 'area',
       address: '12 Broad Street, Lagos',
       phone: '08031234567',
       description:
@@ -130,8 +130,20 @@ describe('seeded service catalog (integration)', () => {
       budget: 0,
     };
     const locations = [
-      { id: 'city', kind: 'city', parentId: null, active: true },
-      { id: 'district', kind: 'district', parentId: 'city', active: true },
+      {
+        id: 'state',
+        kind: 'state',
+        active: true,
+        serviceable: true,
+        ancestorIds: [],
+      },
+      {
+        id: 'area',
+        kind: 'area',
+        active: true,
+        serviceable: true,
+        ancestorIds: ['state'],
+      },
     ];
     const run = (input: Record<string, unknown>) =>
       validateIntake(
@@ -159,8 +171,6 @@ describe('seeded service catalog (integration)', () => {
 });
 
 describe('provider skills by id (integration)', () => {
-  const districtId = randomUUID();
-  const cityId = randomUUID();
   let leafId = '';
 
   afterAll(async () => {
@@ -189,14 +199,12 @@ describe('provider skills by id (integration)', () => {
         userId: user.id,
         phone: '+2348000000000',
         trade: 'Operator',
-        city: 'Test city',
         // The names match nothing, so only the ids can make this provider eligible.
         services: ['Legacy name'],
         skills: { 'Legacy name': ['Legacy skill'] },
         serviceIds: [hiring.id],
         skillIds: { [hiring.id]: [leafId] },
-        serviceAreas: [],
-        serviceAreaIds: [districtId],
+        serviceAreaIds: [LIFE_CAMP_ID],
         workingHours: { mon: everyDay },
         bio: 'Integration test provider.',
         verification: 'approved',
@@ -254,13 +262,12 @@ describe('provider skills by id (integration)', () => {
         ownerId: owner.id,
         service: 'Hiring',
         serviceId: leafId,
-        districtId,
-        cityId,
+        locationId: LIFE_CAMP_ID,
         startDate: null,
         details: {},
         answers: [],
       },
-      { districtName: 'Test district' },
+      {},
     );
     expect(request).toMatchObject({
       serviceId: hiring.id,

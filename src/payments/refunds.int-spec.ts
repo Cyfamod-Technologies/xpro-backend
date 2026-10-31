@@ -19,6 +19,7 @@ import { UploadsService } from '../uploads/uploads.service';
 import { createUser, deleteTestUsers } from '../../test/integration/users';
 import { PAYMENT_GATEWAY } from './payments.service';
 import { RefundsService } from './refunds.service';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 /**
  * Refund commands against a real database (05 §6.4, §7; plan C.4). Authored
@@ -142,8 +143,7 @@ describe('refund commands (integration)', () => {
         customerName: 'Refund customer',
         title: 'Refund test',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for refunds.',

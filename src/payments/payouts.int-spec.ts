@@ -24,6 +24,7 @@ import {
 } from './domain/payout-rules';
 import { FinanceService } from './finance.service';
 import { PAYMENT_GATEWAY } from './payments.service';
+import { LIFE_CAMP_ID } from '../platform/locations/locations.testkit';
 
 /**
  * Payout commands and the closure guard against a real database (05 §6.5,
@@ -165,8 +166,7 @@ describe('payouts (integration)', () => {
         customerName: 'Payout customer',
         title: 'Payout test',
         service: 'Design',
-        cityId: randomUUID(),
-        districtId: randomUUID(),
+        locationId: LIFE_CAMP_ID,
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for payouts.',
@@ -180,9 +180,7 @@ describe('payouts (integration)', () => {
         userId: providerUser.id,
         phone: '+2348000000000',
         trade: 'Architect',
-        city: 'Test city',
         services: ['Design'],
-        serviceAreas: [],
         skills: { Design: ['Architectural Designs'] },
         workingHours: {},
         bio: 'Integration test provider.',
