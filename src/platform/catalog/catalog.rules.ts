@@ -11,7 +11,7 @@ import type {
 } from './catalog.types';
 
 export const MAX_DEPTH_KEY = 'catalog.maxDepth';
-export const DEFAULT_MAX_DEPTH = 2;
+export const DEFAULT_MAX_DEPTH = 3;
 
 export const invalid = (message: string) =>
   new AppError(422, 'VALIDATION_ERROR', message);

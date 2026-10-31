@@ -12,6 +12,8 @@
     "init": "DOTENV_CONFIG_PATH=${DOTENV_CONFIG_PATH:-.env.local} ts-node -r dotenv/config -r tsconfig-paths/register scripts/init-template.ts",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "seed": "DOTENV_CONFIG_PATH=${DOTENV_CONFIG_PATH:-.env.local} ts-node -r dotenv/config -r tsconfig-paths/register src/seeds/run.ts",
+    "seed:prod": "node dist/seeds/run.js",
     "seed:super-admin": "DOTENV_CONFIG_PATH=${DOTENV_CONFIG_PATH:-.env.local} ts-node -r dotenv/config -r tsconfig-paths/register src/scripts/seed-super-admin.ts",
     "seed:sample-user": "DOTENV_CONFIG_PATH=${DOTENV_CONFIG_PATH:-.env.local} ts-node -r dotenv/config -r tsconfig-paths/register src/scripts/seed-sample-user.ts",
     "email:preview": "DOTENV_CONFIG_PATH=${DOTENV_CONFIG_PATH:-.env.local} ts-node -r dotenv/config -r tsconfig-paths/register src/scripts/render-email-previews.ts",

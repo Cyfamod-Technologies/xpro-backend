@@ -31,7 +31,6 @@ export function publicQuestion(question: CatalogQuestion) {
     config: question.config,
     dateRole: question.dateRole,
     sensitive: question.sensitive,
-    matchesSkill: question.matchesSkill,
   };
 }
 
@@ -39,7 +38,6 @@ export type PublicNode = {
   id: string;
   name: string;
   description: string | null;
-  icon: string | null;
   requiresStartDate: boolean;
   questions: ReturnType<typeof publicQuestion>[];
   children: PublicNode[];
@@ -52,7 +50,6 @@ export function publicTree(nodes: readonly CatalogNode[]): PublicNode[] {
       id: node.id,
       name: node.name,
       description: node.description,
-      icon: node.icon,
       requiresStartDate: node.requiresStartDate,
       questions: node.questions
         .filter(({ active }) => active)

@@ -138,3 +138,54 @@ container) and use `upsert`, so they are safe to re-run.
 - `seed-sample-user.ts` — creates an ordinary `user`, already active and verified.
 
 See [setup.md](setup.md) for commands and flags.
+
+## Seeding
+
+Reference data that has to be the same in every environment, such as the service
+catalog, is seeded from `src/seeds`, not written into migrations. Migrations stay
+schema-only (the first catalog in `20261029110000_seed_service_catalog` is history
+and is never edited); a seed brings that data to the current shape.
+
+```
+src/seeds/
+  run.ts            entry point (the command below)
+  registry.ts       the seeds, in the order they run: add one line to register a seed
+  runner.ts         ledger check, transaction, dry run, audit entry
+  seed.types.ts     the Seed interface: name, version, checksum, apply(tx)
+  catalog/
+    catalog.data.ts the target catalog as typed data with fixed UUIDs
+    seed-catalog.ts applies it with Prisma in one transaction
+    provider-ids.ts rewrites provider skill ids when nodes are replaced or deleted
+```
+
+```bash
+npm run seed                      # run every seed not yet applied (reads .env.local)
+npm run seed -- --only=catalog    # one seed
+npm run seed -- --force           # re-apply a seed already recorded
+npm run seed -- --dry-run         # run it, print what it would change, roll back
+npm run seed:prod                 # node dist/seeds/run.js, for the production image
+```
+
+Run it after `npx prisma migrate deploy`. It exits non-zero if a seed fails, so a
+deploy step can gate on it.
+
+### The ledger and versions
+
+Each seed declares a `name` and a `version`. `data_seeds` records the version
+applied. A plain run skips a seed whose recorded version is at or above its own,
+so the command is safe on every deploy and never overwrites an edit an admin made
+after seeding (a renamed service stays renamed). The ledger row is written in the
+same transaction as the seed, so a failed seed leaves nothing behind. A run takes
+an advisory lock, so two deploys starting together apply it once.
+
+Change a seed's data on purpose by editing its data file and **bumping `version`**.
+If the data changes but the version does not, the runner skips it and logs a
+warning (the recorded checksum differs). `--force` re-applies the current data
+whatever the ledger says, which also reverts admin edits to the seeded fields.
+
+### Writing a seed
+
+Make `apply(tx)` idempotent: look rows up by fixed id, write only what differs and
+return counts of what changed (all zero on a second pass). Use Prisma through `tx`
+and the existing helpers, for example `renameInProfiles`, so seeding does what the
+admin screens do.

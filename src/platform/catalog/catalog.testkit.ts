@@ -44,7 +44,6 @@ export function makeNode(
   return {
     parentId: null,
     description: null,
-    icon: null,
     depth: 0,
     sortOrder: 0,
     active: true,
@@ -103,10 +102,14 @@ function root(
   });
 }
 
-/** The catalog the seed migration creates, with readable ids like `svc:Hire/Professional`. */
+/**
+ * The catalog as the first seed migration created it, under the current root
+ * names and without Procurement. Readable ids like `svc:Hiring/Professional`.
+ * Real-database specs use the migrated catalog instead.
+ */
 export function seededCatalog(): CatalogIndex {
   const hire = root(
-    'Hire',
+    'Hiring',
     Object.keys(hireTradeGroups),
     [
       {
@@ -178,31 +181,7 @@ export function seededCatalog(): CatalogIndex {
       },
     ]),
     hire,
-    root('Procurement', serviceSkills.Procurement, [
-      {
-        key: 'materials',
-        label: 'Materials and quantities required',
-        type: 'long_text',
-        required: true,
-        config: { minLength: 5, maxLength: 2000 },
-      },
-      {
-        key: 'brands',
-        label: 'Preferred brands',
-        type: 'short_text',
-        config: { maxLength: 500 },
-        sortOrder: 1,
-      },
-      {
-        key: 'deliveryDate',
-        label: 'Required delivery date',
-        type: 'date',
-        required: true,
-        dateRole: 'start',
-        sortOrder: 2,
-      },
-    ]),
-    root('Facility management', serviceSkills['Facility management'], [
+    root('Facility Management', serviceSkills['Facility management'], [
       {
         key: 'propertyType',
         label: 'Property type',
@@ -222,7 +201,7 @@ export function seededCatalog(): CatalogIndex {
         sortOrder: 1,
       },
     ]),
-    root('Waste management', serviceSkills['Waste management'], [
+    root('Waste Management', serviceSkills['Waste management'], [
       {
         key: 'quantity',
         label: 'Estimated quantity and unit',

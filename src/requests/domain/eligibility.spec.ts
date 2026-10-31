@@ -170,14 +170,14 @@ describe('evaluateEligibility (04 §6.5)', () => {
 
     describe('Hire spans startDate to endDate', () => {
       const hire = {
-        service: 'Hire',
-        serviceId: 'svc:Hire',
+        service: 'Hiring',
+        serviceId: 'svc:Hiring',
         skill: null,
         skillId: null,
         effectiveStartDate: '2026-10-26',
         effectiveEndDate: '2026-10-29',
       };
-      const hiring = { serviceIds: ['svc:Hire'] };
+      const hiring = { serviceIds: ['svc:Hiring'] };
 
       it('excludes time off inside the span', () => {
         expect(
@@ -226,7 +226,7 @@ describe('evaluateEligibility (04 §6.5)', () => {
     it('looks the skill up under the request service only', () => {
       expect(
         evaluate({
-          skillIds: { 'svc:Hire': ['skill:architectural-plan'] },
+          skillIds: { 'svc:Hiring': ['skill:architectural-plan'] },
         }),
       ).toMatchObject({ eligible: false, rule: 'skill' });
     });

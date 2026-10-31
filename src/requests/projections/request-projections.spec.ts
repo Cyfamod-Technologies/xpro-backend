@@ -744,10 +744,10 @@ describe('request role projections', () => {
       },
       answers,
       servicePath: [
-        { id: 'svc-root', name: 'Hire' },
+        { id: 'svc-root', name: 'Hiring' },
         { id: 'svc-leaf', name: 'Heavy equipment' },
       ],
-      service: 'Hire',
+      service: 'Hiring',
       startDate: '2026-11-10',
     } as unknown as Partial<LoadedRequest>;
 

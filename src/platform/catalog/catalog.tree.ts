@@ -61,7 +61,6 @@ export function buildCatalog(rows: readonly CatalogRow[]): CatalogIndex {
       parentId: row.parentId,
       name: row.name,
       description: row.description,
-      icon: row.icon,
       depth: row.depth,
       sortOrder: row.sortOrder,
       active: row.active,

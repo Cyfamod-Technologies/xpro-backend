@@ -70,46 +70,47 @@ describe('validateIntake', () => {
     ],
     [
       valid({
-        service: 'Hire',
+        service: 'Hiring',
         details: { trade: 'Wrong', endDate: '2026-10-30' },
       }),
       'Choose a valid service.',
     ],
     [
       valid({
-        service: 'Hire',
+        service: 'Hiring',
         details: { trade: 'Mason', endDate: '2026-10-30' },
       }),
       'Complete quantity.',
     ],
     [
       valid({
-        service: 'Procurement',
+        service: 'Waste Management',
         details: {
-          materials: 'cement bags',
-          category: 'Cement and blocks',
-          deliveryDate: 'not-a-date',
+          wasteType: 'Residential',
+          quantity: '2 loads',
+          access: 'Gate code at the front desk',
+          pickupDate: 'not-a-date',
         },
       }),
-      'Required delivery date must be a valid date.',
+      'Preferred pickup date must be a valid date.',
     ],
     [
       valid({
-        service: 'Hire',
+        service: 'Hiring',
         details: { trade: 'Mason', quantity: 1, endDate: '2026-13-45' },
       }),
       'Hire end date must be a valid date.',
     ],
     [
       valid({
-        service: 'Hire',
+        service: 'Hiring',
         details: { trade: 'Mason', quantity: 1, endDate: '2026-10-30' },
       }),
       'Add the hire start date.',
     ],
     [
       valid({
-        service: 'Hire',
+        service: 'Hiring',
         startDate: '2026-10-25',
         details: { trade: 'Architect', quantity: 1, endDate: '2026-10-24' },
       }),
@@ -117,7 +118,7 @@ describe('validateIntake', () => {
     ],
     [
       valid({
-        service: 'Hire',
+        service: 'Hiring',
         startDate: '2026-10-25',
         details: { trade: 'Architect', quantity: 0, endDate: '2026-10-30' },
       }),
@@ -176,16 +177,16 @@ describe('validateIntake', () => {
   });
 
   describe('catalog answers', () => {
-    const heavy = 'svc:Hire/Heavy equipment';
+    const heavy = 'svc:Hiring/Heavy equipment';
     const heavyTrade = catalog.byId
       .get(heavy)!
       .questions.find(({ key }) => key === 'trade')!;
     const operator = catalog.byId.get(heavy)!.questions[1];
     const quantity = catalog.byId
-      .get('svc:Hire')!
+      .get('svc:Hiring')!
       .questions.find(({ key }) => key === 'quantity')!;
     const endDate = catalog.byId
-      .get('svc:Hire')!
+      .get('svc:Hiring')!
       .questions.find(({ key }) => key === 'endDate')!;
     const input = (answers: Record<string, unknown>, extra = {}) => ({
       ...valid({ details: undefined, ...extra }),
@@ -211,7 +212,7 @@ describe('validateIntake', () => {
     it('stores the snapshot, details, skill and dates for a leaf', () => {
       const result = check(input(complete));
       expect(result.serviceId).toBe(heavy);
-      expect(result.serviceRootId).toBe('svc:Hire');
+      expect(result.serviceRootId).toBe('svc:Hiring');
       expect(result.skill).toBe('Excavator');
       expect(result.details).toEqual({
         trade: 'Excavator',
@@ -274,7 +275,7 @@ describe('validateIntake', () => {
 
     it('treats a sub-service the customer did not pick as invalid', () => {
       expect(() =>
-        check({ ...input(complete), serviceId: 'svc:Hire' }),
+        check({ ...input(complete), serviceId: 'svc:Hiring' }),
       ).toThrow('Choose a valid service.');
     });
 

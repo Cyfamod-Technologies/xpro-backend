@@ -117,10 +117,10 @@ describe('RequestsReadService.list', () => {
 
   it('pushes status, service and q into SQL', async () => {
     const { list, whereAnd } = setup();
-    await list({ status: 'matched', service: 'Hire', q: 'XPR-00042' });
+    await list({ status: 'matched', service: 'Hiring', q: 'XPR-00042' });
     expect(whereAnd()).toEqual([
       { status: 'matched' },
-      { service: 'Hire' },
+      { service: 'Hiring' },
       {
         OR: [
           { title: { contains: 'XPR-00042', mode: 'insensitive' } },

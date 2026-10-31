@@ -245,16 +245,17 @@ export function effectiveDates(
     };
   }
   const effectiveStartDate =
-    service === 'Waste management'
+    service === 'Waste Management'
       ? stringValue(details.pickupDate)
       : service === 'Procurement'
         ? stringValue(details.deliveryDate)
-        : service === 'Facility management'
+        : service === 'Facility Management'
           ? (stringValue(details.visitDate) ?? startDate)
           : startDate;
   return {
     effectiveStartDate,
-    effectiveEndDate: service === 'Hire' ? stringValue(details.endDate) : null,
+    effectiveEndDate:
+      service === 'Hiring' ? stringValue(details.endDate) : null,
   };
 }
 

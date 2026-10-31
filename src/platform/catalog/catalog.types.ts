@@ -34,7 +34,6 @@ export type CatalogNode = {
   parentId: string | null;
   name: string;
   description: string | null;
-  icon: string | null;
   depth: number;
   sortOrder: number;
   active: boolean;

@@ -53,7 +53,7 @@ export class CatalogQuestionService {
         config: { ...dto.config },
         dateRole: dto.dateRole ?? null,
         sensitive: dto.sensitive ?? false,
-        matchesSkill: dto.matchesSkill ?? false,
+        matchesSkill: false,
       });
       const scope = pathScope(catalog, node);
       assertSingleTraits(scope, draft);
@@ -101,7 +101,7 @@ export class CatalogQuestionService {
         config: dto.config ? { ...dto.config } : question.config,
         dateRole: dto.dateRole !== undefined ? dto.dateRole : question.dateRole,
         sensitive: dto.sensitive ?? question.sensitive,
-        matchesSkill: dto.matchesSkill ?? question.matchesSkill,
+        matchesSkill: question.matchesSkill,
       });
       assertSingleTraits(pathScope(catalog, node), { id, ...draft });
       assertOptionIdsFree(

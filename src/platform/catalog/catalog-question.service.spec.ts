@@ -20,17 +20,17 @@ describe('CatalogQuestionService', () => {
 
     it('generates a key unique along the path, including descendants and ancestors', async () => {
       const { questionService, tx } = fakeCatalog();
-      await questionService.create(uid, 'svc:Hire', {
+      await questionService.create(uid, 'svc:Hiring', {
         label: 'Trade',
         type: 'short_text',
       });
       expect(lastCreated(tx)).toMatchObject({ key: 'trade2', sortOrder: 2 });
-      await questionService.create(uid, 'svc:Hire/Heavy equipment', {
+      await questionService.create(uid, 'svc:Hiring/Heavy equipment', {
         label: 'Quantity',
         type: 'number',
       });
       expect(lastCreated(tx)).toMatchObject({ key: 'quantity2' });
-      await questionService.create(uid, 'svc:Hire/Professional', {
+      await questionService.create(uid, 'svc:Hiring/Professional', {
         label: 'Operator required?',
         type: 'yes_no',
       });
@@ -91,10 +91,6 @@ describe('CatalogQuestionService', () => {
         'Only date questions can be a start or end date.',
       ],
       [
-        { type: 'yes_no' as const, matchesSkill: true },
-        'Only a single-choice question can match the provider skill.',
-      ],
-      [
         { type: 'number' as const, config: { min: 5, max: 1 } },
         'The minimum cannot be above the maximum.',
       ],
@@ -111,12 +107,12 @@ describe('CatalogQuestionService', () => {
   });
 
   describe('option ids are unique within a root', () => {
-    const taken = 'svc:Hire/Heavy equipment:trade:Excavator';
+    const taken = 'svc:Hiring/Heavy equipment:trade:Excavator';
 
     it('rejects a new question that reuses an option id from the same root', async () => {
       const { questionService, tx } = fakeCatalog();
       await expect(
-        questionService.create(uid, 'svc:Hire/Professional', {
+        questionService.create(uid, 'svc:Hiring/Professional', {
           label: 'Specialism',
           type: 'single_choice',
           options: [{ id: taken, label: 'Excavation' }],
@@ -138,16 +134,16 @@ describe('CatalogQuestionService', () => {
 
     it('rejects an update that gives an option another question’s id, but keeps the question’s own', async () => {
       const { questionService, catalog } = fakeCatalog();
-      const options = catalog.byId.get('svc:Hire/Professional')!.questions[0]
+      const options = catalog.byId.get('svc:Hiring/Professional')!.questions[0]
         .options;
       await expect(
-        questionService.update(uid, 'q:svc:Hire/Professional:trade', {
+        questionService.update(uid, 'q:svc:Hiring/Professional:trade', {
           version: 1,
           options: [...options, { id: taken, label: 'Excavation' }],
         }),
       ).rejects.toThrow('Each option needs its own id.');
       await expect(
-        questionService.update(uid, 'q:svc:Hire/Professional:trade', {
+        questionService.update(uid, 'q:svc:Hiring/Professional:trade', {
           version: 1,
           options: [...options, { label: 'Estimator' }],
         }),
@@ -156,31 +152,23 @@ describe('CatalogQuestionService', () => {
   });
 
   describe('one skill, start and end per path', () => {
-    it('rejects a second skill question above or below an existing one', async () => {
-      const { questionService } = fakeCatalog();
-      const skill = {
+    it('never creates a question that matches the provider skill', async () => {
+      const { questionService, tx } = fakeCatalog();
+      await questionService.create(uid, 'svc:Design', {
         label: 'Another',
-        type: 'single_choice' as const,
+        type: 'single_choice',
         options: [{ label: 'A' }],
         matchesSkill: true,
-      };
-      await expect(
-        questionService.create(uid, 'svc:Hire/Professional', skill),
-      ).rejects.toThrow(
-        'Only one question on a service path can match the provider skill.',
-      );
-      await expect(
-        questionService.create(uid, 'svc:Hire', skill),
-      ).rejects.toThrow('can match the provider skill');
-      await expect(
-        questionService.create(uid, 'svc:Design', skill),
-      ).resolves.toBeDefined();
+      } as never);
+      expect(tx.serviceQuestion.create.mock.calls[0][0].data).toMatchObject({
+        matchesSkill: false,
+      });
     });
 
     it('rejects a second start or end date on the path but allows the other role', async () => {
       const { questionService } = fakeCatalog();
       await expect(
-        questionService.create(uid, 'svc:Hire/Professional', {
+        questionService.create(uid, 'svc:Hiring/Professional', {
           label: 'Finish',
           type: 'date',
           dateRole: 'end',
@@ -189,7 +177,7 @@ describe('CatalogQuestionService', () => {
         'Only one question on a service path can be the end date.',
       );
       await expect(
-        questionService.create(uid, 'svc:Hire/Professional', {
+        questionService.create(uid, 'svc:Hiring/Professional', {
           label: 'Begin',
           type: 'date',
           dateRole: 'start',
@@ -199,7 +187,7 @@ describe('CatalogQuestionService', () => {
   });
 
   describe('update', () => {
-    const tradeId = 'q:svc:Hire/Professional:trade';
+    const tradeId = 'q:svc:Hiring/Professional:trade';
 
     it('returns 409 when the version is stale', async () => {
       const { questionService } = fakeCatalog();
@@ -210,12 +198,16 @@ describe('CatalogQuestionService', () => {
 
     it('keeps the key, bumps the version and replaces config wholesale', async () => {
       const { questionService, tx } = fakeCatalog();
-      const result = await questionService.update(uid, 'q:svc:Hire:quantity', {
-        version: 1,
-        label: 'How many',
-        config: { max: 20 },
-        helpText: '',
-      });
+      const result = await questionService.update(
+        uid,
+        'q:svc:Hiring:quantity',
+        {
+          version: 1,
+          label: 'How many',
+          config: { max: 20 },
+          helpText: '',
+        },
+      );
       const data = tx.serviceQuestion.update.mock.calls[0][0].data;
       expect(data).toMatchObject({
         label: 'How many',
@@ -229,7 +221,7 @@ describe('CatalogQuestionService', () => {
 
     it('skips the write when nothing changed', async () => {
       const { questionService, tx } = fakeCatalog();
-      await questionService.update(uid, 'q:svc:Hire:quantity', {
+      await questionService.update(uid, 'q:svc:Hiring:quantity', {
         version: 1,
         label: 'Quantity',
       });
@@ -239,7 +231,7 @@ describe('CatalogQuestionService', () => {
     it('refuses a type change that leaves a date role or skill flag behind', async () => {
       const { questionService } = fakeCatalog();
       await expect(
-        questionService.update(uid, 'q:svc:Hire:endDate', {
+        questionService.update(uid, 'q:svc:Hiring:endDate', {
           version: 1,
           type: 'short_text',
         }),
@@ -259,13 +251,14 @@ describe('CatalogQuestionService', () => {
         profiles: [
           {
             id: 'p1',
-            services: ['Hire'],
-            skills: { Hire: ['Architect', 'Mason'] },
+            services: ['Hiring'],
+            skills: { Hiring: ['Architect', 'Mason'] },
             pendingChanges: null,
           },
         ],
       });
-      const question = catalog.byId.get('svc:Hire/Professional')!.questions[0];
+      const question = catalog.byId.get('svc:Hiring/Professional')!
+        .questions[0];
       const options = question.options.map((option) =>
         option.label === 'Architect'
           ? { ...option, label: 'Architect (registered)' }
@@ -275,8 +268,8 @@ describe('CatalogQuestionService', () => {
       expect(tx.providerProfile.update).toHaveBeenCalledWith({
         where: { id: 'p1' },
         data: {
-          services: ['Hire'],
-          skills: { Hire: ['Architect (registered)', 'Mason'] },
+          services: ['Hiring'],
+          skills: { Hiring: ['Architect (registered)', 'Mason'] },
         },
       });
     });
@@ -284,10 +277,10 @@ describe('CatalogQuestionService', () => {
     it('does not touch providers when a non-skill question is renamed', async () => {
       const { questionService, tx } = fakeCatalog({
         profiles: [
-          { id: 'p1', services: ['Hire'], skills: {}, pendingChanges: null },
+          { id: 'p1', services: ['Hiring'], skills: {}, pendingChanges: null },
         ],
       });
-      await questionService.update(uid, 'q:svc:Hire:quantity', {
+      await questionService.update(uid, 'q:svc:Hiring:quantity', {
         version: 1,
         label: 'Count',
       });
@@ -299,10 +292,10 @@ describe('CatalogQuestionService', () => {
     it('always deletes a question', async () => {
       const { questionService, tx } = fakeCatalog({ requests: 50 });
       await expect(
-        questionService.remove(uid, 'q:svc:Hire:quantity'),
-      ).resolves.toEqual({ id: 'q:svc:Hire:quantity' });
+        questionService.remove(uid, 'q:svc:Hiring:quantity'),
+      ).resolves.toEqual({ id: 'q:svc:Hiring:quantity' });
       expect(tx.serviceQuestion.delete).toHaveBeenCalledWith({
-        where: { id: 'q:svc:Hire:quantity' },
+        where: { id: 'q:svc:Hiring:quantity' },
       });
       await expect(questionService.remove(uid, 'nope')).rejects.toThrow(
         'Question not found.',
@@ -311,13 +304,13 @@ describe('CatalogQuestionService', () => {
 
     it('reorders among the service questions only', async () => {
       const { questionService, tx } = fakeCatalog();
-      await questionService.reorder(uid, 'svc:Hire', {
-        ids: ['q:svc:Hire:endDate', 'q:svc:Hire:quantity'],
+      await questionService.reorder(uid, 'svc:Hiring', {
+        ids: ['q:svc:Hiring:endDate', 'q:svc:Hiring:quantity'],
       });
       expect(tx.serviceQuestion.update).toHaveBeenCalledTimes(2);
       await expect(
-        questionService.reorder(uid, 'svc:Hire', {
-          ids: ['q:svc:Hire:endDate'],
+        questionService.reorder(uid, 'svc:Hiring', {
+          ids: ['q:svc:Hiring:endDate'],
         }),
       ).rejects.toThrow('exactly once');
     });

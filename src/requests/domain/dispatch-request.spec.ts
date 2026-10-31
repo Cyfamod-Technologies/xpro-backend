@@ -14,7 +14,7 @@ describe('buildDispatchRequest (04 §4.9, C.6)', () => {
   it.each([
     ['Design', { designType: 'Architectural plan' }, 'Architectural plan'],
     ['Construction', { workType: 'Roof and ceiling' }, 'Roof and ceiling'],
-    ['Hire', { trade: 'Plumber' }, 'Plumber'],
+    ['Hiring', { trade: 'Plumber' }, 'Plumber'],
     ['Procurement', { category: 'Cement and blocks' }, 'Cement and blocks'],
     ['Facility management', { serviceNeeds: 'Pest control' }, 'Pest control'],
     ['Waste management', { wasteType: 'Commercial' }, 'Commercial'],
@@ -72,14 +72,14 @@ describe('buildDispatchRequest (04 §4.9, C.6)', () => {
       expect(dates('Construction', null, {})).toEqual([null, null]);
     });
 
-    it('uses startDate and endDate for Hire', () => {
-      expect(dates('Hire', '2026-11-02', { endDate: '2026-11-06' })).toEqual([
+    it('uses startDate and endDate for Hiring', () => {
+      expect(dates('Hiring', '2026-11-02', { endDate: '2026-11-06' })).toEqual([
         '2026-11-02',
         '2026-11-06',
       ]);
     });
 
-    it('ignores an endDate on a service other than Hire', () => {
+    it('ignores an endDate on a service other than Hiring', () => {
       expect(dates('Design', '2026-11-02', { endDate: '2026-11-06' })).toEqual([
         '2026-11-02',
         null,
@@ -88,7 +88,7 @@ describe('buildDispatchRequest (04 §4.9, C.6)', () => {
 
     it('uses pickupDate for Waste management', () => {
       expect(
-        dates('Waste management', '2026-11-02', { pickupDate: '2026-11-09' }),
+        dates('Waste Management', '2026-11-02', { pickupDate: '2026-11-09' }),
       ).toEqual(['2026-11-09', null]);
     });
 
@@ -100,9 +100,9 @@ describe('buildDispatchRequest (04 §4.9, C.6)', () => {
 
     it('uses visitDate for Facility management when given, else startDate', () => {
       expect(
-        dates('Facility management', '2026-11-02', { visitDate: '2026-11-12' }),
+        dates('Facility Management', '2026-11-02', { visitDate: '2026-11-12' }),
       ).toEqual(['2026-11-12', null]);
-      expect(dates('Facility management', '2026-11-02', {})).toEqual([
+      expect(dates('Facility Management', '2026-11-02', {})).toEqual([
         '2026-11-02',
         null,
       ]);
@@ -136,16 +136,16 @@ describe('buildDispatchRequest (04 §4.9, C.6)', () => {
 
 describe('buildDispatchRequest from the live catalog', () => {
   const catalog = seededCatalog();
-  const heavy = catalog.byId.get('svc:Hire/Heavy equipment')!;
+  const heavy = catalog.byId.get('svc:Hiring/Heavy equipment')!;
   const trade = heavy.questions[0];
   const row = (over: Record<string, unknown> = {}) => ({
     ...base,
-    service: 'Hire',
+    service: 'Hiring',
     serviceId: heavy.id,
     startDate: '2026-11-10',
     details: { trade: 'Excavator' },
     servicePath: [
-      { id: 'svc:Hire', name: 'Hire' },
+      { id: 'svc:Hiring', name: 'Hiring' },
       { id: heavy.id, name: 'Heavy equipment' },
     ],
     answers: [
@@ -170,14 +170,14 @@ describe('buildDispatchRequest from the live catalog', () => {
 
   it('takes the root and skill names from the catalog by id, so renames follow', () => {
     trade.options[0].label = 'Mini excavator';
-    catalog.byId.get('svc:Hire')!.name = 'Hire and rental';
+    catalog.byId.get('svc:Hiring')!.name = 'Hire and rental';
     const result = buildDispatchRequest(row(), locations, catalog);
     expect(result.service).toBe('Hire and rental');
     expect(result.skill).toBe('Mini excavator');
     expect(result.effectiveStartDate).toBe('2026-11-10');
     expect(result.effectiveEndDate).toBe('2026-11-20');
     trade.options[0].label = 'Excavator';
-    catalog.byId.get('svc:Hire')!.name = 'Hire';
+    catalog.byId.get('svc:Hiring')!.name = 'Hiring';
   });
 
   it('uses the leaf name when the path has no skill question', () => {
@@ -204,11 +204,11 @@ describe('buildDispatchRequest from the live catalog', () => {
 });
 
 describe('buildDispatchRequest ids', () => {
-  const heavy = 'svc:Hire/Heavy equipment';
+  const heavy = 'svc:Hiring/Heavy equipment';
   const excavator = `${heavy}:trade:Excavator`;
   const row = (over: Record<string, unknown> = {}) => ({
     ...base,
-    service: 'Hire',
+    service: 'Hiring',
     serviceId: heavy,
     startDate: null,
     details: {},
@@ -229,8 +229,8 @@ describe('buildDispatchRequest ids', () => {
     expect(
       buildDispatchRequest(row(), locations, seededCatalog()),
     ).toMatchObject({
-      service: 'Hire',
-      serviceId: 'svc:Hire',
+      service: 'Hiring',
+      serviceId: 'svc:Hiring',
       skill: 'Excavator',
       skillId: excavator,
     });
@@ -287,10 +287,10 @@ describe('buildDispatchRequest ids', () => {
         seededCatalog(),
       ),
     ).toMatchObject({
-      service: 'Hire',
-      serviceId: 'svc:Hire',
+      service: 'Hiring',
+      serviceId: 'svc:Hiring',
       skill: 'Plumber',
-      skillId: 'svc:Hire/Vocational worker:trade:Plumber',
+      skillId: 'svc:Hiring/Vocational worker:trade:Plumber',
     });
   });
 
@@ -302,8 +302,8 @@ describe('buildDispatchRequest ids', () => {
         seededCatalog(),
       ),
     ).toMatchObject({
-      service: 'Hire',
-      serviceId: 'svc:Hire',
+      service: 'Hiring',
+      serviceId: 'svc:Hiring',
       skill: 'Excavator',
       skillId: excavator,
     });
@@ -331,8 +331,8 @@ describe('buildDispatchRequest ids', () => {
       verification: 'approved',
       userStatus: 'active',
       reliabilityStatus: 'normal',
-      serviceIds: ['svc:Hire'],
-      skillIds: { 'svc:Hire': [excavator] },
+      serviceIds: ['svc:Hiring'],
+      skillIds: { 'svc:Hiring': [excavator] },
       serviceAreaIds: ['district-1'],
       available: true,
       capacity: 3,
@@ -359,7 +359,7 @@ describe('buildDispatchRequest ids', () => {
 
       catalog.byId.get(heavy)!.questions[0].options[0].label =
         'Excavator (20t)';
-      catalog.byId.get('svc:Hire')!.name = 'Hire and rental';
+      catalog.byId.get('svc:Hiring')!.name = 'Hire and rental';
       const request = buildDispatchRequest(row(), locations, catalog);
       expect(request).toMatchObject({
         service: 'Hire and rental',

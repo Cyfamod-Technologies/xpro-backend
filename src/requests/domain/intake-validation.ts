@@ -263,7 +263,7 @@ export function validateIntake(
   const effectiveStartDate =
     dateOf('start') ?? optionalIsoDate(input.startDate);
   const effectiveEndDate = dateOf('end');
-  const hire = root.name === 'Hire';
+  const hire = root.name === 'Hiring';
   if (
     path.some(({ requiresStartDate }) => requiresStartDate) &&
     !effectiveStartDate

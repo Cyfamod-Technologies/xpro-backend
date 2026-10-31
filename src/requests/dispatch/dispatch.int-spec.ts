@@ -143,7 +143,7 @@ describe('dispatch engine (integration)', () => {
         address: '1 Test Street',
         phone: '+2348012345678',
         description: 'Integration test request for dispatch.',
-        details: { designType: 'Architectural plan' },
+        details: { designType: 'Architectural Designs' },
         status,
         intakeState: 'approved',
         dispatchMode: 'auto',
@@ -168,7 +168,7 @@ describe('dispatch engine (integration)', () => {
         services: ['Design'],
         serviceAreas: [],
         serviceAreaIds: [districtId],
-        skills: { Design: ['Architectural plan'] },
+        skills: { Design: ['Architectural Designs'] },
         capacity: patch.capacity ?? 3,
         lastOfferedAt: patch.lastOfferedAt ?? null,
         workingHours: {

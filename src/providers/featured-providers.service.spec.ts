@@ -42,7 +42,7 @@ function profile(id: string, o: ProfileOverrides = {}) {
     userId: `user-${id}`,
     trade: o.trade ?? 'Plumbing',
     city: o.city ?? 'Lagos',
-    services: o.services ?? ['Design', 7, 'Hire'],
+    services: o.services ?? ['Design', 7, 'Hiring'],
     serviceIds: o.serviceIds ?? null,
     skills: {},
     skillIds: o.skillIds ?? null,
@@ -299,7 +299,7 @@ describe('buildFeaturedList', () => {
       candidate('pin', { trade: 'Construction', mode: 'pinned', position: 0 }),
       candidate('design', { trade: 'Design', completedJobs: 9 }),
       candidate('construction', { trade: 'Construction', completedJobs: 7 }),
-      candidate('hire', { trade: 'Hire', completedJobs: 4 }),
+      candidate('hire', { trade: 'Hiring', completedJobs: 4 }),
     ]);
     expect(ids(list)).toEqual(['pin', 'design', 'hire', 'construction']);
   });
@@ -387,7 +387,7 @@ describe('FeaturedProvidersService.publicList', () => {
       id: 'p1',
       displayName: 'Ada O.',
       trade: 'Plumbing',
-      services: ['Design', 'Hire'],
+      services: ['Design', 'Hiring'],
       city: 'Lagos',
       areas: ['Ikeja', 'Yaba'],
       photoUrl: 'https://cdn.test/photos/p1.png?sig=1',
@@ -411,13 +411,13 @@ describe('FeaturedProvidersService.publicList', () => {
       profiles: [
         profile('p1', {
           services: ['Old name'],
-          serviceIds: ['svc:Design', 'svc:Hire', 'deleted-id'],
-          skillIds: { 'svc:Design': [], 'svc:Hire': [] },
+          serviceIds: ['svc:Design', 'svc:Hiring', 'deleted-id'],
+          skillIds: { 'svc:Design': [], 'svc:Hiring': [] },
         }),
       ],
     });
     const { providers } = await service.publicList();
-    expect(providers[0].services).toEqual(['Design', 'Hire']);
+    expect(providers[0].services).toEqual(['Design', 'Hiring']);
   });
 
   it('queries completed assignments and a 90 day confirmed no-show window', async () => {
