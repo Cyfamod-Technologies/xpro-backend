@@ -2,7 +2,6 @@ type Snapshot = {
   trade: string;
   services: unknown;
   serviceIds?: unknown;
-  serviceAreas: unknown;
   serviceAreaIds?: unknown;
   skills: unknown;
   skillIds?: unknown;
@@ -38,8 +37,9 @@ const grouped = (value: unknown) =>
   );
 
 /**
- * The names of the sensitive profile fields a held change would alter, for the review history. Ids are compared when
- * both sides have them; older profiles without ids fall back to the saved names.
+ * The names of the sensitive profile fields a held change would alter, for the review history. Service areas are compared by
+ * id. Services and skills are compared by id when both sides have them; older profiles without ids fall back to the saved
+ * names.
  */
 export function changedProfileFields(
   live: Snapshot,
@@ -54,10 +54,7 @@ export function changedProfileFields(
     ? !sameList(ids(live.serviceIds), ids(proposed.serviceIds))
     : !sameList(names(live.services), names(proposed.services));
   if (servicesChanged) fields.push('Services');
-  if (
-    !sameList(names(live.serviceAreas), names(proposed.serviceAreas)) ||
-    !sameList(ids(live.serviceAreaIds), ids(proposed.serviceAreaIds))
-  )
+  if (!sameList(ids(live.serviceAreaIds), ids(proposed.serviceAreaIds)))
     fields.push('Service areas');
   const skillsChanged = bothHaveServiceIds
     ? grouped(live.skillIds) !== grouped(proposed.skillIds)

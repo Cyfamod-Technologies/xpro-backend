@@ -46,7 +46,10 @@ import {
   type ProviderIds,
 } from '../platform/catalog/provider-skills';
 import { confirmedJobConflictMessage } from '../requests/domain/schedule-checks';
-import { LocationsService } from '../platform/locations/locations.service';
+import {
+  LocationsService,
+  type LocationSummary,
+} from '../platform/locations/locations.service';
 import {
   RequestEventsService,
   type HoursConflict,
@@ -69,6 +72,11 @@ import {
 } from './dto/provider.dto';
 import { SessionStore } from '../redis/session-store.service';
 import { paginationArgs, toPaginatedResult } from '../common/utils/paginate';
+
+type ProfilePlaces = {
+  summaries: Map<string, LocationSummary>;
+  outsideServedAreas: boolean;
+};
 
 const PROVIDER_REVIEW_DENIED =
   'You do not have permission to review provider details.';
@@ -175,9 +183,15 @@ export class ProvidersService {
         reviews: { orderBy: { createdAt: 'desc' } },
       },
     });
-    return profile
-      ? this.project(await loadCatalog(this.prisma), profile, true)
-      : { verification: 'draft', profile: null };
+    if (!profile) return { verification: 'draft', profile: null };
+    const places = await this.placesFor([profile]);
+    return this.project(
+      await loadCatalog(this.prisma),
+      profile,
+      true,
+      false,
+      places(profile.id),
+    );
   }
 
   async listBanks(userId: string) {
@@ -370,7 +384,7 @@ export class ProvidersService {
         { field: 'phone' },
       );
     const normalized = await this.validateSubmission(dto);
-    const locationValues = await this.locations.resolveProviderLocationIds(dto);
+    const locationValues = await this.locations.validateProviderLocations(dto);
     await this.verifyAttachments(userId, dto);
     const bankCode = dto.bankCode ?? '';
     const accountNumber = dto.accountNumber ?? '';
@@ -434,10 +448,7 @@ export class ProvidersService {
         trade: dto.trade.trim(),
         services: normalized.services,
         serviceIds: normalized.serviceIds,
-        city: locationValues.cityName,
-        state: locationValues.state ?? null,
-        cityId: locationValues.cityId,
-        serviceAreas: locationValues.serviceAreaNames,
+        locationId: locationValues.locationId,
         serviceAreaIds: locationValues.serviceAreaIds,
         skills: normalized.skills,
         skillIds: normalized.skillIds,
@@ -451,9 +462,7 @@ export class ProvidersService {
           where: { userId },
           data: {
             phone,
-            city: locationValues.cityName,
-            state: locationValues.state ?? null,
-            cityId: locationValues.cityId ?? null,
+            locationId: locationValues.locationId,
             businessName: dto.businessName?.trim() || undefined,
             experience: dto.experience,
             bio: dto.bio.trim(),
@@ -478,13 +487,10 @@ export class ProvidersService {
             userId,
             phone,
             trade: dto.trade.trim(),
-            city: locationValues.cityName,
-            state: locationValues.state ?? null,
-            cityId: locationValues.cityId ?? null,
+            locationId: locationValues.locationId,
             businessName: dto.businessName?.trim() || undefined,
             services: json(normalized.services),
             serviceIds: json(normalized.serviceIds),
-            serviceAreas: json(locationValues.serviceAreaNames),
             serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
             skillIds: json(normalized.skillIds),
@@ -501,13 +507,10 @@ export class ProvidersService {
           update: {
             phone,
             trade: dto.trade.trim(),
-            city: locationValues.cityName,
-            state: locationValues.state ?? null,
-            cityId: locationValues.cityId ?? null,
+            locationId: locationValues.locationId,
             businessName: dto.businessName?.trim() || null,
             services: json(normalized.services),
             serviceIds: json(normalized.serviceIds),
-            serviceAreas: json(locationValues.serviceAreaNames),
             serviceAreaIds: locationValues.serviceAreaIds,
             skills: json(normalized.skills),
             skillIds: json(normalized.skillIds),
@@ -855,8 +858,10 @@ export class ProvidersService {
           })
         : [];
     const catalog = await loadCatalog(this.prisma);
+    const places = await this.placesFor(rows);
     const profiles = rows.map((row) => {
-      const projected = this.project(catalog, row, false, false);
+      const place = places(row.id);
+      const projected = this.project(catalog, row, false, false, place);
       const pendingChanges =
         projected.pendingChanges &&
         typeof projected.pendingChanges === 'object' &&
@@ -877,7 +882,7 @@ export class ProvidersService {
           lastName: row.user.lastName,
           email: row.user.email,
           trade: row.trade,
-          city: row.city,
+          city: projected.city,
           verification: row.verification,
           available: row.available,
           version: row.version,
@@ -922,6 +927,7 @@ export class ProvidersService {
             searchable.email,
             searchable.trade,
             searchable.city,
+            searchable.state,
             searchable.services,
             searchable.serviceAreas,
           ]
@@ -997,11 +1003,13 @@ export class ProvidersService {
         },
       }),
     ]);
+    const places = await this.placesFor([profile]);
     const data = this.project(
       await loadCatalog(this.prisma),
       profile,
       false,
       bankReview,
+      places(profile.id),
     );
     const pendingChanges =
       profile.pendingChanges &&
@@ -1079,14 +1087,15 @@ export class ProvidersService {
       userId: '',
       phone: '',
       trade: '',
-      city: '',
+      locationId: null,
       state: null,
-      cityId: null,
+      city: '',
       businessName: null,
       services: [],
       serviceIds: [],
       serviceAreas: [],
       serviceAreaIds: [],
+      outsideServedAreas: false,
       skills: {},
       skillIds: {},
       capacity: 0,
@@ -1470,7 +1479,14 @@ export class ProvidersService {
         profile.id,
         'Provider verification was rejected.',
       );
-    return this.project(await loadCatalog(this.prisma), updated, false);
+    const places = await this.placesFor([updated]);
+    return this.project(
+      await loadCatalog(this.prisma),
+      updated,
+      false,
+      false,
+      places(updated.id),
+    );
   }
 
   async reviewChanges(
@@ -1497,6 +1513,19 @@ export class ProvidersService {
     const trade = changes.trade;
     const now = new Date().toISOString();
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Changes held before locations moved to ids carry the old city id; it only counts when it is an LGA.
+      const heldLocations = [changes.locationId, changes.cityId].filter(
+        (id): id is string => typeof id === 'string',
+      );
+      const lgas = heldLocations.length
+        ? await tx.location.findMany({
+            where: { id: { in: heldLocations }, kind: 'lga' },
+            select: { id: true },
+          })
+        : [];
+      const heldLocationId = heldLocations.find((id) =>
+        lgas.some((lga) => lga.id === id),
+      );
       const result = await tx.providerProfile.update({
         where: { id: providerId },
         data: {
@@ -1507,16 +1536,7 @@ export class ProvidersService {
                 serviceIds: Array.isArray(changes.serviceIds)
                   ? json(changes.serviceIds)
                   : Prisma.DbNull,
-                serviceAreas: json(changes.serviceAreas),
-                ...(typeof changes.city === 'string'
-                  ? { city: changes.city }
-                  : {}),
-                ...(typeof changes.state === 'string'
-                  ? { state: changes.state }
-                  : {}),
-                ...(typeof changes.cityId === 'string'
-                  ? { cityId: changes.cityId }
-                  : {}),
+                ...(heldLocationId ? { locationId: heldLocationId } : {}),
                 ...(Array.isArray(changes.serviceAreaIds)
                   ? { serviceAreaIds: changes.serviceAreaIds as string[] }
                   : {}),
@@ -1640,7 +1660,14 @@ export class ProvidersService {
       },
     });
     if (!profile) throw new NotFoundException('Provider profile not found.');
-    return this.project(await loadCatalog(this.prisma), profile, false);
+    const places = await this.placesFor([profile]);
+    return this.project(
+      await loadCatalog(this.prisma),
+      profile,
+      false,
+      false,
+      places(profile.id),
+    );
   }
 
   private async requireProvider(userId: string) {
@@ -1700,7 +1727,7 @@ export class ProvidersService {
         throw new BadRequestException('Choose services from the list.');
       return root;
     });
-    if (!dto.serviceAreaIds?.length && !dto.serviceAreas?.length)
+    if (!dto.serviceAreaIds?.length)
       throw new BadRequestException('Add at least one service area.');
     if (!dto.documents.length)
       throw new BadRequestException(
@@ -1743,11 +1770,6 @@ export class ProvidersService {
       serviceIds,
       skillIds,
       ...namesFromIds(catalog, serviceIds, skillIds),
-      serviceAreas: [
-        ...new Set(
-          (dto.serviceAreas ?? []).map((area) => area.trim()).filter(Boolean),
-        ),
-      ],
     };
   }
 
@@ -1999,6 +2021,48 @@ export class ProvidersService {
     }
   }
 
+  /** Place names and the served-area flag for a page of profiles, in one query each. */
+  private async placesFor(
+    profiles: ReadonlyArray<{
+      id: string;
+      locationId: string | null;
+      serviceAreaIds: string[];
+      pendingChanges?: Prisma.JsonValue;
+    }>,
+  ): Promise<(profileId: string) => ProfilePlaces> {
+    const heldAreaIds = (pending: Prisma.JsonValue | undefined) =>
+      pending &&
+      typeof pending === 'object' &&
+      !Array.isArray(pending) &&
+      Array.isArray(pending.serviceAreaIds)
+        ? pending.serviceAreaIds.filter(
+            (id): id is string => typeof id === 'string',
+          )
+        : [];
+    const [summaries, outside] = await Promise.all([
+      this.locations.summaries(
+        profiles.flatMap((profile) => [
+          profile.locationId,
+          ...profile.serviceAreaIds,
+          ...heldAreaIds(profile.pendingChanges),
+        ]),
+      ),
+      this.locations.outsideServedAreasFor(
+        profiles.map((profile) => profile.serviceAreaIds),
+      ),
+    ]);
+    const outsideById = new Map(
+      profiles.map((profile, index) => [
+        profile.id,
+        profile.serviceAreaIds.length > 0 && outside[index],
+      ]),
+    );
+    return (profileId) => ({
+      summaries,
+      outsideServedAreas: outsideById.get(profileId) ?? false,
+    });
+  }
+
   private project(
     catalog: CatalogIndex,
     profile: {
@@ -2006,13 +2070,10 @@ export class ProvidersService {
       userId: string;
       phone: string;
       trade: string;
-      city: string;
-      state?: string | null;
-      cityId?: string | null;
+      locationId?: string | null;
       businessName?: string | null;
       services: Prisma.JsonValue;
       serviceIds?: Prisma.JsonValue | null;
-      serviceAreas: Prisma.JsonValue;
       serviceAreaIds?: string[];
       skills: Prisma.JsonValue;
       skillIds?: Prisma.JsonValue | null;
@@ -2049,8 +2110,14 @@ export class ProvidersService {
       }[];
     },
     owner: boolean,
-    bankReview = false,
+    bankReview: boolean,
+    places: ProfilePlaces,
   ) {
+    const home = profile.locationId
+      ? places.summaries.get(profile.locationId)
+      : undefined;
+    const namesOf = (ids: readonly string[]) =>
+      ids.flatMap((id) => places.summaries.get(id)?.name ?? []);
     const banks = (profile.bankAccounts ?? []).map((account) => ({
       bankCode: account.bankCode,
       bankName: account.bankName,
@@ -2066,13 +2133,14 @@ export class ProvidersService {
       userId: profile.userId,
       phone: profile.phone,
       trade: profile.trade,
-      city: profile.city,
-      state: profile.state ?? null,
-      cityId: profile.cityId,
+      locationId: profile.locationId ?? null,
+      state: home?.stateName ?? null,
+      city: home?.name ?? '',
       businessName: profile.businessName,
       ...currentSkills(catalog, profile),
-      serviceAreas: profile.serviceAreas,
-      serviceAreaIds: profile.serviceAreaIds,
+      serviceAreaIds: profile.serviceAreaIds ?? [],
+      serviceAreas: namesOf(profile.serviceAreaIds ?? []),
+      outsideServedAreas: places.outsideServedAreas,
       capacity: profile.capacity,
       workingHours: profile.workingHours,
       timeOff: profile.timeOff,
@@ -2091,6 +2159,15 @@ export class ProvidersService {
           ? {
               ...profile.pendingChanges,
               ...currentSkills(catalog, profile.pendingChanges),
+              ...(Array.isArray(profile.pendingChanges.serviceAreaIds)
+                ? {
+                    serviceAreas: namesOf(
+                      profile.pendingChanges.serviceAreaIds.filter(
+                        (id): id is string => typeof id === 'string',
+                      ),
+                    ),
+                  }
+                : {}),
             }
           : profile.pendingChanges,
       changesReview: profile.changesReview,

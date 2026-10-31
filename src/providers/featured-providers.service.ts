@@ -92,12 +92,12 @@ const PROFILE_SELECT = {
   id: true,
   userId: true,
   trade: true,
-  city: true,
+  location: { select: { name: true } },
   services: true,
   serviceIds: true,
   skills: true,
   skillIds: true,
-  serviceAreas: true,
+  serviceAreaIds: true,
   businessName: true,
   bio: true,
   photo: true,
@@ -113,7 +113,11 @@ type ProfileRow = Prisma.ProviderProfileGetPayload<{
   select: typeof PROFILE_SELECT;
 }>;
 
-type LoadedProvider = FeaturedCandidate & { profile: ProfileRow };
+type LoadedProvider = FeaturedCandidate & {
+  profile: ProfileRow;
+  /** Names of the places the provider covers, in `serviceAreaIds` order. */
+  areaNames: string[];
+};
 
 type FeaturedRow = {
   providerId: string;
@@ -121,12 +125,6 @@ type FeaturedRow = {
   position: number | null;
   updatedAt: Date;
 };
-
-function stringList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : [];
-}
 
 function photoId(photo: unknown): string | null {
   if (!photo || typeof photo !== 'object' || Array.isArray(photo)) return null;
@@ -141,7 +139,7 @@ export function ineligibleReasonsFor(
     | 'reliabilityStatus'
     | 'bio'
     | 'trade'
-    | 'city'
+    | 'location'
     | 'photo'
     | 'user'
   >,
@@ -157,7 +155,7 @@ export function ineligibleReasonsFor(
     !photoId(profile.photo) ||
     profile.bio.trim().length < MIN_BIO_LENGTH ||
     !profile.trade.trim() ||
-    !profile.city.trim()
+    !profile.location?.name.trim()
   )
     reasons.push('incomplete_profile');
   return reasons;
@@ -404,7 +402,7 @@ export class FeaturedProvidersService {
       name: fullNameFor(provider.profile),
       businessName: provider.profile.businessName?.trim() || null,
       trade: provider.trade,
-      city: provider.profile.city,
+      city: provider.profile.location?.name ?? '',
       completedJobs: provider.completedJobs,
       eligible: provider.ineligibleReasons.length === 0,
       ineligibleReasons: [...provider.ineligibleReasons],
@@ -495,6 +493,13 @@ export class FeaturedProvidersService {
           }),
         ])
       : [[], []];
+    const places = await this.prisma.location.findMany({
+      where: {
+        id: { in: [...new Set(profiles.flatMap((p) => p.serviceAreaIds))] },
+      },
+      select: { id: true, name: true },
+    });
+    const placeNames = new Map(places.map(({ id, name }) => [id, name]));
     const statsById = new Map(stats.map((stat) => [stat.providerId, stat]));
     const noShowIds = new Set(noShows.map((noShow) => noShow.providerId));
 
@@ -514,6 +519,10 @@ export class FeaturedProvidersService {
         mode: row?.mode ?? null,
         position: row?.position ?? null,
         profile,
+        areaNames: profile.serviceAreaIds.flatMap((id) => {
+          const name = placeNames.get(id);
+          return name ? [name] : [];
+        }),
       };
     });
     return { providers, rows };
@@ -548,8 +557,8 @@ export class FeaturedProvidersService {
       displayName: displayNameFor(profile),
       trade: profile.trade.trim(),
       services: namesFromIds(catalog, serviceIds, skillIds).services,
-      city: profile.city.trim(),
-      areas: stringList(profile.serviceAreas),
+      city: profile.location?.name.trim() ?? '',
+      areas: provider.areaNames,
       photoUrl: photoUrls.get(profile.id) ?? null,
       bio: truncateBio(profile.bio),
       completedJobs: provider.completedJobs,
