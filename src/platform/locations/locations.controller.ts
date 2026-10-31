@@ -21,9 +21,13 @@ export class LocationsController {
   constructor(private readonly locations: LocationsService) {}
 
   @Get('locations')
-  @ApiOperation({ summary: 'List active request locations' })
+  @ApiOperation({
+    summary: 'List active locations: the states, or the children of `parentId`',
+  })
   list(@Query() query: LocationListQueryDto) {
-    return this.locations.list(query.parentId);
+    return this.locations.list(query.parentId, {
+      serviceable: query.serviceable,
+    });
   }
 }
 
@@ -35,7 +39,7 @@ export class AdminLocationsController {
 
   @Get()
   list(@CurrentUser() user: RequestUser, @Query() query: LocationListQueryDto) {
-    return this.locations.adminList(user.id, query.parentId);
+    return this.locations.adminList(user.id, query.parentId, query.serviceable);
   }
 
   @Post()

@@ -3,27 +3,47 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { LocationKind, Prisma } from '@prisma/client';
 import { ActorService } from '../actor/actor.service';
 import { requirePermission } from '../actor/actor.guards';
 import { AuditLogsService } from '../../audit-logs/audit-logs.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SaveLocationDto } from './locations.dto';
-import { matchLocationName } from './location-matching';
-import {
-  findBuiltInArea,
-  findBuiltInCity,
-  findBuiltInState,
-} from './builtin-locations';
 
-export type LocationValue = {
+export type ListOptions = { serviceable?: boolean; includeInactive?: boolean };
+
+export type LocationSummary = {
   id: string;
-  kind: string;
   name: string;
-  parentId: string | null;
-  aliases: string[];
-  active: boolean;
-  sort: number;
+  /** Name of the root state: the place's own name when it is a state. */
+  stateName: string;
 };
+
+const PARENT_KIND: Record<LocationKind, LocationKind | null> = {
+  state: null,
+  lga: 'state',
+  area: 'lga',
+};
+
+/**
+ * Places nest at most three deep (state, LGA, area), so checking the parent chain two levels up covers every ancestor in
+ * one query.
+ */
+function chainWhere(
+  options: ListOptions,
+  depth = 2,
+): Prisma.LocationWhereInput {
+  const own: Prisma.LocationWhereInput = options.includeInactive
+    ? {}
+    : { active: true, ...(options.serviceable ? { serviceable: true } : {}) };
+  if (options.includeInactive || depth === 0) return own;
+  return {
+    ...own,
+    OR: [{ parentId: null }, { parent: chainWhere(options, depth - 1) }],
+  };
+}
+
+const SERVED: ListOptions = { serviceable: true };
 
 @Injectable()
 export class LocationsService {
@@ -33,12 +53,20 @@ export class LocationsService {
     private readonly audit: AuditLogsService,
   ) {}
 
-  async list(parentId?: string, includeInactive = false) {
-    return this.prisma.location.findMany({
+  /**
+   * The states, or the children of `parentId`. `serviceable` keeps only served places; `hasChildren` is counted under
+   * the same filters.
+   */
+  async list(parentId?: string, options: ListOptions = {}) {
+    const childWhere: Prisma.LocationWhereInput = options.includeInactive
+      ? {}
+      : { active: true, ...(options.serviceable ? { serviceable: true } : {}) };
+    const rows = await this.prisma.location.findMany({
       where: {
-        ...(parentId ? { parentId } : { parentId: null }),
-        ...(includeInactive ? {} : { active: true }),
-        ...(parentId && !includeInactive ? { parent: { active: true } } : {}),
+        AND: [
+          parentId ? { parentId } : { parentId: null },
+          chainWhere(options),
+        ],
       },
       orderBy: [{ sort: 'asc' }, { name: 'asc' }],
       select: {
@@ -48,156 +76,174 @@ export class LocationsService {
         parentId: true,
         aliases: true,
         active: true,
+        serviceable: true,
         sort: true,
+        _count: { select: { children: { where: childWhere } } },
       },
     });
+    return rows.map(({ _count, ...row }) => ({
+      ...row,
+      hasChildren: _count.children > 0,
+    }));
   }
 
-  async adminList(userId: string, parentId?: string) {
+  async adminList(userId: string, parentId?: string, serviceable?: boolean) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'settings.manage');
-    return this.list(parentId, true);
+    return this.list(parentId, { serviceable, includeInactive: true });
   }
 
-  async allActive(): Promise<LocationValue[]> {
+  /** The ids among `ids` that are served. */
+  async served(ids: readonly string[]): Promise<Set<string>> {
+    if (!ids.length) return new Set();
     const rows = await this.prisma.location.findMany({
-      where: { active: true },
+      where: { AND: [{ id: { in: [...ids] } }, chainWhere(SERVED)] },
+      select: { id: true },
+    });
+    return new Set(rows.map(({ id }) => id));
+  }
+
+  /**
+   * For each list of coverage ids, whether it reaches no served place: true when no served place equals, or sits under,
+   * any id in the list. One query serves every list.
+   */
+  async outsideServedAreasFor(
+    coverage: readonly (readonly string[])[],
+  ): Promise<boolean[]> {
+    const all = [...new Set(coverage.flat())];
+    if (!all.length) return coverage.map(() => true);
+    const served = await this.prisma.location.findMany({
+      where: {
+        AND: [
+          { OR: [{ id: { in: all } }, { ancestorIds: { hasSome: all } }] },
+          chainWhere(SERVED),
+        ],
+      },
+      select: { id: true, ancestorIds: true },
+    });
+    return coverage.map((ids) => {
+      const covered = new Set(ids);
+      return !served.some(
+        (place) =>
+          covered.has(place.id) ||
+          place.ancestorIds.some((ancestorId) => covered.has(ancestorId)),
+      );
+    });
+  }
+
+  async outsideServedAreas(serviceAreaIds: readonly string[]) {
+    const [outside] = await this.outsideServedAreasFor([serviceAreaIds]);
+    return outside;
+  }
+
+  /** Names for provider views: each place's own name and the name of its state. */
+  async summaries(
+    ids: readonly (string | null | undefined)[],
+  ): Promise<Map<string, LocationSummary>> {
+    const wanted = [...new Set(ids.filter((id): id is string => Boolean(id)))];
+    if (!wanted.length) return new Map();
+    const rows = await this.prisma.location.findMany({
+      where: { id: { in: wanted } },
       select: {
         id: true,
-        kind: true,
         name: true,
-        parentId: true,
-        aliases: true,
-        active: true,
-        sort: true,
+        parent: {
+          select: { name: true, parent: { select: { name: true } } },
+        },
       },
     });
-    const activeCityIds = new Set(
-      rows
-        .filter(({ kind, parentId }) => kind === 'city' && !parentId)
-        .map(({ id }) => id),
-    );
-    return rows.filter(
-      ({ kind, parentId }) =>
-        kind === 'city' ||
-        (kind === 'district' && parentId && activeCityIds.has(parentId)),
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        {
+          id: row.id,
+          name: row.name,
+          stateName: row.parent?.parent?.name ?? row.parent?.name ?? row.name,
+        },
+      ]),
     );
   }
 
   /**
-   * Providers choose a state and city from the built-in Nigeria list, so no admin setup is needed. A city or area that
-   * is also a managed location keeps its id, which is what dispatch matches on; anything else is saved by name only.
+   * A provider's home LGA and the places they cover. The LGA must be an active `lga`; coverage can be any active place,
+   * served or not.
    */
-  async resolveProviderLocationIds(input: {
-    state?: string;
-    cityId?: string;
-    city?: string;
-    serviceAreaIds?: string[];
-    serviceAreas?: string[];
+  async validateProviderLocations(input: {
+    locationId?: string | null;
+    serviceAreaIds?: readonly string[];
   }) {
-    const locations = await this.allActive();
-    const cities = locations.filter((location) => location.kind === 'city');
-    const findNamed = (name: string | undefined, kind: string) => {
-      if (!name?.trim()) return undefined;
-      return matchLocationName(name, locations, kind);
-    };
-    const managedCity = input.cityId
-      ? cities.find((location) => location.id === input.cityId)
-      : findNamed(input.city, 'city');
-    if (input.cityId && !managedCity)
+    const areaIds = [...new Set(input.serviceAreaIds ?? [])];
+    const wanted = [
+      ...new Set([...(input.locationId ? [input.locationId] : []), ...areaIds]),
+    ];
+    const rows = wanted.length
+      ? await this.prisma.location.findMany({
+          where: { id: { in: wanted }, active: true },
+          select: { id: true, kind: true },
+        })
+      : [];
+    const home = rows.find(({ id }) => id === input.locationId);
+    if (!home || home.kind !== 'lga')
       // new message: not in spec.
-      throw new BadRequestException('Choose an active city from the list.');
-    const builtInCity = managedCity
-      ? undefined
-      : findBuiltInCity(input.state, input.city);
-    if (!managedCity && !builtInCity) {
+      throw new BadRequestException('Choose your state and LGA from the list.');
+    const known = new Set(rows.map(({ id }) => id));
+    if (areaIds.some((id) => !known.has(id)))
       // new message: not in spec.
       throw new BadRequestException(
-        'Choose your state and city from the list.',
+        'Choose service areas from the location list.',
       );
-    }
-    const state = findBuiltInState(input.state)?.name ?? builtInCity?.state;
-
-    let areaIds: string[];
-    let areaNames: string[];
-    if (input.serviceAreaIds?.length) {
-      const validIds = new Set(locations.map(({ id }) => id));
-      if (input.serviceAreaIds.some((id) => !validIds.has(id)))
-        // new message: not in spec.
-        throw new BadRequestException(
-          'Choose active service areas from the list.',
-        );
-      areaIds = [...new Set(input.serviceAreaIds)];
-      areaNames = locations
-        .filter(({ id }) => areaIds.includes(id))
-        .map(({ name }) => name);
-    } else {
-      const named = (input.serviceAreas ?? []).map((name) => {
-        const managed = findNamed(name, 'city') ?? findNamed(name, 'district');
-        return {
-          id: managed?.id,
-          name: managed?.name ?? findBuiltInArea(name),
-        };
-      });
-      if (named.some((area) => !area.name)) {
-        // new message: not in spec.
-        throw new BadRequestException(
-          'Choose service areas from the location list.',
-        );
-      }
-      areaIds = [
-        ...new Set(named.flatMap((area) => (area.id ? [area.id] : []))),
-      ];
-      areaNames = [...new Set(named.map((area) => area.name!))];
-    }
-
-    if (!areaNames.length)
+    if (!areaIds.length)
       throw new BadRequestException('Add at least one service area.');
-    return {
-      cityId: managedCity?.id,
-      state,
-      serviceAreaIds: areaIds,
-      cityName: managedCity?.name ?? builtInCity!.city,
-      serviceAreaNames: areaNames,
-    };
+    return { locationId: home.id, serviceAreaIds: areaIds };
   }
 
   async save(userId: string, id: string | undefined, dto: SaveLocationDto) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'settings.manage');
-    if (dto.kind === 'city' && dto.parentId)
+    const parentKind = PARENT_KIND[dto.kind];
+    let parent: { id: string; ancestorIds: string[] } | null = null;
+    if (parentKind === null && dto.parentId)
       // new message: not in spec.
-      throw new BadRequestException('A city cannot have a parent location.');
-    if (dto.kind === 'district') {
+      throw new BadRequestException('A state cannot have a parent location.');
+    if (parentKind) {
       if (!dto.parentId)
         // new message: not in spec.
         throw new BadRequestException(
-          'Choose a parent city for this district.',
+          dto.kind === 'lga'
+            ? 'Choose a parent state for this LGA.'
+            : 'Choose a parent LGA for this area.',
         );
-      const parent = await this.prisma.location.findFirst({
-        where: { id: dto.parentId, kind: 'city', active: true },
+      parent = await this.prisma.location.findFirst({
+        where: { id: dto.parentId, kind: parentKind, active: true },
+        select: { id: true, ancestorIds: true },
       });
       if (!parent)
         // new message: not in spec.
-        throw new BadRequestException('Choose an active parent city.');
+        throw new BadRequestException(
+          dto.kind === 'lga'
+            ? 'Choose an active parent state.'
+            : 'Choose an active parent LGA.',
+        );
     }
+    let current: { id: string; kind: string; parentId: string | null } | null =
+      null;
     if (id) {
-      const current = await this.prisma.location.findUnique({
+      current = await this.prisma.location.findUnique({
         where: { id },
-        select: { id: true, kind: true },
+        select: { id: true, kind: true, parentId: true },
       });
       if (!current) {
         // new message: not in spec.
         throw new NotFoundException('Location not found.');
       }
-      if (current.kind === 'city' && dto.kind !== 'city') {
+      if (current.kind !== dto.kind) {
         const hasChildren = await this.prisma.location.count({
           where: { parentId: id },
         });
         if (hasChildren) {
           // new message: not in spec.
           throw new BadRequestException(
-            'Move or remove child districts before changing this city.',
+            'Move or remove the places under this one before changing its kind.',
           );
         }
       }
@@ -208,25 +254,64 @@ export class LocationsService {
     const data = {
       kind: dto.kind,
       name: dto.name.trim(),
-      parentId: dto.parentId ?? null,
+      parentId: parent?.id ?? null,
+      ancestorIds: parent ? [...parent.ancestorIds, parent.id] : [],
       aliases,
       active: dto.active,
+      serviceable: dto.serviceable,
       sort: dto.sort,
     };
-    const row = id
-      ? await this.prisma.location.update({ where: { id }, data }).catch(() => {
-          // new message: not in spec.
-          throw new NotFoundException('Location not found.');
-        })
-      : await this.prisma.location.create({ data });
+    const row = await this.prisma.$transaction(async (tx) => {
+      const saved = id
+        ? await tx.location.update({ where: { id }, data }).catch(() => {
+            // new message: not in spec.
+            throw new NotFoundException('Location not found.');
+          })
+        : await tx.location.create({ data });
+      if (current && current.parentId !== saved.parentId)
+        await this.refreshDescendants(tx, saved.id, saved.ancestorIds);
+      return saved;
+    });
     this.audit.record({
       actorType: 'staff',
       actorId: userId,
       entityType: 'location',
       entityId: row.id,
       action: 'location.save',
-      metadata: { kind: row.kind, name: row.name, active: row.active },
+      metadata: {
+        kind: row.kind,
+        name: row.name,
+        active: row.active,
+        serviceable: row.serviceable,
+      },
     });
     return row;
+  }
+
+  /** Rewrites `ancestorIds` for everything under a place whose own ancestors changed. */
+  private async refreshDescendants(
+    tx: Prisma.TransactionClient,
+    id: string,
+    ancestorIds: string[],
+  ) {
+    let level = [{ id, ancestorIds }];
+    while (level.length) {
+      const children = await tx.location.findMany({
+        where: { parentId: { in: level.map((place) => place.id) } },
+        select: { id: true, parentId: true },
+      });
+      const next: typeof level = [];
+      for (const child of children) {
+        const parent = level.find((place) => place.id === child.parentId);
+        if (!parent) continue;
+        const childAncestors = [...parent.ancestorIds, parent.id];
+        await tx.location.update({
+          where: { id: child.id },
+          data: { ancestorIds: childAncestors },
+        });
+        next.push({ id: child.id, ancestorIds: childAncestors });
+      }
+      level = next;
+    }
   }
 }
