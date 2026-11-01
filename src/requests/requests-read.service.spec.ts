@@ -178,7 +178,7 @@ describe('RequestsReadService.list', () => {
     const { list, whereAnd } = setup();
     await list({ nextActor: 'me' });
     expect(whereAnd()).toContainEqual({
-      status: { notIn: ['closed', 'cancelled', 'rejected'] },
+      status: { notIn: ['closed', 'cancelled', 'rejected', 'approved'] },
     });
   });
 
@@ -329,6 +329,7 @@ describe('RequestsReadService.pending', () => {
     ];
     expect(args.where.ownerId).toBe(STAFF_ID);
     expect([...args.where.status.notIn].sort()).toEqual([
+      'approved',
       'cancelled',
       'closed',
       'rejected',
@@ -347,6 +348,7 @@ describe('RequestsReadService.pending', () => {
     ];
     expect(args.where.ownerId).toBe(STAFF_ID);
     expect([...args.where.status.notIn].sort()).toEqual([
+      'approved',
       'cancelled',
       'closed',
       'rejected',
