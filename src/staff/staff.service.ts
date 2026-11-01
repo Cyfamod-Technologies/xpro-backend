@@ -36,7 +36,7 @@ import { requestFlowFrom } from '../common/utils/request-flow';
 import { PrismaService } from '../prisma/prisma.service';
 import { SessionStore } from '../redis/session-store.service';
 import { RedisAuthService } from '../auth/redis-auth.service';
-import { generateTotpSecret, matchingTotpStep } from '../auth/totp.util';
+import { matchingTotpStep } from '../auth/totp.util';
 import {
   canOwnRequests,
   permissionsForRoles,
@@ -1243,55 +1243,82 @@ export class StaffService {
           : 'Complete the conflict declaration.',
       );
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await this.prisma.user.update({
-      where: { id: invite.staffUserId },
-      data: { passwordHash, status: AccountStatus.invited },
-    });
-    await this.prisma.staffMember.update({
-      where: { userId: invite.staffUserId },
-      data: {
-        conflictDeclaration: {
-          version: 1,
-          declaredAt: new Date().toISOString(),
-          hasLinkedCustomerAccount:
-            conflictDeclaration.hasLinkedCustomerAccount,
-          linkedCustomerEmail: conflictDeclaration.linkedCustomerEmail ?? null,
-          statement: conflictDeclaration.statement.trim(),
-        },
-      },
-    });
-    if (policyRequired && policy) {
-      await this.prisma.legalAcceptance.upsert({
+    const acceptedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const consumed = await tx.staffInvite.updateMany({
         where: {
-          userId_documentId: { userId: user.id, documentId: policy.id },
+          id: invite.id,
+          staffUserId: invite.staffUserId,
+          state: StaffInviteState.pending,
+          expiresAt: { gt: acceptedAt },
         },
-        create: {
-          userId: user.id,
-          documentId: policy.id,
-          source: 'staff_invite',
-          ipAddress: this.requestContext.getIp(),
-          userAgent: this.requestContext.getUserAgent(),
-        },
-        update: { acceptedAt: new Date() },
+        data: { state: StaffInviteState.consumed, consumedAt: acceptedAt },
       });
-    }
-    const { secret, otpauthUrl } = generateTotpSecret(user.email);
-    await this.redisAuth.storeMfaPendingSecret(user.id, secret);
-    const enrollmentToken = generateRawToken();
-    await this.prisma.authToken.create({
-      data: {
-        userId: user.id,
-        purpose: AuthTokenPurpose.mfa_enrollment,
-        tokenHash: Buffer.from(hashToken(enrollmentToken), 'hex'),
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      },
+      if (consumed.count !== 1)
+        throw new GoneException(
+          'This invitation link is no longer valid. Ask an XPro super admin to send a new one.',
+        );
+
+      const activated = await tx.staffMember.updateMany({
+        where: { userId: invite.staffUserId, status: StaffStatus.invited },
+        data: {
+          status: StaffStatus.active,
+          acceptedAt,
+          rowVersion: { increment: 1 },
+          conflictDeclaration: {
+            version: 1,
+            declaredAt: acceptedAt.toISOString(),
+            hasLinkedCustomerAccount:
+              conflictDeclaration.hasLinkedCustomerAccount,
+            linkedCustomerEmail:
+              conflictDeclaration.linkedCustomerEmail ?? null,
+            statement: conflictDeclaration.statement.trim(),
+          },
+        },
+      });
+      if (activated.count !== 1)
+        throw new GoneException(
+          'This invitation link is no longer valid. Ask an XPro super admin to send a new one.',
+        );
+
+      await tx.user.update({
+        where: { id: invite.staffUserId },
+        data: {
+          passwordHash,
+          status: AccountStatus.active,
+          emailVerifiedAt: acceptedAt,
+        },
+      });
+
+      if (policyRequired && policy) {
+        await tx.legalAcceptance.upsert({
+          where: {
+            userId_documentId: {
+              userId: invite.staffUserId,
+              documentId: policy.id,
+            },
+          },
+          create: {
+            userId: invite.staffUserId,
+            documentId: policy.id,
+            source: 'staff_invite',
+            ipAddress: this.requestContext.getIp(),
+            userAgent: this.requestContext.getUserAgent(),
+          },
+          update: { acceptedAt },
+        });
+      }
     });
-    return {
-      result: 'mfa_enrollment_required',
-      enrollmentToken,
-      secret,
-      otpauthUrl,
-    };
+
+    this.audit.record({
+      actorType: 'user',
+      actorId: invite.staffUserId,
+      entityType: 'staff',
+      entityId: invite.staffUserId,
+      action: 'staff.invite_accepted',
+    });
+
+    return { result: 'accepted' as const };
   }
 
   async verifyInviteMfa(enrollmentToken: string, code: string) {
