@@ -88,17 +88,22 @@ describe('lifecycle allowed-action guards', () => {
 });
 
 describe('assertOpen (04 §6.18)', () => {
-  it.each(['closed', 'cancelled', 'rejected', 'cancelling'] as const)(
-    'refuses a %s request',
-    (status) => {
-      expect(assertOpen(snapshot({ status }))).toEqual(NO_LONGER_OPEN);
-    },
-  );
+  it.each([
+    'closed',
+    'cancelled',
+    'rejected',
+    'approved',
+    'cancelling',
+  ] as const)('refuses a %s request', (status) => {
+    expect(assertOpen(snapshot({ status }))).toEqual(NO_LONGER_OPEN);
+  });
 
   it.each(
     REQUEST_STATUSES.filter(
       (status) =>
-        !['closed', 'cancelled', 'rejected', 'cancelling'].includes(status),
+        !['closed', 'cancelled', 'rejected', 'approved', 'cancelling'].includes(
+          status,
+        ),
     ),
   )('lets a %s request through', (status) => {
     expect(assertOpen(snapshot({ status }))).toEqual({ ok: true });

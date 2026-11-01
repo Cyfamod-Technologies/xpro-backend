@@ -7,11 +7,17 @@ import {
 } from './statuses';
 
 describe('request status helpers', () => {
-  it('marks only closed, cancelled and rejected as terminal', () => {
-    expect([...TERMINAL]).toEqual(['closed', 'cancelled', 'rejected']);
+  it('marks closed, cancelled, rejected and approved as terminal', () => {
+    expect([...TERMINAL]).toEqual([
+      'closed',
+      'cancelled',
+      'rejected',
+      'approved',
+    ]);
     expect(isOpen('acknowledged')).toBe(true);
     expect(isOpen('cancelling')).toBe(true);
     expect(isOpen('closed')).toBe(false);
+    expect(isOpen('approved')).toBe(false);
   });
 
   it('marks acknowledged and cancelling as frozen', () => {
