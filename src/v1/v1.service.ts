@@ -7,6 +7,7 @@ import {
   RequestDecisionOutcome,
   RequestStatus,
   RequestWorkflow,
+  StaffRole,
   UploadPurpose,
 } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -653,6 +654,7 @@ export class V1Service {
         userId: dto.staffId,
         status: 'active',
         canOwnRequests: true,
+        roles: { none: { role: StaffRole.super_admin } },
         user: { status: 'active' },
       },
       include: {
