@@ -214,11 +214,13 @@ export class StaffService {
       include: staffInclude,
       orderBy: { createdAt: 'asc' },
     });
-    const eligible = members.filter((member) =>
-      canOwnRequests(
-        member.status,
-        member.roles.map(({ role }) => role),
-      ),
+    const eligible = members.filter(
+      (member) =>
+        !member.roles.some(({ role }) => role === StaffRole.super_admin) &&
+        canOwnRequests(
+          member.status,
+          member.roles.map(({ role }) => role),
+        ),
     );
     if (requestFlowFrom() === 'v1') {
       const workloads = await this.prisma.serviceRequest.groupBy({
@@ -237,6 +239,7 @@ export class StaffService {
         id: member.userId,
         name: memberName(member.user),
         email: member.user.email,
+        roles: member.roles.map(({ role }) => role),
         openRequests: workloadByOwner.get(member.userId) ?? 0,
       }));
     }
@@ -1221,7 +1224,7 @@ export class StaffService {
   async acceptInvite(
     token: string,
     password: string,
-    policyVersion: string,
+    policyVersion: string | undefined,
     conflictDeclaration: StaffConflictDeclarationDto,
   ) {
     const invite = await this.findInvite(token);
@@ -1229,13 +1232,15 @@ export class StaffService {
       where: { kind: 'staff_policy' },
       orderBy: { publishedAt: 'desc' },
     });
+    const policyRequired = requestFlowFrom() !== 'v1';
     if (
-      !policy ||
-      policy.version !== policyVersion ||
+      (policyRequired && (!policy || policy.version !== policyVersion)) ||
       !conflictDeclaration.statement.trim()
     )
       throw new UnprocessableEntityException(
-        'Accept the current staff policy and complete the conflict declaration.',
+        policyRequired
+          ? 'Accept the current staff policy and complete the conflict declaration.'
+          : 'Complete the conflict declaration.',
       );
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await this.prisma.user.update({
@@ -1255,17 +1260,21 @@ export class StaffService {
         },
       },
     });
-    await this.prisma.legalAcceptance.upsert({
-      where: { userId_documentId: { userId: user.id, documentId: policy.id } },
-      create: {
-        userId: user.id,
-        documentId: policy.id,
-        source: 'staff_invite',
-        ipAddress: this.requestContext.getIp(),
-        userAgent: this.requestContext.getUserAgent(),
-      },
-      update: { acceptedAt: new Date() },
-    });
+    if (policyRequired && policy) {
+      await this.prisma.legalAcceptance.upsert({
+        where: {
+          userId_documentId: { userId: user.id, documentId: policy.id },
+        },
+        create: {
+          userId: user.id,
+          documentId: policy.id,
+          source: 'staff_invite',
+          ipAddress: this.requestContext.getIp(),
+          userAgent: this.requestContext.getUserAgent(),
+        },
+        update: { acceptedAt: new Date() },
+      });
+    }
     const { secret, otpauthUrl } = generateTotpSecret(user.email);
     await this.redisAuth.storeMfaPendingSecret(user.id, secret);
     const enrollmentToken = generateRawToken();

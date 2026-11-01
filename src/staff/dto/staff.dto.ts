@@ -227,9 +227,10 @@ export class AcceptStaffInviteDto {
   @MinLength(12)
   password: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  policyVersion: string;
+  policyVersion?: string;
 
   @ApiProperty({ type: () => StaffConflictDeclarationDto })
   @IsObject()

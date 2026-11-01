@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -44,7 +45,11 @@ export class UploadsController {
 
   @Get('files/:id')
   @ApiOperation({ summary: 'Get an authorized presigned file URL' })
-  file(@CurrentUser() actor: RequestUser, @Param('id') id: string) {
-    return this.files.getFileUrl(actor, id);
+  file(
+    @CurrentUser() actor: RequestUser,
+    @Param('id') id: string,
+    @Query('inline') inline?: string,
+  ) {
+    return this.files.getFileUrl(actor, id, inline === 'true');
   }
 }

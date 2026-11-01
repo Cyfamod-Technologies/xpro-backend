@@ -26,7 +26,7 @@ export class FileAccessService {
     this.resolvers.set(entityType, resolver);
   }
 
-  async getFileUrl(actor: RequestUser, id: string) {
+  async getFileUrl(actor: RequestUser, id: string, inline = false) {
     const upload = await this.prisma.upload.findFirst({
       where: { id, status: 'attached' },
     });
@@ -38,11 +38,13 @@ export class FileAccessService {
 
     let url: string;
     try {
-      url = await this.storage.signedDownloadUrl(
-        upload.storageKey,
-        300,
-        upload.fileName,
-      );
+      url = inline
+        ? await this.storage.signedViewUrl(upload.storageKey, 300)
+        : await this.storage.signedDownloadUrl(
+            upload.storageKey,
+            300,
+            upload.fileName,
+          );
     } catch (error) {
       if (error instanceof ServiceUnavailableException)
         throw new ServiceUnavailableException(
