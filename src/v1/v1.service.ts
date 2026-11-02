@@ -25,6 +25,7 @@ import {
   evaluateOpenRequestLimit,
   platformOpenRequestLimit,
 } from '../requests/domain/open-request-limit';
+import { canOwnRequests } from '../staff/staff-permissions';
 import { normalizeNigerianPhone } from '../requests/domain/intake-validation';
 import {
   V1ApproveDto,
@@ -653,21 +654,27 @@ export class V1Service {
       where: {
         userId: dto.staffId,
         status: 'active',
-        canOwnRequests: true,
         roles: { none: { role: StaffRole.super_admin } },
         user: { status: 'active' },
       },
       include: {
+        roles: { select: { role: true } },
         user: {
           select: { firstName: true, lastName: true, name: true, email: true },
         },
       },
     });
-    if (!member)
+    if (
+      !member ||
+      !canOwnRequests(
+        member.status,
+        member.roles.map(({ role }) => role),
+      )
+    )
       throw new AppError(
         422,
         'VALIDATION_ERROR',
-        'Choose an active staff member.',
+        'Choose an active staff member who can own requests.',
       );
     const execution = await this.runIdempotent(
       userId,

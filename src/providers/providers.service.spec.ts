@@ -549,7 +549,7 @@ describe('ProvidersService', () => {
   describe('a live profile that is already approved', () => {
     const live = { id: 'profile-1', verification: 'approved', version: 3 };
 
-    it('holds the ids and refreshed names in pendingChanges, not in the live columns', async () => {
+    it('applies service areas immediately and holds the other reviewed fields', async () => {
       const { service, tx } = setup({ live });
       await service.submit(
         'user-1',
@@ -574,8 +574,12 @@ describe('ProvidersService', () => {
       });
       expect(data.pendingChanges).toMatchObject({
         locationId: 'city-1',
-        serviceAreaIds: ['district-1'],
       });
+      expect(data.serviceAreaIds).toEqual(['district-1']);
+      expect(data.pendingChanges).not.toHaveProperty('serviceAreaIds');
+      const reviewCalls = tx.providerReview.create.mock
+        .calls as unknown as Array<[{ data: { fields?: string[] } }]>;
+      expect(reviewCalls[0]?.[0].data.fields).not.toContain('Service areas');
       expect(data.pendingChanges).not.toHaveProperty('serviceAreas');
       expect(data).not.toHaveProperty('serviceIds');
       expect(data).not.toHaveProperty('skillIds');
