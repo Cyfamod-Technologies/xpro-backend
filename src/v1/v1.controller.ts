@@ -157,6 +157,29 @@ export class V1Controller {
     return result;
   }
 
+  @Post('requests/:id/offers/:offerId/accept')
+  @HttpCode(HttpStatus.OK)
+  async acceptOffer(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('offerId') offerId: string,
+    @IfMatch({ required: true }) version: number,
+    @IdempotencyKey({ required: true }) key: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.v1.acceptOffer(
+      user.id,
+      id,
+      offerId,
+      version,
+      key,
+      request,
+    );
+    response.setHeader('ETag', formatEtag(result.version));
+    return result;
+  }
+
   @Post('requests/:id/deny')
   @HttpCode(HttpStatus.OK)
   async deny(

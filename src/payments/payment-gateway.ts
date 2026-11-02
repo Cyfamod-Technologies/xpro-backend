@@ -16,6 +16,8 @@ export type VerifiedTransaction = {
   status: string;
   reference: string;
   amount: number;
+  /** Paystack fee charged for the collection, in kobo. */
+  fees?: number;
   currency: string;
   channel?: string;
   paidAt?: string;
@@ -41,6 +43,8 @@ export interface PaymentGateway {
     status: string;
     id?: string;
     amount?: number;
+    /** Paystack transfer fee charged, in kobo. */
+    feeCharged?: number;
   } | null>;
   refund(input: {
     reference: string;

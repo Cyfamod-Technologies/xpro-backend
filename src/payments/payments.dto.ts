@@ -10,6 +10,30 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+
+export class PlatformTransactionsQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000)
+  page?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(100) limit?: number;
+  @IsOptional()
+  @IsIn([
+    'pending',
+    'recorded',
+    'paid',
+    'failed',
+    'partially_refunded',
+    'refunded',
+    'reversed',
+  ])
+  status?: string;
+  @IsOptional() @IsIn(['paystack', 'offline']) method?: string;
+  @IsOptional() @IsString() @MaxLength(200) q?: string;
+}
 
 export class InitiatePaymentDto {
   @IsIn(['paystack']) method!: 'paystack';
@@ -58,6 +82,12 @@ export class PayoutHoldDto {
 export class OfflineTransferDto {
   @IsString() @MinLength(1) @MaxLength(200) reference!: string;
   @IsString() proofFileId!: string;
+  @IsOptional() @IsString() @MaxLength(1000) note?: string;
+}
+export class RefundReserveFundingDto {
+  @IsInt() @Min(1) @Max(Number.MAX_SAFE_INTEGER) amount!: number;
+  @IsString() @MinLength(1) @MaxLength(200) reference!: string;
+  @IsString() @MinLength(1) @MaxLength(100) proofFileId!: string;
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
 }
 export class PayoutTransferDto {

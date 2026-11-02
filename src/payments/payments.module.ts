@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 import { OutboxModule } from '../platform/outbox/outbox.module';
 import { PlatformModule } from '../platform/platform.module';
 import { TimersModule } from '../platform/timers/timers.module';
@@ -11,6 +12,7 @@ import { Phase2OnlyGuard } from '../common/guards/phase2-only.guard';
 import {
   AdminFinanceController,
   AdminPaymentsController,
+  AdminTransactionsController,
   PaystackWebhookController,
   ProviderEarningsController,
   RequestPaymentsController,
@@ -21,6 +23,7 @@ import { PAYMENT_GATEWAY, PaymentsService } from './payments.service';
 import { PaystackEventsService } from './paystack-events.service';
 import { FinanceService } from './finance.service';
 import { RefundsService } from './refunds.service';
+import { FinancialLedgerService } from './financial-ledger.service';
 import { PaystackGateway } from './paystack.gateway';
 import { TestPaymentGateway } from './test-payment.gateway';
 
@@ -28,6 +31,7 @@ import { TestPaymentGateway } from './test-payment.gateway';
   imports: [
     PlatformModule,
     NotificationsModule,
+    AuditLogsModule,
     OutboxModule,
     TimersModule,
     UploadsModule,
@@ -36,6 +40,7 @@ import { TestPaymentGateway } from './test-payment.gateway';
   controllers: [
     RequestPaymentsController,
     AdminPaymentsController,
+    AdminTransactionsController,
     PaystackWebhookController,
     AdminFinanceController,
     ProviderEarningsController,
@@ -61,9 +66,15 @@ import { TestPaymentGateway } from './test-payment.gateway';
     PaymentsFileAccess,
     FinanceService,
     RefundsService,
+    FinancialLedgerService,
     NotificationDispatcher,
     Phase2OnlyGuard,
   ],
-  exports: [PaymentsService, FinanceService, RefundsService],
+  exports: [
+    PaymentsService,
+    FinanceService,
+    RefundsService,
+    FinancialLedgerService,
+  ],
 })
 export class PaymentsModule {}

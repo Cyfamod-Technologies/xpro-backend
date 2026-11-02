@@ -668,10 +668,21 @@ export class PricingService {
           },
         });
         if (!quote) throw conflict(QUOTE_GONE);
-        // The runner guard checked the amount is a positive integer; the quote total needs the row.
-        if (BigInt(amount) > quote.total)
+        // Payouts are agreed per job by default. A fixed policy is enforced by
+        // the server so a client cannot override the amount configured by admins.
+        const policy = ctx.settings['payout.amountPolicy'];
+        const policyValues =
+          policy && typeof policy === 'object' && !Array.isArray(policy)
+            ? (policy as Record<string, unknown>)
+            : null;
+        const payoutAmount =
+          policyValues?.mode === 'fixed' &&
+          Number.isSafeInteger(policyValues.fixedAmount)
+            ? Number(policyValues.fixedAmount)
+            : amount;
+        if (BigInt(payoutAmount) > quote.total)
           throw fail(
-            'Enter a payout amount above 0 and no higher than the quote total.',
+            'The configured provider payout must be above 0 and no higher than the quote total.',
           );
         const assignment = await this.acceptedAssignment(
           ctx.tx,
@@ -681,7 +692,7 @@ export class PricingService {
         await ctx.tx.quote.update({
           where: { id: quote.id },
           data: {
-            payoutAmount: BigInt(amount),
+            payoutAmount: BigInt(payoutAmount),
             payoutAssignmentId: assignment.id,
           },
         });
@@ -694,7 +705,11 @@ export class PricingService {
                 quote.payoutAmount == null ? null : Number(quote.payoutAmount),
               payoutAssignmentId: quote.payoutAssignmentId,
             },
-            after: { payoutAmount: amount, payoutAssignmentId: assignment.id },
+            after: {
+              payoutAmount,
+              payoutAssignmentId: assignment.id,
+              policy: policyValues?.mode === 'fixed' ? 'fixed' : 'per_job',
+            },
           },
         });
       },

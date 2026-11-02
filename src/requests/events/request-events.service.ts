@@ -68,8 +68,11 @@ export class RequestEventsService {
         if (!payment || !quote) throw notFound();
         ctx.timers.stop([...PAYMENT_TIMERS], quoteId);
         ctx.timers.stop('payment.pendingCheck', paymentId);
+        const v1PaymentCurrent =
+          ctx.snap.workflowMode === 'v1' && ctx.snap.status === 'approved';
+        const phase2PaymentCurrent = ctx.snap.status === 'awaiting_payment';
         if (
-          ctx.snap.status !== 'awaiting_payment' ||
+          (!v1PaymentCurrent && !phase2PaymentCurrent) ||
           quote.status !== 'accepted'
         ) {
           let refundId: string | null = null;
@@ -116,6 +119,18 @@ export class RequestEventsService {
           return { bumpVersion: false };
         }
         settled = true;
+        if (v1PaymentCurrent) {
+          ctx.audit('V1 request payment settled', {
+            changes: { paymentId, reference: payment.reference },
+          });
+          ctx.notify('payment.settled_customer', {
+            requestCode: ctx.snap.number,
+          });
+          ctx.notify('payment.settled_staff', {
+            requestCode: ctx.snap.number,
+          });
+          return { bumpVersion: false };
+        }
         await ctx.tx.serviceRequest.update({
           where: { id: requestId },
           data: { status: 'ready_to_schedule' },

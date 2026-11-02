@@ -60,6 +60,19 @@ const validModeByService = (value: unknown): string | null => {
     ? null
     : UNSPECIFIED_SETTING_MESSAGE;
 };
+const validPayoutAmountPolicy = (value: unknown): string | null => {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    return UNSPECIFIED_SETTING_MESSAGE;
+  const policy = value as Record<string, unknown>;
+  if (policy.mode === 'per_job' && policy.fixedAmount === null) return null;
+  if (
+    policy.mode === 'fixed' &&
+    Number.isSafeInteger(policy.fixedAmount) &&
+    Number(policy.fixedAmount) > 0
+  )
+    return null;
+  return 'Choose per-job payouts or enter a positive fixed amount in kobo.';
+};
 const deadlineDefaults: Record<string, number> = {
   unclaimed: 120,
   intake: 240,
@@ -323,6 +336,11 @@ export const SETTINGS_REGISTRY = {
     positiveNullable(
       'Enter a positive payout threshold, or turn the second approval off.',
     ),
+  ),
+  'payout.amountPolicy': highRisk(
+    { mode: 'per_job', fixedAmount: null },
+    'Provider payout amount policy',
+    validPayoutAmountPolicy,
   ),
 } as const satisfies Record<string, SettingDefinition>;
 

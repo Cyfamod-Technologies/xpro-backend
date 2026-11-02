@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { Prisma, PayoutStatus, type Payout } from '@prisma/client';
 import { decryptSecret, encryptSecret } from '../common/utils/crypto.util';
 import { requirePermission } from '../platform/actor/actor.guards';
@@ -39,6 +39,10 @@ import {
 } from './domain/payout-rules';
 import { GatewayRejectedError, type PaymentGateway } from './payment-gateway';
 import { PAYMENT_GATEWAY } from './payments.service';
+import {
+  FINANCIAL_LEDGER_ACCOUNTS,
+  FinancialLedgerService,
+} from './financial-ledger.service';
 import { assertExpectedVersion } from './record-version';
 import {
   toEarningsItem,
@@ -117,6 +121,7 @@ export class FinanceService {
     @Inject(PAYMENT_GATEWAY) private readonly gateway: PaymentGateway,
     private readonly runner: RequestCommandRunner,
     private readonly idempotency: IdempotencyService,
+    @Optional() private readonly ledger?: FinancialLedgerService,
   ) {}
 
   /**
@@ -203,6 +208,56 @@ export class FinanceService {
         createdAt: ctx.now,
       },
     });
+    if (this.ledger) {
+      const heldFunds = await this.ledger.balanceForRequest(
+        tx,
+        FINANCIAL_LEDGER_ACCOUNTS.customerFundsHeld.code,
+        input.requestId,
+      );
+      // Historical payments have no ledger entries yet. Keep those workflows
+      // operational without inventing opening balances; only journal payouts
+      // when this request has ledger-backed customer funds.
+      if (heldFunds >= input.amount) {
+        const platformMargin = heldFunds - input.amount;
+        await this.ledger.post(tx, {
+          sourceType: 'payout',
+          sourceId: payout.id,
+          event: 'created',
+          idempotencyKey: `payout:${payout.id}:created`,
+          description:
+            'Customer funds allocated to provider payout and XPro margin',
+          metadata: {
+            heldFunds: heldFunds.toString(),
+            providerAmount: input.amount.toString(),
+            platformMargin: platformMargin.toString(),
+          },
+          lines: [
+            {
+              account: FINANCIAL_LEDGER_ACCOUNTS.customerFundsHeld,
+              side: 'debit',
+              amount: heldFunds,
+              requestId: input.requestId,
+            },
+            {
+              account: FINANCIAL_LEDGER_ACCOUNTS.providerPayoutsPayable,
+              side: 'credit',
+              amount: input.amount,
+              requestId: input.requestId,
+            },
+            ...(platformMargin > 0n
+              ? [
+                  {
+                    account: FINANCIAL_LEDGER_ACCOUNTS.platformRevenue,
+                    side: 'credit' as const,
+                    amount: platformMargin,
+                    requestId: input.requestId,
+                  },
+                ]
+              : []),
+          ],
+        });
+      }
+    }
     ctx.approvals.open('payout', payout.id);
     ctx.audit('Payout created', {
       resourceType: 'payout',
@@ -560,6 +615,7 @@ export class FinanceService {
       await this.settleTransferFromGateway(latest.reference, decision.outcome, {
         actor,
         verifiedAmount: verified?.amount,
+        transferFee: verified?.feeCharged,
       });
       return this.store(userId, idempotency, hash, await this.view(id, actor));
     }
@@ -682,6 +738,36 @@ export class FinanceService {
         });
         if (claimed.count !== 1)
           throw conflict('This offline payout is not awaiting reconciliation.');
+        if (
+          this.ledger &&
+          (await ctx.tx.financialLedgerJournal.findUnique({
+            where: { idempotencyKey: `payout:${payout.id}:created` },
+            select: { id: true },
+          }))
+        ) {
+          await this.ledger.post(ctx.tx, {
+            sourceType: 'payout',
+            sourceId: payout.id,
+            event: 'paid',
+            idempotencyKey: `payout:${payout.id}:paid`,
+            description: 'Provider payout sent from XPro bank account',
+            createdBy: userId,
+            lines: [
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.providerPayoutsPayable,
+                side: 'debit',
+                amount: payout.amount,
+                requestId: payout.requestId,
+              },
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.platformBank,
+                side: 'credit',
+                amount: payout.amount,
+                requestId: payout.requestId,
+              },
+            ],
+          });
+        }
         ctx.approvals.close('payout', id, 'paid');
         ctx.approvals.close('payout_second', id, 'paid');
         ctx.audit('Payout reconciled', {
@@ -714,6 +800,7 @@ export class FinanceService {
     options: {
       actor: ActorContext | null;
       verifiedAmount?: number | null;
+      transferFee?: number | null;
       onSettled?: (tx: Prisma.TransactionClient) => Promise<void>;
     },
   ): Promise<{ applied: boolean }> {
@@ -763,6 +850,90 @@ export class FinanceService {
             });
             if (claimed.count === 1) {
               applied = true;
+              const ledgerBacked = this.ledger
+                ? await ctx.tx.financialLedgerJournal.findUnique({
+                    where: {
+                      idempotencyKey: `payout:${payout.id}:created`,
+                    },
+                    select: { id: true },
+                  })
+                : null;
+              if (this.ledger && ledgerBacked && outcome === 'success') {
+                await this.ledger.post(ctx.tx, {
+                  sourceType: 'transfer_attempt',
+                  sourceId: attempt.id,
+                  event: 'paid',
+                  idempotencyKey: `transfer-attempt:${attempt.id}:paid`,
+                  description: 'Provider payout sent from Paystack',
+                  metadata: { reference, payoutId: payout.id },
+                  lines: [
+                    {
+                      account: FINANCIAL_LEDGER_ACCOUNTS.providerPayoutsPayable,
+                      side: 'debit',
+                      amount: attempt.amount,
+                      requestId: payout.requestId,
+                    },
+                    {
+                      account: FINANCIAL_LEDGER_ACCOUNTS.paystackClearing,
+                      side: 'credit',
+                      amount: attempt.amount,
+                      requestId: payout.requestId,
+                    },
+                  ],
+                });
+                const fee = options.transferFee;
+                if (Number.isSafeInteger(fee) && fee! > 0) {
+                  await this.ledger.post(ctx.tx, {
+                    sourceType: 'transfer_attempt',
+                    sourceId: attempt.id,
+                    event: 'gateway_fee',
+                    idempotencyKey: `transfer-attempt:${attempt.id}:gateway-fee`,
+                    description: 'Paystack transfer fee absorbed by XPro',
+                    metadata: { reference, feeKobo: fee! },
+                    lines: [
+                      {
+                        account: FINANCIAL_LEDGER_ACCOUNTS.paymentGatewayFees,
+                        side: 'debit',
+                        amount: BigInt(fee!),
+                        requestId: payout.requestId,
+                      },
+                      {
+                        account: FINANCIAL_LEDGER_ACCOUNTS.paystackClearing,
+                        side: 'credit',
+                        amount: BigInt(fee!),
+                        requestId: payout.requestId,
+                      },
+                    ],
+                  });
+                }
+              } else if (
+                this.ledger &&
+                ledgerBacked &&
+                outcome === 'reversed'
+              ) {
+                await this.ledger.post(ctx.tx, {
+                  sourceType: 'transfer_attempt',
+                  sourceId: attempt.id,
+                  event: 'reversed',
+                  idempotencyKey: `transfer-attempt:${attempt.id}:reversed`,
+                  description: 'Paystack reversed provider payout transfer',
+                  metadata: { reference, payoutId: payout.id },
+                  lines: [
+                    {
+                      account: FINANCIAL_LEDGER_ACCOUNTS.paystackClearing,
+                      side: 'debit',
+                      amount: attempt.amount,
+                      requestId: payout.requestId,
+                    },
+                    {
+                      account: FINANCIAL_LEDGER_ACCOUNTS.providerPayoutsPayable,
+                      side: 'credit',
+                      amount: attempt.amount,
+                      requestId: payout.requestId,
+                    },
+                  ],
+                });
+              }
               ctx.audit(
                 outcome === 'success'
                   ? 'Payout paid'

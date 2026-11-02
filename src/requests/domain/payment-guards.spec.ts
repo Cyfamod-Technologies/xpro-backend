@@ -46,6 +46,15 @@ describe('payment.initiate (05 §6.1)', () => {
     expect(initiate()).toEqual({ ok: true });
   });
 
+  it('allows an accepted V1 offer to be paid after approval without moving it into Phase 2', () => {
+    expect(
+      initiate(awaitingPayment({ status: 'approved', workflowMode: 'v1' })),
+    ).toEqual({ ok: true });
+    expect(
+      initiate(awaitingPayment({ status: 'approved', workflowMode: 'phase2' })),
+    ).toEqual(NOT_AWAITING);
+  });
+
   it('is only for the request owner', () => {
     expect(initiate(awaitingPayment(), customer('customer-2'))).toMatchObject({
       status: 403,

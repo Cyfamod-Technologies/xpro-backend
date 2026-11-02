@@ -242,7 +242,7 @@ describe('RefundsService.decide', () => {
     expect(h.tx.refund.updateMany).not.toHaveBeenCalled();
   });
 
-  it('before work: claims the full balance to processing and calls Paystack with the payment reference (C-02, C-08)', async () => {
+  it('before work: approves the full balance without calling Paystack (C-02, C-08)', async () => {
     const h = build({ otherRefunds: [{ amount: 100_000n, status: 'failed' }] });
     asStaff(h, 'finance-2');
     h.prisma.refund.findUnique.mockResolvedValue(
@@ -255,29 +255,20 @@ describe('RefundsService.decide', () => {
       where: { id: 'refund-1', status: 'pending_approval' },
       data: {
         amount: 500_000n,
-        status: 'processing',
+        status: 'approved',
         decidedBy: 'finance-2',
         reason: 'Customer cancelled early.',
         version: { increment: 1 },
       },
     });
-    expect(h.gateway.refund).toHaveBeenCalledWith({
-      reference: 'xpro_abc',
-      amount: 500_000,
-      reason: 'Cancellation refund review.',
-    });
-    expect(h.calls.indexOf('claim')).toBeLessThan(h.calls.indexOf('gateway'));
-    expect(h.tx.refund.updateMany).toHaveBeenLastCalledWith({
-      where: { id: 'refund-1', status: 'processing', gatewayRefundId: null },
-      data: { gatewayRefundId: 'gw-1', version: { increment: 1 } },
-    });
+    expect(h.gateway.refund).not.toHaveBeenCalled();
+    expect(h.calls).not.toContain('gateway');
     expect(h.effects.approvalCloses[0]).toMatchObject({
       kind: 'refund',
       itemId: 'refund-1',
     });
     expect(h.effects.audit.map((entry) => entry.action)).toEqual([
       'Refund approved',
-      'Refund submitted to Paystack',
     ]);
   });
 
@@ -405,55 +396,33 @@ describe('RefundsService.decide', () => {
     ]);
   });
 
-  it('a refusal from Paystack marks the refund failed and raises a Finance item and notice (C-10)', async () => {
+  it('does not submit a new refund to Paystack after approval', async () => {
     const h = build();
     asStaff(h, 'finance-2');
-    h.prisma.refund.findUnique.mockResolvedValue(
-      refundRow({ status: 'processing' }),
-    );
     h.gateway.refund.mockRejectedValueOnce(
       new GatewayRejectedError('Transaction not found'),
     );
-
-    await expect(
-      h.service.decide('finance-2', 'refund-1', decideDto, IDEM),
-    ).rejects.toBeInstanceOf(GatewayRejectedError);
-
-    expect(h.tx.refund.updateMany).toHaveBeenLastCalledWith({
-      where: { id: 'refund-1', status: 'processing', gatewayRefundId: null },
-      data: { status: 'failed', version: { increment: 1 } },
-    });
-    expect(h.effects.approvalOpens).toEqual([
-      { kind: 'refund', itemId: 'refund-1' },
-    ]);
-    expect(
-      h.effects.notify.find(({ event }) => event === 'refund.failed'),
-    ).toMatchObject({
-      params: { amount: 500_000, detail: 'Paystack refused it.' },
-    });
+    await h.service.decide('finance-2', 'refund-1', decideDto, IDEM);
+    expect(h.gateway.refund).not.toHaveBeenCalled();
+    expect(h.effects.approvalOpens).toEqual([]);
   });
 
-  it('an error that leaves the outcome unknown keeps the refund processing but still raises the item', async () => {
+  it('keeps the refund approved for a separately recorded reserve transfer', async () => {
     const h = build();
     asStaff(h, 'finance-2');
-    h.prisma.refund.findUnique.mockResolvedValue(
-      refundRow({ status: 'processing' }),
-    );
     h.gateway.refund.mockRejectedValueOnce(new Error('socket hang up'));
-
-    await expect(
-      h.service.decide('finance-2', 'refund-1', decideDto, IDEM),
-    ).rejects.toThrow('socket hang up');
-
-    const statusWrites = h.tx.refund.updateMany.mock.calls.filter(
-      ([args]) => (args as { data: { status?: string } }).data.status,
-    );
-    expect(statusWrites).toHaveLength(1);
-    expect(
-      h.effects.notify.find(({ event }) => event === 'refund.failed'),
-    ).toMatchObject({
-      params: { detail: 'Paystack did not confirm it.' },
-    });
+    await h.service.decide('finance-2', 'refund-1', decideDto, IDEM);
+    expect(h.gateway.refund).not.toHaveBeenCalled();
+    expect(h.tx.refund.updateMany).toHaveBeenCalledTimes(1);
+    const updateCalls = h.tx.refund.updateMany.mock.calls as unknown as Array<
+      [
+        {
+          data: { status: string };
+        },
+      ]
+    >;
+    const updateCall = updateCalls[0][0];
+    expect(updateCall.data.status).toBe('approved');
   });
 });
 
@@ -488,7 +457,7 @@ describe('RefundsService.secondApprove', () => {
     });
   });
 
-  it('a positive amount goes to processing and is submitted to Paystack', async () => {
+  it('a positive amount is approved for the reserve transfer; Paystack is not called', async () => {
     const h = build({ refund: awaiting });
     asStaff(h, 'admin-1', { superAdmin: true });
     h.prisma.refund.findUnique.mockResolvedValue(
@@ -500,14 +469,12 @@ describe('RefundsService.secondApprove', () => {
     expect(h.tx.refund.updateMany).toHaveBeenNthCalledWith(1, {
       where: { id: 'refund-1', status: 'awaiting_second_approval' },
       data: {
-        status: 'processing',
+        status: 'approved',
         secondApprover: 'admin-1',
         version: { increment: 1 },
       },
     });
-    expect(h.gateway.refund).toHaveBeenCalledWith(
-      expect.objectContaining({ reference: 'xpro_abc', amount: 120_000 }),
-    );
+    expect(h.gateway.refund).not.toHaveBeenCalled();
   });
 
   it('a zero amount is waived and resolves the cancellation in the same transaction (C-07)', async () => {
@@ -549,6 +516,8 @@ describe('RefundsService.reconcile', () => {
     status: 'processing',
     requestedBy: 'finance-1',
     transferRecordedBy: 'finance-2',
+    transferReference: 'BANK-9',
+    transferProofId: 'proof-1',
   };
 
   it('refuses the transfer recorder and the requester (C-22)', async () => {
@@ -605,99 +574,61 @@ describe('RefundsService.reconcile', () => {
 });
 
 describe('RefundsService.retry', () => {
-  const failedWithId = { status: 'failed', gatewayRefundId: 'gw-old' };
-
-  it('verifies the existing gateway refund before it submits anything (C-10)', async () => {
-    const h = build({ refund: failedWithId });
-    asStaff(h, 'finance-2');
-    h.gateway.verifyRefund.mockResolvedValueOnce({
-      id: 'gw-old',
-      status: 'failed',
-      amount: 500_000,
-    });
-    h.prisma.refund.findUnique
-      .mockResolvedValueOnce(refundRow(failedWithId))
-      .mockResolvedValue(refundRow({ status: 'processing' }));
-
-    await h.service.retry('finance-2', 'refund-1');
-
-    expect(h.gateway.verifyRefund).toHaveBeenCalledWith('gw-old');
-    expect(h.calls.indexOf('verify')).toBeLessThan(h.calls.indexOf('gateway'));
-    expect(h.tx.refund.updateMany).toHaveBeenNthCalledWith(1, {
-      where: {
-        id: 'refund-1',
-        status: 'failed',
-        gatewayRefundId: 'gw-old',
-        updatedAt: LONG_AGO,
-      },
-      data: {
-        status: 'processing',
-        gatewayRefundId: null,
-        version: { increment: 1 },
-      },
-    });
-    expect(h.gateway.refund).toHaveBeenCalledWith(
-      expect.objectContaining({ reference: 'xpro_abc' }),
-    );
-  });
-
-  it('completes instead of resubmitting when the earlier attempt actually processed', async () => {
-    const h = build({ refund: failedWithId });
-    asStaff(h, 'finance-2');
-
-    await h.service.retry('finance-2', 'refund-1');
-
-    expect(h.gateway.refund).not.toHaveBeenCalled();
-    expect(h.tx.refund.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: 'refund-1',
-        status: { in: ['processing', 'failed'] },
-        OR: [{ gatewayRefundId: null }, { gatewayRefundId: 'gw-old' }],
-      },
-      data: {
-        status: 'completed',
-        completedAt: NOW,
-        gatewayRefundId: 'gw-old',
-        version: { increment: 1 },
-      },
-    });
-    expect(h.requestEvents.onRefundsResolved).toHaveBeenCalled();
-  });
-
-  it('leaves a refund that is still on its way alone', async () => {
+  it('does not retry Paystack refunds; Finance must arrange payment from the reserve', async () => {
     const h = build({
-      refund: { status: 'processing', gatewayRefundId: 'gw-1' },
+      refund: { status: 'failed', gatewayRefundId: 'gw-old' },
     });
     asStaff(h, 'finance-2');
-    h.gateway.verifyRefund.mockResolvedValueOnce({
-      id: 'gw-1',
-      status: 'pending',
-      amount: 500_000,
+    await expect(
+      h.service.retry('finance-2', 'refund-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(h.gateway.verifyRefund).not.toHaveBeenCalled();
+    expect(h.gateway.refund).not.toHaveBeenCalled();
+  });
+
+  it('refuses all Paystack refund retries, including previously submitted refunds', async () => {
+    const h = build({
+      refund: { status: 'processing', gatewayRefundId: 'gw-old' },
     });
-
-    await h.service.retry('finance-2', 'refund-1');
-
+    asStaff(h, 'finance-2');
+    await expect(
+      h.service.retry('finance-2', 'refund-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(h.gateway.verifyRefund).not.toHaveBeenCalled();
+    expect(h.gateway.listRefunds).not.toHaveBeenCalled();
     expect(h.gateway.refund).not.toHaveBeenCalled();
     expect(h.tx.refund.updateMany).not.toHaveBeenCalled();
   });
 
-  it('when the submission outcome was lost, looks the refund up on the transaction and adopts it', async () => {
+  it('refuses a refund that is still on its way through Paystack', async () => {
+    const h = build({
+      refund: { status: 'processing', gatewayRefundId: 'gw-1' },
+    });
+    asStaff(h, 'finance-2');
+    await expect(
+      h.service.retry('finance-2', 'refund-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(h.gateway.verifyRefund).not.toHaveBeenCalled();
+    expect(h.gateway.refund).not.toHaveBeenCalled();
+    expect(h.tx.refund.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not look up or adopt an ambiguous Paystack refund', async () => {
     const h = build({
       refund: { status: 'processing', updatedAt: LONG_AGO },
       listed: [{ id: 'gw-found', status: 'pending', amount: 500_000 }],
     });
     asStaff(h, 'finance-2');
 
-    await h.service.retry('finance-2', 'refund-1');
-
-    expect(h.gateway.listRefunds).toHaveBeenCalledWith('xpro_abc');
+    await expect(
+      h.service.retry('finance-2', 'refund-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(h.gateway.listRefunds).not.toHaveBeenCalled();
     expect(h.gateway.refund).not.toHaveBeenCalled();
-    expect(h.tx.refund.updateMany.mock.calls[0][0]).toMatchObject({
-      data: { status: 'processing', gatewayRefundId: 'gw-found' },
-    });
+    expect(h.tx.refund.updateMany).not.toHaveBeenCalled();
   });
 
-  it('does not adopt a gateway refund that belongs to another XPro refund', async () => {
+  it('does not inspect gateway refunds associated with another XPro refund', async () => {
     const h = build({
       refund: { status: 'processing' },
       listed: [{ id: 'gw-other', status: 'processed', amount: 500_000 }],
@@ -706,13 +637,10 @@ describe('RefundsService.retry', () => {
     h.prisma.refund.findMany.mockResolvedValue([
       { gatewayRefundId: 'gw-other' },
     ]);
-    h.prisma.refund.findUnique
-      .mockResolvedValueOnce(refundRow({ status: 'processing' }))
-      .mockResolvedValue(refundRow({ status: 'processing' }));
-
-    await h.service.retry('finance-2', 'refund-1');
-
-    expect(h.gateway.refund).toHaveBeenCalled();
+    await expect(
+      h.service.retry('finance-2', 'refund-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(h.gateway.refund).not.toHaveBeenCalled();
   });
 
   it('holds back a resubmission right after the last submission', async () => {
@@ -745,14 +673,17 @@ describe('RefundsService.retry', () => {
     ).rejects.toMatchObject({ status: 409 });
   });
 
-  it('does not resubmit when a verification error leaves the gateway state unknown', async () => {
-    const h = build({ refund: failedWithId });
+  it('does not call Paystack when its previous refund status cannot be verified', async () => {
+    const h = build({
+      refund: { status: 'failed', gatewayRefundId: 'gw-old' },
+    });
     asStaff(h, 'finance-2');
     h.gateway.verifyRefund.mockRejectedValueOnce(new Error('timeout'));
 
-    await expect(h.service.retry('finance-2', 'refund-1')).rejects.toThrow(
-      'timeout',
-    );
+    await expect(
+      h.service.retry('finance-2', 'refund-1'),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(h.gateway.verifyRefund).not.toHaveBeenCalled();
     expect(h.gateway.refund).not.toHaveBeenCalled();
     expect(h.tx.refund.updateMany).not.toHaveBeenCalled();
   });
@@ -960,9 +891,9 @@ describe('RefundsService.request', () => {
 });
 
 describe('RefundsService.recordTransfer', () => {
-  it('claims approved -> processing for an offline refund', async () => {
+  it('records the external transfer after reserve authorization', async () => {
     const h = build({
-      refund: { status: 'approved' },
+      refund: { status: 'processing', transferRecordedBy: 'finance-2' },
       payment: { method: 'offline' },
     });
     asStaff(h, 'finance-2');
@@ -973,8 +904,18 @@ describe('RefundsService.recordTransfer', () => {
     });
 
     expect(h.tx.refund.updateMany.mock.calls[0][0]).toMatchObject({
-      where: { id: 'refund-1', status: 'approved' },
-      data: { status: 'processing', transferRecordedBy: 'finance-2' },
+      where: {
+        id: 'refund-1',
+        status: 'processing',
+        transferRecordedBy: 'finance-2',
+        transferReference: null,
+        transferProofId: null,
+      },
+      data: {
+        transferReference: 'BANK-9',
+        transferProofId: 'upload-1',
+        version: { increment: 1 },
+      },
     });
     expect(h.uploads.attach).toHaveBeenCalledWith(
       h.tx,
@@ -988,7 +929,7 @@ describe('RefundsService.recordTransfer', () => {
 
   it('is a conflict when the claim matches nothing', async () => {
     const h = build({
-      refund: { status: 'approved' },
+      refund: { status: 'processing', transferRecordedBy: 'finance-2' },
       payment: { method: 'offline' },
       claim: 0,
     });
@@ -1106,7 +1047,7 @@ describe('refund audit rows, notices and versions (C-21, C-24, C-46)', () => {
       changes: {
         reference: 'xpro_abc',
         before: { status: 'pending_approval', amount: 500_000 },
-        after: { status: 'processing', amount: 500_000 },
+        after: { status: 'approved', amount: 500_000 },
       },
     });
     expect(h.effects.notify).toEqual([
@@ -1191,7 +1132,7 @@ describe('refund audit rows, notices and versions (C-21, C-24, C-46)', () => {
     });
     asStaff(h, 'admin-1', { superAdmin: true });
     h.prisma.refund.findUnique.mockResolvedValue(
-      refundRow({ status: 'processing', amount: 120_000n }),
+      refundRow({ status: 'approved', amount: 120_000n }),
     );
 
     await h.service.secondApprove('admin-1', 'refund-1', {
@@ -1206,7 +1147,7 @@ describe('refund audit rows, notices and versions (C-21, C-24, C-46)', () => {
         decidedBy: 'finance-2',
         secondApprover: 'admin-1',
         before: { status: 'awaiting_second_approval' },
-        after: { status: 'processing', amount: 120_000 },
+        after: { status: 'approved', amount: 120_000 },
       },
     });
     expect(events(h)).toEqual(['refund.decided', 'refund.approved_customer']);
@@ -1214,7 +1155,7 @@ describe('refund audit rows, notices and versions (C-21, C-24, C-46)', () => {
 
   it('recordTransfer: audits the transfer reference and proof, never a bank number', async () => {
     const h = build({
-      refund: { status: 'approved' },
+      refund: { status: 'processing', transferRecordedBy: 'finance-2' },
       payment: { method: 'offline' },
     });
     asStaff(h, 'finance-2');
@@ -1232,7 +1173,7 @@ describe('refund audit rows, notices and versions (C-21, C-24, C-46)', () => {
       changes: {
         transferReference: 'BANK-9',
         proofFileId: 'upload-1',
-        before: { status: 'approved' },
+        before: { status: 'processing' },
         after: { status: 'processing' },
       },
     });
@@ -1245,6 +1186,8 @@ describe('refund audit rows, notices and versions (C-21, C-24, C-46)', () => {
         status: 'processing',
         requestedBy: 'finance-1',
         transferRecordedBy: 'finance-2',
+        transferReference: 'BANK-9',
+        transferProofId: 'proof-1',
       },
       payment: { method: 'offline' },
     });

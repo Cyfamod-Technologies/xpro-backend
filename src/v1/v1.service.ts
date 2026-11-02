@@ -788,6 +788,112 @@ export class V1Service {
     return execution.value;
   }
 
+  async acceptOffer(
+    userId: string,
+    ref: string,
+    offerId: string,
+    version: number,
+    key: string,
+    request: Request,
+  ) {
+    const actor = await this.actor(userId);
+    if (actor.kind !== 'customer' || !actor.platformRoles.includes('customer'))
+      fail(403, 'FORBIDDEN', 'Only the customer can accept this offer.');
+    const replay = await this.replayCommand<
+      Awaited<ReturnType<typeof this.projectRequest>>
+    >(userId, key, request);
+    if (replay) return replay;
+    const current = await this.findRequest(ref, actor);
+    this.assertVersion(current, version);
+    if (current.status !== RequestStatus.submitted)
+      fail(409, 'COUNTER_CLOSED', 'Offers are closed for this request.');
+    const now = new Date();
+    const execution = await this.runIdempotent(
+      userId,
+      key,
+      request,
+      200,
+      async (tx) => {
+        await tx.$executeRaw`SELECT id FROM "service_requests" WHERE id = ${current.id} FOR UPDATE`;
+        const latest = await tx.requestCounterOffer.findFirst({
+          where: { requestId: current.id, supersededById: null },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        });
+        if (!latest)
+          fail(
+            409,
+            'OFFER_NOT_AVAILABLE',
+            'Only the latest XPro offer can be accepted.',
+          );
+        const offer = latest as NonNullable<typeof latest>;
+        if (
+          offer.id !== offerId ||
+          offer.authorRole === 'customer' ||
+          offer.acceptedAt
+        )
+          fail(
+            409,
+            'OFFER_NOT_AVAILABLE',
+            'Only the latest XPro offer can be accepted.',
+          );
+        const accepted = await tx.requestCounterOffer.updateMany({
+          where: {
+            id: offerId,
+            supersededById: null,
+            acceptedAt: null,
+            authorRole: { not: 'customer' },
+          },
+          data: { acceptedAt: now, acceptedBy: userId },
+        });
+        if (accepted.count !== 1)
+          fail(
+            409,
+            'OFFER_NOT_AVAILABLE',
+            'This offer was already accepted or replaced.',
+          );
+        const latestVersion = await tx.quote.aggregate({
+          where: { requestId: current.id },
+          _max: { version: true },
+        });
+        await tx.quote.create({
+          data: {
+            requestId: current.id,
+            version: (latestVersion._max.version ?? 0) + 1,
+            status: 'accepted',
+            items: [
+              {
+                description: 'Accepted XPro offer',
+                quantity: 1,
+                unitPrice: Number(offer.amountKobo),
+              },
+            ],
+            total: offer.amountKobo,
+            note: offer.note || null,
+            lastEditedBy: userId,
+            respondedAt: now,
+            acceptedAt: now,
+          },
+        });
+        await this.bumpVersion(tx, current.id, version);
+        const updated = await tx.serviceRequest.findFirstOrThrow({
+          where: { id: current.id },
+          include: requestInclude,
+        });
+        return this.projectRequest(updated, actor, tx);
+      },
+    );
+    if (!execution.replayed)
+      this.audit.record({
+        actorType: 'customer',
+        actorId: userId,
+        entityType: 'request_counter_offer',
+        entityId: offerId,
+        action: 'v1.offer.accepted',
+        metadata: { requestId: current.id },
+      });
+    return execution.value;
+  }
+
   async deny(
     userId: string,
     ref: string,
@@ -1072,6 +1178,17 @@ export class V1Service {
     const priceKobo =
       dto.priceKobo ??
       (existing?.priceKobo ? Number(existing.priceKobo) : undefined);
+    const acceptedQuote = await this.prisma.quote.findFirst({
+      where: { requestId: current.id, status: 'accepted' },
+      orderBy: { version: 'desc' },
+      select: { total: true },
+    });
+    if (acceptedQuote && Number(acceptedQuote.total) !== priceKobo)
+      throw new AppError(
+        422,
+        'VALIDATION_ERROR',
+        'The provider assignment price must match the customer-accepted offer.',
+      );
     const agreedDate = dto.date ?? existing?.agreedDate ?? undefined;
     if (!priceKobo || priceKobo < 1 || !agreedDate)
       throw new AppError(
@@ -1232,6 +1349,7 @@ export class V1Service {
                   date: counter.proposedDate,
                   note: counter.note,
                   supersededBy: counter.supersededById,
+                  acceptedAt: counter.acceptedAt?.toISOString() ?? null,
                 },
               }
             : {}),
@@ -1327,11 +1445,11 @@ export class V1Service {
               'NO_OFFER_TO_COUNTER',
               'There is no offer from Xpro to counter.',
             );
-          if (!isCustomer && latest && latest.authorRole !== 'customer')
+          if (latest?.acceptedAt)
             fail(
               409,
-              'NO_OFFER_TO_COUNTER',
-              'Wait for the customer to respond before sending another offer.',
+              'COUNTER_CLOSED',
+              'This offer was accepted. No further counters can be sent.',
             );
           const counterId = randomUUID();
           if (latest)
