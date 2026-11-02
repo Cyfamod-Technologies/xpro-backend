@@ -70,6 +70,7 @@ export class PaystackGateway implements PaymentGateway {
       status: string;
       id?: number | string;
       amount?: number;
+      fee_charged?: number;
     }>(`/transfer/verify/${encodeURIComponent(reference)}`, {
       method: 'GET',
     })
@@ -78,6 +79,7 @@ export class PaystackGateway implements PaymentGateway {
         status: data.status,
         id: data.id == null ? undefined : String(data.id),
         amount: data.amount,
+        feeCharged: data.fee_charged,
       }))
       .catch((error: unknown) => {
         if (error instanceof GatewayNotFoundError) return null;

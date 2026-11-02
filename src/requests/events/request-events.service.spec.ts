@@ -145,6 +145,30 @@ describe('RequestEventsService.onPaymentSettled', () => {
     });
   });
 
+  it('settles a V1 payment while keeping the request approved and outside Phase 2 scheduling', async () => {
+    const tx = paymentTx();
+    const { service, effects } = build({
+      tx,
+      snap: { status: 'approved', workflowMode: 'v1' },
+    });
+
+    const result = await service.onPaymentSettled(
+      outer,
+      'request-1',
+      'quote-1',
+      'payment-1',
+    );
+
+    expect(result.settled).toBe(true);
+    expect(tx.serviceRequest.update).not.toHaveBeenCalled();
+    expect(effects.approvalOpens).toEqual([]);
+    expect(effects.notify.map((entry) => entry.event)).toEqual([
+      'payment.settled_customer',
+      'payment.settled_staff',
+    ]);
+    expect(effects.audit[0].action).toBe('V1 request payment settled');
+  });
+
   it('does not open a second refund when the late refund already exists', async () => {
     const tx = paymentTx({ lateRefundOpened: true });
     const { service } = build({ tx, snap: { status: 'matched' } });

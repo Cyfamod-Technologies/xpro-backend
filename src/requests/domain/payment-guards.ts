@@ -20,7 +20,9 @@ const NOT_AWAITING_RECONCILIATION =
   'This payment is not awaiting reconciliation.';
 
 const awaitingPayment = (snap: RequestSnapshot) =>
-  snap.status === 'awaiting_payment' && snap.latestQuote?.status === 'accepted';
+  snap.latestQuote?.status === 'accepted' &&
+  (snap.status === 'awaiting_payment' ||
+    (snap.workflowMode === 'v1' && snap.status === 'approved'));
 
 const initiate: DomainGuard<unknown> = (snap, actor, _input, now) => {
   if (!isOwner(snap, actor)) return accountDenied();

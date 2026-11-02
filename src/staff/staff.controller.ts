@@ -245,6 +245,10 @@ export class StaffInviteController {
   }
 
   @Post('accept')
+  @ApiOperation({
+    summary:
+      'Accept a staff invitation; authenticator setup is optional after activation',
+  })
   @Throttle({ default: { limit: 10, ttl: 60 * 60_000 } })
   accept(@Body() dto: AcceptStaffInviteDto) {
     return this.staff.acceptInvite(

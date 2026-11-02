@@ -34,11 +34,13 @@ import {
   OfflinePaymentDto,
   OfflineTransferDto,
   PaymentNoteDto,
+  PlatformTransactionsQueryDto,
   PayoutDecisionDto,
   PayoutHoldDto,
   PayoutSecondApprovalDto,
   PayoutTransferDto,
   RefundDecisionDto,
+  RefundReserveFundingDto,
   RefundRequestDto,
   RejectPaymentDto,
 } from './payments.dto';
@@ -52,8 +54,31 @@ function withEtag<T>(res: Response, result: T): T {
 
 @ApiTags('Payments')
 @ApiBearerAuth()
+@Controller('admin/transactions')
+@UseGuards(JwtAuthGuard)
+export class AdminTransactionsController {
+  constructor(private readonly payments: PaymentsService) {}
+
+  @Get()
+  list(
+    @CurrentUser() user: RequestUser,
+    @Query(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    query: PlatformTransactionsQueryDto,
+  ) {
+    return this.payments.listPlatformTransactions(user.id, query);
+  }
+}
+
+@ApiTags('Payments')
+@ApiBearerAuth()
 @Controller('requests/:id/payments')
-@UseGuards(JwtAuthGuard, Phase2OnlyGuard)
+@UseGuards(JwtAuthGuard)
 export class RequestPaymentsController {
   constructor(private readonly payments: PaymentsService) {}
   @Get() get(@CurrentUser() user: RequestUser, @Param('id') id: string) {
@@ -178,6 +203,73 @@ export class AdminFinanceController {
     private readonly finance: FinanceService,
     private readonly refundCommands: RefundsService,
   ) {}
+  @Get('refund-reserve') refundReserve(@CurrentUser() user: RequestUser) {
+    return this.refundCommands.refundReserveSummary(user.id);
+  }
+  @Post('refund-reserve/funding')
+  @HttpCode(HttpStatus.CREATED)
+  recordRefundReserveFunding(
+    @CurrentUser() user: RequestUser,
+    @Body(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    dto: RefundReserveFundingDto,
+  ) {
+    return this.refundCommands.recordRefundReserveFunding(user.id, dto);
+  }
+  @Post('refund-reserve/funding/:id/reconcile')
+  async reconcileRefundReserveFunding(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    dto: FinanceNoteDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return withEtag(
+      res,
+      await this.refundCommands.reconcileRefundReserveFunding(
+        user.id,
+        id,
+        dto.note,
+        version,
+      ),
+    );
+  }
+  @Post('refund-reserve/funding/:id/reject') async rejectRefundReserveFunding(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body(
+      new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      }),
+    )
+    dto: FinanceNoteDto,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return withEtag(
+      res,
+      await this.refundCommands.rejectRefundReserveFunding(
+        user.id,
+        id,
+        dto.note,
+        version,
+      ),
+    );
+  }
   @Get('refunds') refunds(
     @CurrentUser() user: RequestUser,
     @Query('page') page?: string,
@@ -251,6 +343,17 @@ export class AdminFinanceController {
     return withEtag(
       res,
       await this.refundCommands.recordTransfer(user.id, id, dto, version),
+    );
+  }
+  @Post('refunds/:id/prepare-transfer') async prepareRefundTransfer(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @IfMatch() version: number | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    return withEtag(
+      res,
+      await this.refundCommands.prepareTransfer(user.id, id, version),
     );
   }
   @Post('refunds/:id/reconcile') async reconcileRefund(

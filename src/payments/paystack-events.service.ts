@@ -262,6 +262,7 @@ export class PaystackEventsService implements OnModuleInit {
       {
         actor: null,
         verifiedAmount: verified.amount,
+        transferFee: verified.feeCharged,
         onSettled: (tx) =>
           this.inbox.markDone(tx, event.fingerprint, { status: 'processed' }),
       },

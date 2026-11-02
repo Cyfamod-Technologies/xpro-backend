@@ -82,6 +82,8 @@ export type RefundQueueItem = {
   amount: number | null;
   reason: string;
   method: string | null;
+  transferPrepared: boolean;
+  transferRecorded: boolean;
   /** The `ETag` value of the record; send it back as `If-Match` (05 §11). */
   version: number;
   createdAt: Date;
@@ -102,6 +104,12 @@ export function toRefundQueueItem(
     amount: amountFor(row.amount, canSeePricing),
     reason: row.reason,
     method,
+    transferPrepared:
+      row.transferRecordedBy !== null &&
+      row.transferReference === null &&
+      row.transferProofId === null,
+    transferRecorded:
+      row.transferReference !== null && row.transferProofId !== null,
     version: row.version,
     createdAt: row.createdAt,
     completedAt: row.completedAt,

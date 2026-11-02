@@ -811,7 +811,11 @@ describe('quote.setPayout (B-42)', () => {
         resourceId: 'quote-1',
         changes: {
           before: { payoutAmount: 250_000, payoutAssignmentId: 'assign-old' },
-          after: { payoutAmount: 300_000, payoutAssignmentId: 'assign-1' },
+          after: {
+            payoutAmount: 300_000,
+            payoutAssignmentId: 'assign-1',
+            policy: 'per_job',
+          },
         },
       },
     });
@@ -883,7 +887,7 @@ describe('quote.setPayout (B-42)', () => {
       },
     });
     await expect(setPayout(service, 500_001)).rejects.toThrow(
-      'Enter a payout amount above 0 and no higher than the quote total.',
+      'The configured provider payout must be above 0 and no higher than the quote total.',
     );
   });
 });

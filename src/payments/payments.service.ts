@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { Inject, Injectable } from '@nestjs/common';
-import { Payment, Prisma } from '@prisma/client';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { Payment, PaymentMethod, PaymentStatus, Prisma } from '@prisma/client';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 import { ActorService } from '../platform/actor/actor.service';
 import { requirePermission } from '../platform/actor/actor.guards';
@@ -18,6 +18,7 @@ import { RequestEventsService } from '../requests/events/request-events.service'
 import { formatRequestId } from '../requests/domain/statuses';
 import { resolveRequestId } from '../requests/request-ref';
 import { PrismaService } from '../prisma/prisma.service';
+import { paginationArgs } from '../common/utils/paginate';
 import { UploadsService } from '../uploads/uploads.service';
 import type { RequestUser } from '../common/types/request-user';
 import { amountDue } from './domain/amount-due';
@@ -29,6 +30,10 @@ import { REFUND_MESSAGES, refundableBalance } from './domain/refund-rules';
 import { compareTransaction } from './domain/transaction-match';
 import type { PaymentGateway, VerifiedTransaction } from './payment-gateway';
 import { toPaymentDto } from './payment.projection';
+import {
+  FINANCIAL_LEDGER_ACCOUNTS,
+  FinancialLedgerService,
+} from './financial-ledger.service';
 
 export const PAYMENT_GATEWAY = Symbol('PAYMENT_GATEWAY');
 
@@ -44,6 +49,7 @@ const NOT_AWAITING_RECONCILIATION =
 const REFERENCE_USED = 'This payment reference has already been used.';
 // new message: not in spec
 const FUTURE_PAID_AT = 'The payment date cannot be in the future.';
+const DEFAULT_TRANSACTION_PAGE_SIZE = 25;
 
 /** Paystack statuses that confirm no charge happened (05 §8: release the attempt only then). */
 const NO_CHARGE_STATUSES = new Set(['failed', 'abandoned']);
@@ -90,6 +96,7 @@ export class PaymentsService {
     private readonly requestEvents: RequestEventsService,
     private readonly runner: RequestCommandRunner,
     private readonly dispatcher: NotificationDispatcher,
+    @Optional() private readonly ledger?: FinancialLedgerService,
   ) {}
 
   /**
@@ -233,6 +240,130 @@ export class PaymentsService {
         status: row.status,
         reason: canViewAmount ? row.reason : null,
       })),
+    };
+  }
+
+  async listPlatformTransactions(
+    userId: string,
+    query: {
+      page?: number;
+      limit?: number;
+      status?: string;
+      method?: string;
+      q?: string;
+    } = {},
+  ) {
+    const actor = await this.actors.resolve(userId);
+    requirePermission(actor, 'payment.record');
+    const canViewPricing =
+      actor.staff?.permissions.has('view.pricing') ?? false;
+
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, query.limit ?? DEFAULT_TRANSACTION_PAGE_SIZE),
+    );
+    const where: Prisma.PaymentWhereInput = {
+      ...(query.status ? { status: query.status as PaymentStatus } : {}),
+      ...(query.method ? { method: query.method as PaymentMethod } : {}),
+    };
+    const search = query.q?.trim();
+
+    if (search) {
+      const customerUsers = await this.prisma.user.findMany({
+        where: { email: { contains: search, mode: 'insensitive' } },
+        select: { id: true },
+      });
+      const requestNumberMatch = search.match(/^(?:XPR-)?(\d+)$/i);
+      const requestNumber = requestNumberMatch
+        ? Number(requestNumberMatch[1])
+        : null;
+      const searchClauses: Prisma.PaymentWhereInput[] = [
+        { reference: { contains: search, mode: 'insensitive' } },
+        {
+          request: { is: { title: { contains: search, mode: 'insensitive' } } },
+        },
+        {
+          request: {
+            is: { customerName: { contains: search, mode: 'insensitive' } },
+          },
+        },
+      ];
+      if (customerUsers.length)
+        searchClauses.push({
+          request: {
+            is: { ownerId: { in: customerUsers.map(({ id }) => id) } },
+          },
+        });
+      if (requestNumber && Number.isSafeInteger(requestNumber))
+        searchClauses.push({ request: { is: { number: requestNumber } } });
+      where.AND = [{ OR: searchClauses }];
+    }
+
+    const { skip, take } = paginationArgs(page, limit);
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.payment.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip,
+        take,
+        select: {
+          id: true,
+          amount: true,
+          method: true,
+          channel: true,
+          gatewayChannel: true,
+          status: true,
+          reference: true,
+          createdAt: true,
+          paidAt: true,
+          request: {
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              ownerId: true,
+              customerName: true,
+            },
+          },
+        },
+      }),
+      this.prisma.payment.count({ where }),
+    ]);
+    const customerIds = [
+      ...new Set(rows.map(({ request }) => request.ownerId)),
+    ];
+    const customers = customerIds.length
+      ? await this.prisma.user.findMany({
+          where: { id: { in: customerIds } },
+          select: { id: true, email: true },
+        })
+      : [];
+    const emailById = new Map(customers.map(({ id, email }) => [id, email]));
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        reference: canViewPricing ? row.reference : null,
+        requestRecordId: row.request.id,
+        requestId: formatRequestId(row.request.number),
+        requestTitle: row.request.title,
+        customerName: row.request.customerName,
+        customerEmail: emailById.get(row.request.ownerId) ?? null,
+        amount: canViewPricing ? Number(row.amount) : null,
+        currency: 'NGN',
+        method: row.method,
+        channel: canViewPricing ? (row.channel ?? row.gatewayChannel) : null,
+        status: row.status,
+        createdAt: row.createdAt,
+        paidAt: row.paidAt,
+      })),
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+      hasNextPage: page * limit < total,
+      hasPrevPage: page > 1,
     };
   }
 
@@ -532,6 +663,30 @@ export class PaymentsService {
         });
         if (claimed.count !== 1)
           throw conflict('This payment is no longer awaiting reconciliation.');
+        if (this.ledger) {
+          await this.ledger.post(ctx.tx, {
+            sourceType: 'payment',
+            sourceId: payment.id,
+            event: 'settled',
+            idempotencyKey: `payment:${payment.id}:settled`,
+            description: 'Offline customer payment reconciled',
+            createdBy: userId,
+            lines: [
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.platformBank,
+                side: 'debit',
+                amount: payment.amount,
+                requestId: payment.requestId,
+              },
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.customerFundsHeld,
+                side: 'credit',
+                amount: payment.amount,
+                requestId: payment.requestId,
+              },
+            ],
+          });
+        }
         // The money was received, so it settles even when the request has lapsed or was cancelled; the late branch opens the full refund (05 §7).
         const events = await this.requestEvents.onPaymentSettled(
           ctx.tx,
@@ -712,6 +867,63 @@ export class PaymentsService {
         if (claimed.count !== 1) {
           await options.onSettled?.(tx);
           return { claimed: false, afterCommit: undefined };
+        }
+        if (this.ledger) {
+          const settledPayment = await tx.payment.findUniqueOrThrow({
+            where: { id: payment.id },
+            select: { amount: true },
+          });
+          await this.ledger.post(tx, {
+            sourceType: 'payment',
+            sourceId: payment.id,
+            event: 'settled',
+            idempotencyKey: `payment:${payment.id}:settled`,
+            description: 'Paystack customer payment settled',
+            metadata: {
+              reference: verified.reference,
+              channel: verified.channel ?? null,
+              source: options.source,
+            },
+            lines: [
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.paystackClearing,
+                side: 'debit',
+                amount: settledPayment.amount,
+                requestId: payment.requestId,
+              },
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.customerFundsHeld,
+                side: 'credit',
+                amount: settledPayment.amount,
+                requestId: payment.requestId,
+              },
+            ],
+          });
+          const fee = verified.fees;
+          if (Number.isSafeInteger(fee) && fee! > 0) {
+            await this.ledger.post(tx, {
+              sourceType: 'payment',
+              sourceId: payment.id,
+              event: 'gateway_fee',
+              idempotencyKey: `payment:${payment.id}:gateway-fee`,
+              description: 'Paystack collection fee absorbed by XPro',
+              metadata: { reference: verified.reference, feeKobo: fee! },
+              lines: [
+                {
+                  account: FINANCIAL_LEDGER_ACCOUNTS.paymentGatewayFees,
+                  side: 'debit',
+                  amount: BigInt(fee!),
+                  requestId: payment.requestId,
+                },
+                {
+                  account: FINANCIAL_LEDGER_ACCOUNTS.paystackClearing,
+                  side: 'credit',
+                  amount: BigInt(fee!),
+                  requestId: payment.requestId,
+                },
+              ],
+            });
+          }
         }
         await tx.auditLog.create({
           data: {

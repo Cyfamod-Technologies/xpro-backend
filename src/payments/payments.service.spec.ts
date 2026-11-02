@@ -1120,6 +1120,116 @@ describe('PaymentsService.getRequestPayments', () => {
   });
 });
 
+describe('PaymentsService.listPlatformTransactions', () => {
+  const requestRow = {
+    id: 'request-1',
+    number: 42,
+    title: 'Interior painting',
+    ownerId: 'customer-1',
+    customerName: 'Ada Customer',
+  };
+  const paymentRow = {
+    id: 'payment-1',
+    amount: 500_000n,
+    method: 'paystack',
+    channel: null,
+    gatewayChannel: 'card',
+    status: 'paid',
+    reference: 'xpro_ref_1',
+    createdAt: NOW,
+    paidAt: NOW,
+    request: requestRow,
+  };
+  const buildListing = (actor: ActorContext) => {
+    const prisma = {
+      user: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ id: 'customer-1', email: 'ada@example.com' }]),
+      },
+      payment: {
+        findMany: jest.fn().mockResolvedValue([paymentRow]),
+        count: jest.fn().mockResolvedValue(1),
+      },
+      $transaction: jest
+        .fn()
+        .mockImplementation((queries: Promise<unknown>[]) =>
+          Promise.all(queries),
+        ),
+    };
+    const actors = { resolve: jest.fn().mockResolvedValue(actor) };
+    const service = new PaymentsService(
+      prisma as never,
+      actors as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { service, prisma };
+  };
+
+  it('returns a paginated read-only allow-list with customer and request context', async () => {
+    const { service, prisma } = buildListing(finance());
+
+    const result = await service.listPlatformTransactions('finance-1', {
+      page: 1,
+      limit: 25,
+      q: 'xpro_ref_1',
+    });
+
+    expect(result).toMatchObject({
+      total: 1,
+      page: 1,
+      limit: 25,
+      totalPages: 1,
+    });
+    expect(result.items[0]).toMatchObject({
+      id: 'payment-1',
+      requestRecordId: 'request-1',
+      requestId: 'XPR-00042',
+      customerEmail: 'ada@example.com',
+      amount: 500_000,
+      channel: 'card',
+      status: 'paid',
+    });
+    expect(prisma.payment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skip: 0,
+        take: 25,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      }),
+    );
+  });
+
+  it('requires payment.record permission', async () => {
+    const actor = finance();
+    actor.staff!.permissions = new Set();
+    const { service } = buildListing(actor);
+
+    await expect(
+      service.listPlatformTransactions('finance-1'),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('masks amount, reference and channel when view.pricing is absent', async () => {
+    const actor = finance();
+    actor.staff!.permissions = new Set(['payment.record']);
+    const { service } = buildListing(actor);
+
+    const result = await service.listPlatformTransactions('finance-1');
+
+    expect(result.items[0]).toMatchObject({
+      amount: null,
+      reference: null,
+      channel: null,
+    });
+    expect(result.items[0].status).toBe('paid');
+  });
+});
+
 describe('PaymentsService.openForCancellation (C-39)', () => {
   const settledPayment = (overrides: Record<string, unknown> = {}) => ({
     id: 'payment-1',

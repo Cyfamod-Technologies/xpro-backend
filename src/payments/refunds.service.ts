@@ -1,9 +1,10 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import {
   Prisma,
   RefundStatus,
   type Payment,
   type Refund,
+  type RefundReserveFunding,
 } from '@prisma/client';
 import type { ActorContext } from '../platform/actor/actor.types';
 import { requirePermission } from '../platform/actor/actor.guards';
@@ -14,6 +15,7 @@ import {
   IdempotencyService,
 } from '../platform/idempotency/idempotency.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import {
   RequestCommandRunner,
   type CommandContext,
@@ -21,7 +23,6 @@ import {
 import { RequestEventsService } from '../requests/events/request-events.service';
 import { UploadsService } from '../uploads/uploads.service';
 import {
-  REFUND_MESSAGES,
   checkDecider,
   checkReconciler,
   checkSecondApprover,
@@ -31,36 +32,31 @@ import {
   planSecondApproval,
   refundRegime,
   refundableBalance,
-  withinResubmitCooldown,
   type RefundFailure,
 } from './domain/refund-rules';
 import { parseStatusFilter } from './domain/payout-rules';
-import {
-  GatewayRejectedError,
-  type GatewayRefund,
-  type PaymentGateway,
-} from './payment-gateway';
+import type { GatewayRefund, PaymentGateway } from './payment-gateway';
 import type { IdempotencyInput } from './finance.service';
 import { PAYMENT_GATEWAY } from './payments.service';
 import { assertExpectedVersion } from './record-version';
 import { toRefundQueueItem } from './payout.projection';
 import { refreshPaymentRefundStatus } from './refund-status';
+import {
+  FINANCIAL_LEDGER_ACCOUNTS,
+  FinancialLedgerService,
+} from './financial-ledger.service';
 
 const conflict = (message: string) =>
   new AppError(409, 'STATE_CONFLICT', message);
 
 const NOT_AWAITING_DECISION = 'This refund is no longer awaiting a decision.';
 const NOT_AWAITING_SECOND = 'This refund is not awaiting a second approval.';
-const NOT_READY_FOR_TRANSFER = 'This offline refund is not ready for transfer.';
+const NOT_READY_FOR_TRANSFER = 'This refund is not ready for transfer.';
 const NOT_AWAITING_RECONCILIATION =
-  'This offline refund is not awaiting reconciliation.';
+  'This refund is not awaiting reconciliation.';
 // new message: not in spec
-const NOT_RETRYABLE = 'This refund cannot be retried.';
-// new message: not in spec
-const PAYSTACK_ONLY = 'Only Paystack refunds can be retried.';
-// new message: not in spec
-const STILL_SUBMITTING =
-  'This refund was just sent to Paystack. Check it again in a few minutes.';
+const PAYSTACK_REFUNDS_DISABLED =
+  'Paystack API refunds are disabled. Pay the customer from the XPro refund reserve and record the transfer.';
 // new message: not in spec
 const NO_REFUNDABLE_PAYMENT = 'This payment has no settled balance to refund.';
 const PAYMENT_NOT_FOUND = 'The payment for this refund was not found.';
@@ -90,16 +86,12 @@ const failWith = (failure: RefundFailure | null): void => {
  * Refund commands (05 §4.2, §5, §6.4, §7). Every one follows plan C.4: one
  * transaction on the request runner, the payment row locked `FOR UPDATE`, the
  * refund state claimed with a conditional `updateMany` that must match one
- * row, then audit, notifications and approval items in that transaction. The
- * Paystack call happens after the claim commits and its outcome is recorded in
- * a second transaction. An outcome that cannot be known leaves the refund
- * `processing` with no gateway id; a retry looks the refund up at the gateway
- * before it submits anything again.
+ * row, then audit, notifications and approval items in that transaction.
+ * Refunds are paid from XPro's reserve by a separately reconciled bank
+ * transfer, never through Paystack's refund endpoint.
  */
 @Injectable()
 export class RefundsService {
-  private readonly logger = new Logger(RefundsService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly actors: ActorService,
@@ -108,6 +100,8 @@ export class RefundsService {
     private readonly runner: RequestCommandRunner,
     private readonly requestEvents: RequestEventsService,
     private readonly idempotency: IdempotencyService,
+    @Optional() private readonly ledger?: FinancialLedgerService,
+    @Optional() private readonly audit?: AuditLogsService,
   ) {}
 
   /** The refund queue: an allow-list DTO, a `?status` filter, and amounts only for staff with `view.pricing` (C-42, E-27). */
@@ -153,6 +147,264 @@ export class RefundsService {
       hasNextPage: page * limit < total,
       hasPrevPage: page > 1,
     };
+  }
+
+  async refundReserveSummary(userId: string) {
+    const actor = await this.actors.resolve(userId);
+    requirePermission(actor, 'refund.manage');
+    const [reserveBalance, refundsPayable, pending, recent] =
+      await this.prisma.$transaction(async (tx) =>
+        Promise.all([
+          this.ledger
+            ? this.ledger.balanceForAccount(
+                tx,
+                FINANCIAL_LEDGER_ACCOUNTS.refundReserveBank.code,
+              )
+            : Promise.resolve(0n),
+          this.ledger
+            ? this.ledger.balanceForAccount(
+                tx,
+                FINANCIAL_LEDGER_ACCOUNTS.refundsPayable.code,
+              )
+            : Promise.resolve(0n),
+          tx.refundReserveFunding.findMany({
+            where: { status: 'pending_reconciliation' },
+            orderBy: { createdAt: 'asc' },
+          }),
+          tx.refundReserveFunding.findMany({
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+          }),
+        ]),
+      );
+    return {
+      currency: 'NGN',
+      reserveBalance: reserveBalance.toString(),
+      outstandingRefunds: refundsPayable.toString(),
+      available: (reserveBalance - refundsPayable).toString(),
+      pendingFunding: pending.map((row) => this.reserveFundingView(row)),
+      recentFunding: recent.map((row) => this.reserveFundingView(row)),
+    };
+  }
+
+  async recordRefundReserveFunding(
+    userId: string,
+    dto: {
+      amount: number;
+      reference: string;
+      proofFileId: string;
+      note?: string;
+    },
+  ) {
+    const actor = await this.actors.resolve(userId);
+    requirePermission(actor, 'refund.manage');
+    let row;
+    try {
+      row = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.refundReserveFunding.create({
+          data: {
+            amount: BigInt(dto.amount),
+            reference: dto.reference.trim(),
+            proofUploadId: dto.proofFileId,
+            note: dto.note?.trim() || null,
+            recordedBy: userId,
+          },
+        });
+        await this.uploads.attach(
+          tx,
+          [dto.proofFileId],
+          userId,
+          'payment_proof',
+          'refund_reserve_funding',
+          created.id,
+        );
+        return created;
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      )
+        throw conflict(
+          'This reserve funding reference has already been recorded.',
+        );
+      throw error;
+    }
+    this.audit?.record({
+      actorType: 'staff',
+      actorId: userId,
+      entityType: 'refund_reserve_funding',
+      entityId: row.id,
+      action: 'refund_reserve.funding_recorded',
+      metadata: {
+        amount: row.amount.toString(),
+        reference: row.reference,
+        proofUploadId: row.proofUploadId,
+      },
+    });
+    return this.reserveFundingView(row);
+  }
+
+  async reconcileRefundReserveFunding(
+    userId: string,
+    id: string,
+    note: string,
+    expectedVersion?: number,
+  ) {
+    const actor = await this.actors.resolve(userId);
+    requirePermission(actor, 'refund.manage');
+    if (!note.trim())
+      throw new AppError(422, 'VALIDATION_ERROR', 'Add a reconciliation note.');
+    const funding = await this.prisma.refundReserveFunding.findUnique({
+      where: { id },
+    });
+    if (!funding)
+      throw new AppError(404, 'NOT_FOUND', 'Reserve funding was not found.');
+    if (funding.recordedBy === userId)
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        'Another staff member must reconcile this reserve funding.',
+      );
+    if (funding.status !== 'pending_reconciliation')
+      throw conflict(
+        'This reserve funding is no longer awaiting reconciliation.',
+      );
+    if (expectedVersion !== undefined && funding.version !== expectedVersion)
+      throw new AppError(
+        409,
+        'VERSION_CONFLICT',
+        'Reload the reserve funding and try again.',
+      );
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.refundReserveFunding.updateMany({
+        where: {
+          id,
+          status: 'pending_reconciliation',
+          recordedBy: { not: userId },
+          version: funding.version,
+        },
+        data: {
+          status: 'reconciled',
+          reconciledBy: userId,
+          reconciledAt: new Date(),
+          reconciliationNote: note.trim(),
+          version: { increment: 1 },
+        },
+      });
+      if (claimed.count !== 1)
+        throw conflict(
+          'This reserve funding is no longer awaiting reconciliation.',
+        );
+      await this.ledger?.post(tx, {
+        sourceType: 'refund_reserve_funding',
+        sourceId: id,
+        event: 'reconciled',
+        idempotencyKey: `refund-reserve-funding:${id}:reconciled`,
+        description: 'XPro funds moved into the refund reserve bank account',
+        createdBy: userId,
+        lines: [
+          {
+            account: FINANCIAL_LEDGER_ACCOUNTS.refundReserveBank,
+            side: 'debit',
+            amount: funding.amount,
+          },
+          {
+            account: FINANCIAL_LEDGER_ACCOUNTS.platformBank,
+            side: 'credit',
+            amount: funding.amount,
+          },
+        ],
+      });
+      return tx.refundReserveFunding.findUniqueOrThrow({ where: { id } });
+    });
+    this.audit?.record({
+      actorType: 'staff',
+      actorId: userId,
+      entityType: 'refund_reserve_funding',
+      entityId: id,
+      action: 'refund_reserve.funding_reconciled',
+      metadata: {
+        amount: funding.amount.toString(),
+        reference: funding.reference,
+        recordedBy: funding.recordedBy,
+        note: note.trim(),
+      },
+    });
+    return this.reserveFundingView(updated);
+  }
+
+  async rejectRefundReserveFunding(
+    userId: string,
+    id: string,
+    note: string,
+    expectedVersion?: number,
+  ) {
+    const actor = await this.actors.resolve(userId);
+    requirePermission(actor, 'refund.manage');
+    if (!note.trim())
+      throw new AppError(422, 'VALIDATION_ERROR', 'Add a rejection note.');
+    const funding = await this.prisma.refundReserveFunding.findUnique({
+      where: { id },
+    });
+    if (!funding)
+      throw new AppError(404, 'NOT_FOUND', 'Reserve funding was not found.');
+    if (funding.recordedBy === userId)
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        'Another staff member must review this reserve funding.',
+      );
+    if (funding.status !== 'pending_reconciliation')
+      throw conflict(
+        'This reserve funding is no longer awaiting reconciliation.',
+      );
+    if (expectedVersion !== undefined && funding.version !== expectedVersion)
+      throw new AppError(
+        409,
+        'VERSION_CONFLICT',
+        'Reload the reserve funding and try again.',
+      );
+    const updatedCount = await this.prisma.refundReserveFunding.updateMany({
+      where: {
+        id,
+        status: 'pending_reconciliation',
+        recordedBy: { not: userId },
+        version: funding.version,
+      },
+      data: {
+        status: 'rejected',
+        reconciledBy: userId,
+        reconciledAt: new Date(),
+        reconciliationNote: note.trim(),
+        version: { increment: 1 },
+      },
+    });
+    if (updatedCount.count !== 1)
+      throw conflict(
+        'This reserve funding is no longer awaiting reconciliation.',
+      );
+    this.audit?.record({
+      actorType: 'staff',
+      actorId: userId,
+      entityType: 'refund_reserve_funding',
+      entityId: id,
+      action: 'refund_reserve.funding_rejected',
+      metadata: {
+        amount: funding.amount.toString(),
+        reference: funding.reference,
+        recordedBy: funding.recordedBy,
+        note: note.trim(),
+      },
+    });
+    return this.reserveFundingView({
+      ...funding,
+      status: 'rejected',
+      reconciledBy: userId,
+      reconciledAt: new Date(),
+      reconciliationNote: note.trim(),
+      version: funding.version + 1,
+    });
   }
 
   /**
@@ -256,9 +508,9 @@ export class RefundsService {
   /**
    * `refund.decide` (05 §6.4). The decider is never the requester. Before work
    * starts an approval is the full balance; after work starts every approval,
-   * even a zero amount, waits for a Super admin (`secondApprove`). A Paystack
-   * refund that is fully approved is claimed straight to `processing` and then
-   * submitted once the claim has committed.
+   * even a zero amount, waits for a Super admin (`secondApprove`). Approved
+   * refunds are paid by bank transfer from XPro's refund reserve because
+   * Paystack's refund endpoint can debit pending payouts.
    */
   async decide(
     userId: string,
@@ -273,7 +525,6 @@ export class RefundsService {
     const replay = await this.idempotency.lookup(userId, idempotency.key, hash);
     if (replay) return replay.body;
     const known = await this.known(id, NOT_AWAITING_DECISION);
-    let submit = false;
     await this.runner.run(
       {
         command: 'refund.decide',
@@ -308,10 +559,7 @@ export class RefundsService {
           balance: await this.balanceExcluding(ctx, payment, id),
         });
         if (!plan.ok) raise(plan);
-        const status =
-          plan.status === 'approved' && payment.method === 'paystack'
-            ? 'processing'
-            : plan.status;
+        const status = plan.status;
         const claimed = await ctx.tx.refund.updateMany({
           where: { id, status: 'pending_approval' },
           data: {
@@ -323,7 +571,8 @@ export class RefundsService {
           },
         });
         if (claimed.count !== 1) throw conflict(NOT_AWAITING_DECISION);
-        submit = status === 'processing';
+        if (status === 'approved')
+          await this.recordRefundLiability(ctx, refund, userId, plan.amount);
         ctx.audit(
           status === 'rejected'
             ? 'Refund rejected'
@@ -350,7 +599,6 @@ export class RefundsService {
         return { bumpVersion: false };
       },
     );
-    if (submit) await this.submit(actor, id);
     const result = await this.view(id);
     await this.idempotency.store(userId, idempotency.key, hash, 200, result);
     return result;
@@ -366,7 +614,6 @@ export class RefundsService {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'refund.manage');
     const known = await this.known(id, NOT_AWAITING_SECOND);
-    let submit = false;
     let resolvedAfterCommit: (() => Promise<void>) | undefined;
     await this.runner.run(
       {
@@ -399,10 +646,7 @@ export class RefundsService {
           balance: await this.balanceExcluding(ctx, payment, id),
         });
         if (!plan.ok) raise(plan);
-        const status =
-          plan.status === 'approved' && payment.method === 'paystack'
-            ? 'processing'
-            : plan.status;
+        const status = plan.status;
         const claimed = await ctx.tx.refund.updateMany({
           where: { id, status: 'awaiting_second_approval' },
           data: {
@@ -414,7 +658,8 @@ export class RefundsService {
           },
         });
         if (claimed.count !== 1) throw conflict(NOT_AWAITING_SECOND);
-        submit = status === 'processing';
+        if (status === 'approved')
+          await this.recordRefundLiability(ctx, refund, userId, refund.amount);
         ctx.audit(
           status === 'rejected'
             ? 'Refund rejected (second approval)'
@@ -453,11 +698,74 @@ export class RefundsService {
       },
     );
     await resolvedAfterCommit?.();
-    if (submit) await this.submit(actor, id);
     return this.view(id);
   }
 
-  /** `refund.recordTransfer` (05 §6.4): Finance records the outgoing bank transfer of an offline refund, with proof. */
+  async prepareTransfer(userId: string, id: string, expectedVersion?: number) {
+    const actor = await this.actors.resolve(userId);
+    requirePermission(actor, 'refund.manage');
+    const known = await this.known(id, NOT_READY_FOR_TRANSFER);
+    await this.runner.run(
+      {
+        command: 'refund.prepareTransfer',
+        actor,
+        requestRef: known.requestId,
+        guard: null,
+      },
+      async (ctx) => {
+        const { refund, payment } = await this.lock(
+          ctx,
+          id,
+          known.paymentId,
+          NOT_READY_FOR_TRANSFER,
+        );
+        assertExpectedVersion(expectedVersion, refund.version);
+        if (refund.status !== 'approved')
+          throw conflict(NOT_READY_FOR_TRANSFER);
+        if (!this.ledger)
+          throw conflict('The refund reserve ledger is not available.');
+        const [reserveBalance, outstandingRefunds] = await Promise.all([
+          this.ledger.balanceForAccount(
+            ctx.tx,
+            FINANCIAL_LEDGER_ACCOUNTS.refundReserveBank.code,
+          ),
+          this.ledger.balanceForAccount(
+            ctx.tx,
+            FINANCIAL_LEDGER_ACCOUNTS.refundsPayable.code,
+          ),
+        ]);
+        if (reserveBalance < outstandingRefunds)
+          throw conflict(
+            'The refund reserve does not cover all approved refunds. Fund and reconcile the reserve before transferring.',
+          );
+        const claimed = await ctx.tx.refund.updateMany({
+          where: { id, status: 'approved' },
+          data: {
+            status: 'processing',
+            transferRecordedBy: userId,
+            version: { increment: 1 },
+          },
+        });
+        if (claimed.count !== 1) throw conflict(NOT_READY_FOR_TRANSFER);
+        ctx.audit('Refund transfer authorized from reserve', {
+          resourceType: 'refund',
+          resourceId: id,
+          changes: {
+            ...this.auditChanges(refund, payment, {
+              status: 'processing',
+              amount: refund.amount,
+            }),
+            reserveBalance: reserveBalance.toString(),
+            outstandingRefunds: outstandingRefunds.toString(),
+          },
+        });
+        return { bumpVersion: false };
+      },
+    );
+    return this.view(id);
+  }
+
+  /** Records the external bank transfer after an approved refund was authorized against the reserve. */
   async recordTransfer(
     userId: string,
     id: string,
@@ -482,16 +790,25 @@ export class RefundsService {
           NOT_READY_FOR_TRANSFER,
         );
         assertExpectedVersion(expectedVersion, refund.version);
-        if (refund.status !== 'approved' || payment.method !== 'offline')
+        if (
+          refund.status !== 'processing' ||
+          refund.transferRecordedBy !== userId ||
+          refund.transferReference ||
+          refund.transferProofId
+        )
           throw conflict(NOT_READY_FOR_TRANSFER);
         const note = dto.note?.trim();
         const claimed = await ctx.tx.refund.updateMany({
-          where: { id, status: 'approved' },
-          data: {
+          where: {
+            id,
             status: 'processing',
+            transferRecordedBy: userId,
+            transferReference: null,
+            transferProofId: null,
+          },
+          data: {
             transferReference: dto.reference,
             transferProofId: dto.proofFileId,
-            transferRecordedBy: userId,
             version: { increment: 1 },
             ...(note ? { reason: `${refund.reason}\n${note}` } : {}),
           },
@@ -554,7 +871,12 @@ export class RefundsService {
           NOT_AWAITING_RECONCILIATION,
         );
         assertExpectedVersion(expectedVersion, refund.version);
-        if (refund.status !== 'processing' || !refund.transferRecordedBy)
+        if (
+          refund.status !== 'processing' ||
+          !refund.transferRecordedBy ||
+          !refund.transferReference ||
+          !refund.transferProofId
+        )
           throw conflict(NOT_AWAITING_RECONCILIATION);
         failWith(
           checkReconciler({
@@ -586,6 +908,30 @@ export class RefundsService {
           },
         });
         if (claimed.count !== 1) throw conflict(NOT_AWAITING_RECONCILIATION);
+        if (this.ledger) {
+          await this.ledger.post(ctx.tx, {
+            sourceType: 'refund',
+            sourceId: refund.id,
+            event: 'paid',
+            idempotencyKey: `refund:${refund.id}:paid`,
+            description: 'Customer refund sent from XPro refund reserve',
+            createdBy: userId,
+            lines: [
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.refundsPayable,
+                side: 'debit',
+                amount: refund.amount,
+                requestId: refund.requestId,
+              },
+              {
+                account: FINANCIAL_LEDGER_ACCOUNTS.refundReserveBank,
+                side: 'credit',
+                amount: refund.amount,
+                requestId: refund.requestId,
+              },
+            ],
+          });
+        }
         await refreshPaymentRefundStatus(ctx.tx, refund.paymentId);
         ctx.approvals.close('refund', id, 'completed');
         this.notifyCompleted(ctx, refund.amount);
@@ -616,91 +962,46 @@ export class RefundsService {
     return this.view(id);
   }
 
-  /**
-   * `refund.retry` (05 §6.4, §8): a Paystack refund that failed, or whose
-   * submission outcome is unknown, is first looked up at the gateway, by its
-   * gateway refund id when it has one and by the transaction otherwise. A
-   * refund that is processed or still on its way is brought up to date and
-   * nothing is submitted. Only a refund the gateway reports as failed, or
-   * does not know, is resubmitted.
-   */
-  async retry(userId: string, id: string) {
+  /** Paystack retries could debit pending payouts, so all new refund payments use the separately reconciled XPro reserve. */
+  async retry(userId: string, _id: string) {
     const actor = await this.actors.resolve(userId);
     requirePermission(actor, 'refund.manage');
-    const refund = await this.prisma.refund.findUnique({ where: { id } });
-    const payment = refund
-      ? await this.prisma.payment.findUnique({
-          where: { id: refund.paymentId },
-        })
-      : null;
-    if (!refund || !payment) throw conflict(NOT_RETRYABLE);
-    if (payment.method !== 'paystack') throw conflict(PAYSTACK_ONLY);
-    if (refund.status !== 'failed' && refund.status !== 'processing')
-      throw conflict(NOT_RETRYABLE);
-    if (
-      refund.status === 'processing' &&
-      !refund.gatewayRefundId &&
-      withinResubmitCooldown(refund.updatedAt, new Date())
-    )
-      throw conflict(STILL_SUBMITTING);
+    throw conflict(PAYSTACK_REFUNDS_DISABLED);
+  }
 
-    const found = await this.lookup(refund, payment);
-    if (found && classifyGatewayRefund(found.status) !== 'failed') {
-      await this.settleFromGateway(refund.id, found, { actor });
-      return this.view(id);
-    }
-    await this.runner.run(
-      {
-        command: 'refund.retry',
-        actor,
-        requestRef: refund.requestId,
-        guard: null,
-      },
-      async (ctx) => {
-        const locked = await this.lock(
-          ctx,
-          id,
-          refund.paymentId,
-          NOT_RETRYABLE,
-        );
-        if (
-          (await this.balanceExcluding(ctx, locked.payment, id)) <
-          locked.refund.amount
-        )
-          throw new AppError(422, 'VALIDATION_ERROR', REFUND_MESSAGES.exceeds);
-        // `updatedAt` is the refund's version: only one retry can take it.
-        const claimed = await ctx.tx.refund.updateMany({
-          where: {
-            id,
-            status: refund.status,
-            gatewayRefundId: refund.gatewayRefundId,
-            updatedAt: refund.updatedAt,
-          },
-          data: {
-            status: 'processing',
-            gatewayRefundId: null,
-            version: { increment: 1 },
-          },
-        });
-        if (claimed.count !== 1) throw conflict(NOT_RETRYABLE);
-        ctx.approvals.close('refund', id, 'retried');
-        ctx.audit('Refund resubmitted', {
-          resourceType: 'refund',
-          resourceId: id,
-          changes: {
-            ...this.auditChanges(locked.refund, locked.payment, {
-              status: 'processing',
-              amount: locked.refund.amount,
-            }),
-            previousGatewayRefundId: refund.gatewayRefundId,
-            gatewayState: found?.status ?? 'not found',
-          },
-        });
-        return { bumpVersion: false };
-      },
-    );
-    await this.submit(actor, id);
-    return this.view(id);
+  private async recordRefundLiability(
+    ctx: CommandContext,
+    refund: Refund,
+    userId: string,
+    amount: bigint,
+  ) {
+    if (!this.ledger) return;
+    await this.ledger.post(ctx.tx, {
+      sourceType: 'refund',
+      sourceId: refund.id,
+      event: 'approved',
+      idempotencyKey: `refund:${refund.id}:approved`,
+      description: 'Approved customer refund reserved for payment',
+      createdBy: userId,
+      lines: [
+        {
+          account: FINANCIAL_LEDGER_ACCOUNTS.refundExpense,
+          side: 'debit',
+          amount,
+          requestId: refund.requestId,
+        },
+        {
+          account: FINANCIAL_LEDGER_ACCOUNTS.refundsPayable,
+          side: 'credit',
+          amount,
+          requestId: refund.requestId,
+        },
+      ],
+    });
+  }
+
+  private reserveFundingView(row: RefundReserveFunding) {
+    return { ...row, amount: Number(row.amount) };
   }
 
   /**
@@ -872,146 +1173,6 @@ export class RefundsService {
     );
     await afterCommit?.();
     return { applied };
-  }
-
-  /** The gateway call, after the claim has committed. C-02: the payment reference is loaded here, never taken from a partial include. */
-  private async submit(actor: ActorContext | null, id: string): Promise<void> {
-    const refund = await this.prisma.refund.findUnique({ where: { id } });
-    const payment = refund
-      ? await this.prisma.payment.findUnique({
-          where: { id: refund.paymentId },
-        })
-      : null;
-    if (
-      !refund ||
-      !payment ||
-      refund.status !== 'processing' ||
-      refund.gatewayRefundId
-    )
-      return;
-    let result: { id: string; status: string };
-    try {
-      result = await this.gateway.refund({
-        reference: payment.reference,
-        amount: Number(refund.amount),
-        reason: refund.reason,
-      });
-    } catch (error) {
-      await this.recordFailure(actor, refund, payment, error);
-      throw error;
-    }
-    await this.inTransaction(
-      actor,
-      'refund.gatewaySubmitted',
-      refund.requestId,
-      async (ctx) => {
-        await this.lockPayment(ctx, refund.paymentId);
-        const claimed = await ctx.tx.refund.updateMany({
-          where: { id, status: 'processing', gatewayRefundId: null },
-          data: { gatewayRefundId: result.id, version: { increment: 1 } },
-        });
-        if (claimed.count !== 1) return { changed: false };
-        ctx.audit('Refund submitted to Paystack', {
-          resourceType: 'refund',
-          resourceId: id,
-          changes: {
-            ...this.auditChanges(refund, payment, {
-              status: 'processing',
-              amount: refund.amount,
-            }),
-            gatewayRefundId: result.id,
-          },
-        });
-        return { bumpVersion: false };
-      },
-    );
-  }
-
-  /**
-   * A refusal from Paystack leaves the refund `failed`. Any other error leaves
-   * it `processing`, because the refund may exist at Paystack; Finance still
-   * gets the notice and the item, and a retry looks it up first.
-   */
-  private async recordFailure(
-    actor: ActorContext | null,
-    refund: Refund,
-    payment: Payment,
-    error: unknown,
-  ): Promise<void> {
-    const refused = error instanceof GatewayRejectedError;
-    try {
-      await this.inTransaction(
-        actor,
-        'refund.gatewayFailed',
-        refund.requestId,
-        async (ctx) => {
-          await this.lockPayment(ctx, refund.paymentId);
-          if (refused) {
-            const claimed = await ctx.tx.refund.updateMany({
-              where: {
-                id: refund.id,
-                status: 'processing',
-                gatewayRefundId: null,
-              },
-              data: { status: 'failed', version: { increment: 1 } },
-            });
-            if (claimed.count !== 1) return { changed: false };
-          }
-          ctx.audit(
-            refused
-              ? 'Refund failed at the gateway'
-              : 'Refund submission not confirmed',
-            {
-              resourceType: 'refund',
-              resourceId: refund.id,
-              changes: this.auditChanges(refund, payment, {
-                status: refused ? 'failed' : 'processing',
-                amount: refund.amount,
-              }),
-            },
-          );
-          ctx.approvals.open('refund', refund.id);
-          ctx.notify('refund.failed', {
-            requestCode: ctx.snap.number,
-            amount: Number(refund.amount),
-            detail: refused
-              ? 'Paystack refused it.'
-              : 'Paystack did not confirm it.',
-          });
-          return { bumpVersion: false };
-        },
-      );
-    } catch (recordError) {
-      this.logger.error(
-        `Could not record the failed gateway refund ${refund.id}: ${String(recordError)}`,
-      );
-    }
-  }
-
-  /** The refund at the gateway: by its gateway id, or, when its submission outcome was lost, by matching an unclaimed refund of the same amount on the transaction. */
-  private async lookup(
-    refund: Refund,
-    payment: Payment,
-  ): Promise<GatewayRefund | null> {
-    if (refund.gatewayRefundId)
-      return this.gateway.verifyRefund(refund.gatewayRefundId);
-    const listed = await this.gateway.listRefunds(payment.reference);
-    if (!listed.length) return null;
-    const owned = await this.prisma.refund.findMany({
-      where: {
-        gatewayRefundId: { in: listed.map(({ id }) => id) },
-        id: { not: refund.id },
-      },
-      select: { gatewayRefundId: true },
-    });
-    const taken = new Set(owned.map(({ gatewayRefundId }) => gatewayRefundId));
-    return (
-      listed.find(
-        (candidate) =>
-          !taken.has(candidate.id) &&
-          candidate.amount === Number(refund.amount),
-      ) ?? null
-    );
   }
 
   private inTransaction(

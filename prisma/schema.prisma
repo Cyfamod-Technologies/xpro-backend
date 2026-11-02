@@ -161,71 +161,71 @@ enum UploadStatus {
 // ─── Models ───────────────────────────────────────────────────────────────────
 
 model User {
-  id                      String        @id @default(uuid())
-  email                   String        @unique
-  passwordHash            String?       @map("password_hash")
-  firstName               String?       @map("first_name")
-  lastName                String?       @map("last_name")
-  role                    AppRole       @default(user)
-  status                  AccountStatus @default(invited)
-  emailVerifiedAt         DateTime?     @map("email_verified_at")
-  phoneE164               String?       @map("phone_e164")
-  phoneVerifiedAt         DateTime?     @map("phone_verified_at")
-  onboardingCompleted     Boolean       @default(false) @map("onboarding_completed")
-  mfaEnabled              Boolean       @default(false) @map("mfa_enabled")
-  mfaSecret               String?       @map("mfa_secret")
-  lastLoginAt             DateTime?     @map("last_login_at")
-  avatarUrl               String?       @map("avatar_url")
-  language                String?       @default("en")
+  id                      String         @id @default(uuid())
+  email                   String         @unique
+  passwordHash            String?        @map("password_hash")
+  firstName               String?        @map("first_name")
+  lastName                String?        @map("last_name")
+  role                    AppRole        @default(user)
+  status                  AccountStatus  @default(invited)
+  emailVerifiedAt         DateTime?      @map("email_verified_at")
+  phoneE164               String?        @map("phone_e164")
+  phoneVerifiedAt         DateTime?      @map("phone_verified_at")
+  onboardingCompleted     Boolean        @default(false) @map("onboarding_completed")
+  mfaEnabled              Boolean        @default(false) @map("mfa_enabled")
+  mfaSecret               String?        @map("mfa_secret")
+  lastLoginAt             DateTime?      @map("last_login_at")
+  avatarUrl               String?        @map("avatar_url")
+  language                String?        @default("en")
   timezone                String?
-  notificationPreferences Json?         @map("notification_preferences")
+  notificationPreferences Json?          @map("notification_preferences")
   name                    String?
-  statusReason            String?       @map("status_reason")
-  statusChangedAt         DateTime?     @map("status_changed_at")
-  statusChangedBy         String?       @map("status_changed_by")
-  passwordChangedAt       DateTime?     @map("password_changed_at")
-  failedLoginCount        Int           @default(0) @map("failed_login_count")
-  backoffUntil            DateTime?     @map("backoff_until")
-  mfaSecretEnc            Bytes?        @map("mfa_secret_enc")
-  mfaPendingSecretEnc     Bytes?        @map("mfa_pending_secret_enc")
-  mfaPendingCreatedAt     DateTime?     @map("mfa_pending_created_at")
-  mfaEnrolledAt           DateTime?     @map("mfa_enrolled_at")
-  mfaLastStep             BigInt?       @map("mfa_last_step")
+  statusReason            String?        @map("status_reason")
+  statusChangedAt         DateTime?      @map("status_changed_at")
+  statusChangedBy         String?        @map("status_changed_by")
+  passwordChangedAt       DateTime?      @map("password_changed_at")
+  failedLoginCount        Int            @default(0) @map("failed_login_count")
+  backoffUntil            DateTime?      @map("backoff_until")
+  mfaSecretEnc            Bytes?         @map("mfa_secret_enc")
+  mfaPendingSecretEnc     Bytes?         @map("mfa_pending_secret_enc")
+  mfaPendingCreatedAt     DateTime?      @map("mfa_pending_created_at")
+  mfaEnrolledAt           DateTime?      @map("mfa_enrolled_at")
+  mfaLastStep             BigInt?        @map("mfa_last_step")
   lastActiveRole          WorkspaceRole? @map("last_active_role")
-  deletionRequestedAt     DateTime?     @map("deletion_requested_at")
-  deletionScheduledFor    DateTime?     @map("deletion_scheduled_for")
-  deletedAt               DateTime?     @map("deleted_at")
-  openRequestLimit        Int?          @map("open_request_limit")
-  createdAt               DateTime      @default(now()) @map("created_at")
-  updatedAt               DateTime      @updatedAt @map("updated_at")
+  deletionRequestedAt     DateTime?      @map("deletion_requested_at")
+  deletionScheduledFor    DateTime?      @map("deletion_scheduled_for")
+  deletedAt               DateTime?      @map("deleted_at")
+  openRequestLimit        Int?           @map("open_request_limit")
+  createdAt               DateTime       @default(now()) @map("created_at")
+  updatedAt               DateTime       @updatedAt @map("updated_at")
 
-  auditLogs     AuditLog[]           @relation("AuditActor")
-  platformRoles UserRole[]
-  sessions      Session[]
-  authTokens    AuthToken[]
-  recoveryCodes MfaRecoveryCode[]
-  legalAcceptances LegalAcceptance[]
-  statusHistory AccountStatusHistory[]
-  staffMember   StaffMember?
-  providerProfile ProviderProfile?
-  providerUploads ProviderUpload[]
+  auditLogs          AuditLog[]             @relation("AuditActor")
+  platformRoles      UserRole[]
+  sessions           Session[]
+  authTokens         AuthToken[]
+  recoveryCodes      MfaRecoveryCode[]
+  legalAcceptances   LegalAcceptance[]
+  statusHistory      AccountStatusHistory[]
+  staffMember        StaffMember?
+  providerProfile    ProviderProfile?
+  providerUploads    ProviderUpload[]
   phoneVerifications PhoneVerification[]
-  requestGroups RequestGroup[]
+  requestGroups      RequestGroup[]
 
   @@map("users")
 }
 
 model PhoneVerification {
-  id          String    @id @default(uuid())
-  userId      String    @map("user_id")
-  phoneE164   String    @map("phone_e164")
-  codeHash    String    @map("code_hash")
-  attempts    Int       @default(0)
-  expiresAt   DateTime  @map("expires_at")
-  consumedAt  DateTime? @map("consumed_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String    @id @default(uuid())
+  userId     String    @map("user_id")
+  phoneE164  String    @map("phone_e164")
+  codeHash   String    @map("code_hash")
+  attempts   Int       @default(0)
+  expiresAt  DateTime  @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([phoneE164, createdAt])
@@ -246,25 +246,25 @@ model UserRole {
 }
 
 model Session {
-  id                    String               @id @default(uuid())
-  userId                String               @map("user_id")
+  id                    String                @id @default(uuid())
+  userId                String                @map("user_id")
   client                ClientKind
-  deviceId              String?              @map("device_id")
-  deviceLabel           String               @map("device_label")
-  ipCreated             String?              @map("ip_created") @db.Inet
-  ipLast                String?              @map("ip_last") @db.Inet
-  userAgent             String               @map("user_agent")
-  remember              Boolean              @default(false)
-  activeRole            WorkspaceRole?       @map("active_role")
-  mfaVerifiedAt         DateTime?            @map("mfa_verified_at")
-  reauthAt              DateTime?            @map("reauth_at")
-  lastSeenAt            DateTime             @default(now()) @map("last_seen_at")
-  idleExpiresAt         DateTime             @map("idle_expires_at")
-  absoluteExpiresAt     DateTime             @map("absolute_expires_at")
-  permissionVersionSeen Int?                 @map("permission_version_seen")
-  revokedAt             DateTime?            @map("revoked_at")
+  deviceId              String?               @map("device_id")
+  deviceLabel           String                @map("device_label")
+  ipCreated             String?               @map("ip_created") @db.Inet
+  ipLast                String?               @map("ip_last") @db.Inet
+  userAgent             String                @map("user_agent")
+  remember              Boolean               @default(false)
+  activeRole            WorkspaceRole?        @map("active_role")
+  mfaVerifiedAt         DateTime?             @map("mfa_verified_at")
+  reauthAt              DateTime?             @map("reauth_at")
+  lastSeenAt            DateTime              @default(now()) @map("last_seen_at")
+  idleExpiresAt         DateTime              @map("idle_expires_at")
+  absoluteExpiresAt     DateTime              @map("absolute_expires_at")
+  permissionVersionSeen Int?                  @map("permission_version_seen")
+  revokedAt             DateTime?             @map("revoked_at")
   revokedReason         SessionRevokedReason? @map("revoked_reason")
-  createdAt             DateTime             @default(now()) @map("created_at")
+  createdAt             DateTime              @default(now()) @map("created_at")
 
   user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   refreshTokens RefreshToken[]
@@ -276,12 +276,12 @@ model Session {
 }
 
 model RefreshToken {
-  id            String    @id @default(uuid())
-  sessionId     String    @map("session_id")
-  tokenHash     Bytes     @unique @map("token_hash")
-  issuedAt      DateTime  @default(now()) @map("issued_at")
-  supersededAt  DateTime? @map("superseded_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
+  id           String    @id @default(uuid())
+  sessionId    String    @map("session_id")
+  tokenHash    Bytes     @unique @map("token_hash")
+  issuedAt     DateTime  @default(now()) @map("issued_at")
+  supersededAt DateTime? @map("superseded_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
@@ -290,16 +290,16 @@ model RefreshToken {
 }
 
 model AuthToken {
-  id        String          @id @default(uuid())
-  userId    String          @map("user_id")
+  id        String           @id @default(uuid())
+  userId    String           @map("user_id")
   purpose   AuthTokenPurpose
-  tokenHash Bytes           @unique @map("token_hash")
-  expiresAt DateTime        @map("expires_at")
-  usedAt    DateTime?       @map("used_at")
-  attempts  Int             @default(0)
+  tokenHash Bytes            @unique @map("token_hash")
+  expiresAt DateTime         @map("expires_at")
+  usedAt    DateTime?        @map("used_at")
+  attempts  Int              @default(0)
   metadata  Json?
-  createdIp String?         @map("created_ip") @db.Inet
-  createdAt DateTime        @default(now()) @map("created_at")
+  createdIp String?          @map("created_ip") @db.Inet
+  createdAt DateTime         @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -354,12 +354,12 @@ model LegalAcceptance {
 }
 
 model AccountStatusHistory {
-  id        String       @id @default(uuid())
-  userId    String       @map("user_id")
+  id        String        @id @default(uuid())
+  userId    String        @map("user_id")
   status    AccountStatus
   reason    String?
-  changedBy String?      @map("changed_by")
-  createdAt DateTime     @default(now()) @map("created_at")
+  changedBy String?       @map("changed_by")
+  createdAt DateTime      @default(now()) @map("created_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -368,31 +368,31 @@ model AccountStatusHistory {
 }
 
 model StaffMember {
-  userId      String      @id @map("user_id")
-  status      StaffStatus @default(invited)
-  permVersion Int         @default(1) @map("perm_version")
-  canOwnRequests Boolean  @default(false) @map("can_own_requests")
+  userId                     String      @id @map("user_id")
+  status                     StaffStatus @default(invited)
+  permVersion                Int         @default(1) @map("perm_version")
+  canOwnRequests             Boolean     @default(false) @map("can_own_requests")
   // Optimistic concurrency for staff commands (If-Match); bumped on every change.
-  rowVersion  Int         @default(1) @map("row_version")
-  employmentPeriod Int    @default(1) @map("employment_period")
-  acceptedAt  DateTime?   @map("accepted_at")
-  suspendedAt DateTime?   @map("suspended_at")
-  suspendedBy String?     @map("suspended_by")
-  suspensionReason String? @map("suspension_reason")
-  suspensionSecurityIncident Boolean @default(false) @map("suspension_security_incident")
-  deactivatedAt DateTime? @map("deactivated_at")
-  deactivatedBy String?   @map("deactivated_by")
-  deactivationReason String? @map("deactivation_reason")
-  leaveFrom   DateTime?   @map("leave_from") @db.Date
-  leaveTo     DateTime?   @map("leave_to") @db.Date
-  leaveDelegateId String? @map("leave_delegate_id")
-  leaveNote   String?     @map("leave_note")
-  conflictDeclaration Json? @map("conflict_declaration")
-  createdAt   DateTime    @default(now()) @map("created_at")
-  updatedAt   DateTime    @updatedAt @map("updated_at")
+  rowVersion                 Int         @default(1) @map("row_version")
+  employmentPeriod           Int         @default(1) @map("employment_period")
+  acceptedAt                 DateTime?   @map("accepted_at")
+  suspendedAt                DateTime?   @map("suspended_at")
+  suspendedBy                String?     @map("suspended_by")
+  suspensionReason           String?     @map("suspension_reason")
+  suspensionSecurityIncident Boolean     @default(false) @map("suspension_security_incident")
+  deactivatedAt              DateTime?   @map("deactivated_at")
+  deactivatedBy              String?     @map("deactivated_by")
+  deactivationReason         String?     @map("deactivation_reason")
+  leaveFrom                  DateTime?   @map("leave_from") @db.Date
+  leaveTo                    DateTime?   @map("leave_to") @db.Date
+  leaveDelegateId            String?     @map("leave_delegate_id")
+  leaveNote                  String?     @map("leave_note")
+  conflictDeclaration        Json?       @map("conflict_declaration")
+  createdAt                  DateTime    @default(now()) @map("created_at")
+  updatedAt                  DateTime    @updatedAt @map("updated_at")
 
-  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  roles StaffMemberRole[]
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roles   StaffMemberRole[]
   invites StaffInvite[]
 
   @@map("staff_members")
@@ -411,45 +411,45 @@ model StaffMemberRole {
 }
 
 model ProviderProfile {
-  id                 String                    @id @default(uuid())
-  userId             String                    @unique @map("user_id")
-  phone              String
-  trade              String
-  locationId         String?                  @map("location_id")
-  services           Json
-  serviceAreaIds     String[]                 @default([]) @map("service_area_ids")
-  businessName       String?                  @map("business_name")
-  skills             Json
-  serviceIds         Json?                    @map("service_ids")
-  skillIds           Json?                    @map("skill_ids")
-  capacity           Int                      @default(3)
-  workingHours       Json                     @map("working_hours")
-  timeOff            Json                     @default("[]") @map("time_off")
-  experience         Float                    @default(0)
-  lastOfferedAt      DateTime?                 @map("last_offered_at")
-  reliabilityStatus  String                    @default("normal") @map("reliability_status")
-  bio                String
-  documents          Json                     @default("[]")
-  photo              Json?
-  portfolio          Json                     @default("[]")
-  verification       ProviderVerificationStatus @default(draft)
-  available          Boolean                  @default(false)
-  reviewNote         String?                  @map("review_note")
-  reviewedAt         DateTime?                @map("reviewed_at")
-  reviewedBy         String?                  @map("reviewed_by")
-  rejectedAt         DateTime?                @map("rejected_at")
-  pendingChanges     Json?                    @map("pending_changes")
-  changesReview      Json?                    @map("changes_review")
-  version            Int                      @default(1)
-  createdAt          DateTime                 @default(now()) @map("created_at")
-  updatedAt          DateTime                 @updatedAt @map("updated_at")
+  id                String                     @id @default(uuid())
+  userId            String                     @unique @map("user_id")
+  phone             String
+  trade             String
+  locationId        String?                    @map("location_id")
+  services          Json
+  serviceAreaIds    String[]                   @default([]) @map("service_area_ids")
+  businessName      String?                    @map("business_name")
+  skills            Json
+  serviceIds        Json?                      @map("service_ids")
+  skillIds          Json?                      @map("skill_ids")
+  capacity          Int                        @default(3)
+  workingHours      Json                       @map("working_hours")
+  timeOff           Json                       @default("[]") @map("time_off")
+  experience        Float                      @default(0)
+  lastOfferedAt     DateTime?                  @map("last_offered_at")
+  reliabilityStatus String                     @default("normal") @map("reliability_status")
+  bio               String
+  documents         Json                       @default("[]")
+  photo             Json?
+  portfolio         Json                       @default("[]")
+  verification      ProviderVerificationStatus @default(draft)
+  available         Boolean                    @default(false)
+  reviewNote        String?                    @map("review_note")
+  reviewedAt        DateTime?                  @map("reviewed_at")
+  reviewedBy        String?                    @map("reviewed_by")
+  rejectedAt        DateTime?                  @map("rejected_at")
+  pendingChanges    Json?                      @map("pending_changes")
+  changesReview     Json?                      @map("changes_review")
+  version           Int                        @default(1)
+  createdAt         DateTime                   @default(now()) @map("created_at")
+  updatedAt         DateTime                   @updatedAt @map("updated_at")
 
-  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  location   Location?       @relation("ProviderLocation", fields: [locationId], references: [id], onDelete: SetNull)
-  bankAccounts ProviderBankAccount[]
-  reviews    ProviderReview[]
-  payouts    Payout[]
-  featured   FeaturedProvider?
+  user               User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  location           Location?                   @relation("ProviderLocation", fields: [locationId], references: [id], onDelete: SetNull)
+  bankAccounts       ProviderBankAccount[]
+  reviews            ProviderReview[]
+  payouts            Payout[]
+  featured           FeaturedProvider?
   requestAssignments RequestProviderAssignment[]
   decisions          RequestDecision[]           @relation("DecisionProvider")
 
@@ -483,20 +483,20 @@ enum LocationKind {
 }
 
 model Location {
-  id        String   @id @default(uuid())
-  kind      LocationKind
-  name      String
-  parentId  String?  @map("parent_id")
-  aliases   String[] @default([])
-  active      Boolean  @default(true)
-  serviceable Boolean  @default(false)
-  ancestorIds String[] @default([]) @map("ancestor_ids")
-  sort        Int      @default(0)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id          String       @id @default(uuid())
+  kind        LocationKind
+  name        String
+  parentId    String?      @map("parent_id")
+  aliases     String[]     @default([])
+  active      Boolean      @default(true)
+  serviceable Boolean      @default(false)
+  ancestorIds String[]     @default([]) @map("ancestor_ids")
+  sort        Int          @default(0)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
 
-  parent   Location?  @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
-  children Location[] @relation("LocationHierarchy")
+  parent    Location?         @relation("LocationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children  Location[]        @relation("LocationHierarchy")
   providers ProviderProfile[] @relation("ProviderLocation")
   requests  ServiceRequest[]  @relation("RequestLocation")
 
@@ -507,20 +507,20 @@ model Location {
 }
 
 model ProviderBankAccount {
-  id                 String             @id @default(uuid())
-  providerId         String             @map("provider_id")
-  bankCode           String             @map("bank_code")
-  bankName           String             @map("bank_name")
-  accountNumberEnc   String             @map("account_number_enc")
-  accountNameEnc     String             @map("account_name_enc")
-  last4              String             @map("last4")
-  recipientCodeEnc   String?            @map("recipient_code_enc")
-  state              ProviderBankStatus @default(pending)
-  reviewNote         String?            @map("review_note")
-  reviewedBy         String?            @map("reviewed_by")
-  reviewedAt         DateTime?          @map("reviewed_at")
-  createdAt          DateTime           @default(now()) @map("created_at")
-  updatedAt          DateTime           @updatedAt @map("updated_at")
+  id               String             @id @default(uuid())
+  providerId       String             @map("provider_id")
+  bankCode         String             @map("bank_code")
+  bankName         String             @map("bank_name")
+  accountNumberEnc String             @map("account_number_enc")
+  accountNameEnc   String             @map("account_name_enc")
+  last4            String             @map("last4")
+  recipientCodeEnc String?            @map("recipient_code_enc")
+  state            ProviderBankStatus @default(pending)
+  reviewNote       String?            @map("review_note")
+  reviewedBy       String?            @map("reviewed_by")
+  reviewedAt       DateTime?          @map("reviewed_at")
+  createdAt        DateTime           @default(now()) @map("created_at")
+  updatedAt        DateTime           @updatedAt @map("updated_at")
 
   provider ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Cascade)
 
@@ -561,18 +561,18 @@ model ProviderReliabilityEvent {
 }
 
 model ProviderUpload {
-  id          String                 @id @default(uuid())
-  ownerId     String                 @map("owner_id")
+  id          String                @id @default(uuid())
+  ownerId     String                @map("owner_id")
   purpose     ProviderUploadPurpose
-  status      ProviderUploadStatus   @default(pending)
-  fileName    String                 @map("file_name")
-  contentType String                 @map("content_type")
+  status      ProviderUploadStatus  @default(pending)
+  fileName    String                @map("file_name")
+  contentType String                @map("content_type")
   size        Int
-  storageKey  String                 @unique @map("storage_key")
-  expiresAt   DateTime               @map("expires_at")
-  completedAt DateTime?              @map("completed_at")
-  attachedAt  DateTime?              @map("attached_at")
-  createdAt   DateTime               @default(now()) @map("created_at")
+  storageKey  String                @unique @map("storage_key")
+  expiresAt   DateTime              @map("expires_at")
+  completedAt DateTime?             @map("completed_at")
+  attachedAt  DateTime?             @map("attached_at")
+  createdAt   DateTime              @default(now()) @map("created_at")
 
   owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
@@ -604,15 +604,15 @@ model Upload {
 }
 
 model StaffInvite {
-  id          String          @id @default(uuid())
-  staffUserId String          @map("staff_user_id")
-  tokenHash   Bytes           @unique @map("token_hash")
+  id          String           @id @default(uuid())
+  staffUserId String           @map("staff_user_id")
+  tokenHash   Bytes            @unique @map("token_hash")
   state       StaffInviteState @default(pending)
-  invitedBy   String          @map("invited_by")
-  expiresAt   DateTime        @map("expires_at")
-  consumedAt  DateTime?       @map("consumed_at")
-  revokedAt   DateTime?       @map("revoked_at")
-  createdAt   DateTime        @default(now()) @map("created_at")
+  invitedBy   String           @map("invited_by")
+  expiresAt   DateTime         @map("expires_at")
+  consumedAt  DateTime?        @map("consumed_at")
+  revokedAt   DateTime?        @map("revoked_at")
+  createdAt   DateTime         @default(now()) @map("created_at")
 
   staffMember StaffMember @relation(fields: [staffUserId], references: [userId], onDelete: Cascade)
 
@@ -950,6 +950,25 @@ enum RefundStatus {
   failed
 }
 
+enum RefundReserveFundingStatus {
+  pending_reconciliation
+  reconciled
+  rejected
+}
+
+enum FinancialLedgerAccountType {
+  asset
+  liability
+  equity
+  revenue
+  expense
+}
+
+enum FinancialLedgerSide {
+  debit
+  credit
+}
+
 enum PayoutKind {
   primary
   compensation
@@ -1092,11 +1111,11 @@ model CatalogService {
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 
-  parent        CatalogService?   @relation("CatalogHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
-  children      CatalogService[]  @relation("CatalogHierarchy")
-  questions     ServiceQuestion[]
-  requests      ServiceRequest[]  @relation("RequestService")
-  rootedRequests ServiceRequest[] @relation("RequestServiceRoot")
+  parent         CatalogService?   @relation("CatalogHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children       CatalogService[]  @relation("CatalogHierarchy")
+  questions      ServiceQuestion[]
+  requests       ServiceRequest[]  @relation("RequestService")
+  rootedRequests ServiceRequest[]  @relation("RequestServiceRoot")
 
   @@unique([parentId, name])
   @@index([parentId, sortOrder])
@@ -1139,83 +1158,83 @@ model ServiceQuestion {
 }
 
 model ServiceRequest {
-  id                    String                  @id @default(uuid())
-  number                Int                     @unique @default(autoincrement())
-  ownerId               String                  @map("owner_id")
-  customerName          String                  @map("customer_name")
+  id                    String                 @id @default(uuid())
+  number                Int                    @unique @default(autoincrement())
+  ownerId               String                 @map("owner_id")
+  customerName          String                 @map("customer_name")
   title                 String
   service               String
-  locationId            String                  @map("location_id")
+  locationId            String                 @map("location_id")
   address               String
   phone                 String
-  contactMethod         ContactMethod           @default(phone) @map("contact_method")
+  contactMethod         ContactMethod          @default(phone) @map("contact_method")
   description           String
-  budget                BigInt                  @default(0)
-  startDate             String?                 @map("start_date")
-  details               Json                    @default("{}")
-  serviceId             String?                 @map("service_id")
-  serviceRootId         String?                 @map("service_root_id")
-  servicePath           Json?                   @map("service_path")
-  answers               Json                    @default("[]")
-  status                RequestStatus           @default(submitted)
-  version               Int                     @default(1)
+  budget                BigInt                 @default(0)
+  startDate             String?                @map("start_date")
+  details               Json                   @default("{}")
+  serviceId             String?                @map("service_id")
+  serviceRootId         String?                @map("service_root_id")
+  servicePath           Json?                  @map("service_path")
+  answers               Json                   @default("[]")
+  status                RequestStatus          @default(submitted)
+  version               Int                    @default(1)
   workflowMode          RequestWorkflow        @default(phase2) @map("workflow_mode")
-  contactInBrief        Boolean                 @default(false) @map("contact_in_brief")
-  possibleDuplicateOf   String?                 @map("possible_duplicate_of")
-  groupId               String?                 @map("group_id")
-  groupPosition         Int?                    @map("group_position")
-  intakeState           IntakeState             @default(pending) @map("intake_state")
-  clarificationAskedAt  DateTime?               @map("clarification_asked_at")
-  clarificationCount    Int                     @default(0) @map("clarification_count")
-  intakeApprovedBy      String?                 @map("intake_approved_by")
-  intakeApprovedAt      DateTime?               @map("intake_approved_at")
-  offerBrief            String?                 @map("offer_brief")
-  shareOnConfirm        Json                    @default("{\"description\":true,\"attachmentIds\":[]}") @map("share_on_confirm")
-  staffOwnerId          String?                 @map("staff_owner_id")
-  claimedAt             DateTime?               @map("claimed_at")
-  unclaimedSince        DateTime?               @map("unclaimed_since")
-  ownershipVersion      Int                     @default(1) @map("ownership_version")
-  dispatchMode          DispatchMode            @default(auto) @map("dispatch_mode")
-  autoAttempts          Int                     @default(0) @map("auto_attempts")
-  needsAssignmentReason NeedsAssignmentReason?  @map("needs_assignment_reason")
-  lastRunId             String?                 @map("last_run_id")
-  holdKind              HoldKind?               @map("hold_kind")
-  holdBy                String?                 @map("hold_by")
-  holdReason            String?                 @map("hold_reason")
-  holdAt                DateTime?               @map("hold_at")
-  holdPreviousStatus    RequestStatus?          @map("hold_previous_status")
-  issueCycles           Int                     @default(0) @map("issue_cycles")
-  reportApprovedAt      DateTime?               @map("report_approved_at")
-  confirmDueAt          DateTime?               @map("confirm_due_at")
-  acknowledgedAt        DateTime?               @map("acknowledged_at")
-  acknowledgedBy        AcknowledgedBy?          @map("acknowledged_by")
-  acknowledgedNote      String?                 @map("acknowledged_note")
-  defectsWindowEndsAt   DateTime?               @map("defects_window_ends_at")
-  cancellationId        String?                 @map("cancellation_id")
-  closedAt              DateTime?               @map("closed_at")
-  closedBy              String?                 @map("closed_by")
-  createdAt             DateTime                @default(now()) @map("created_at")
-  updatedAt             DateTime                @updatedAt @map("updated_at")
+  contactInBrief        Boolean                @default(false) @map("contact_in_brief")
+  possibleDuplicateOf   String?                @map("possible_duplicate_of")
+  groupId               String?                @map("group_id")
+  groupPosition         Int?                   @map("group_position")
+  intakeState           IntakeState            @default(pending) @map("intake_state")
+  clarificationAskedAt  DateTime?              @map("clarification_asked_at")
+  clarificationCount    Int                    @default(0) @map("clarification_count")
+  intakeApprovedBy      String?                @map("intake_approved_by")
+  intakeApprovedAt      DateTime?              @map("intake_approved_at")
+  offerBrief            String?                @map("offer_brief")
+  shareOnConfirm        Json                   @default("{\"description\":true,\"attachmentIds\":[]}") @map("share_on_confirm")
+  staffOwnerId          String?                @map("staff_owner_id")
+  claimedAt             DateTime?              @map("claimed_at")
+  unclaimedSince        DateTime?              @map("unclaimed_since")
+  ownershipVersion      Int                    @default(1) @map("ownership_version")
+  dispatchMode          DispatchMode           @default(auto) @map("dispatch_mode")
+  autoAttempts          Int                    @default(0) @map("auto_attempts")
+  needsAssignmentReason NeedsAssignmentReason? @map("needs_assignment_reason")
+  lastRunId             String?                @map("last_run_id")
+  holdKind              HoldKind?              @map("hold_kind")
+  holdBy                String?                @map("hold_by")
+  holdReason            String?                @map("hold_reason")
+  holdAt                DateTime?              @map("hold_at")
+  holdPreviousStatus    RequestStatus?         @map("hold_previous_status")
+  issueCycles           Int                    @default(0) @map("issue_cycles")
+  reportApprovedAt      DateTime?              @map("report_approved_at")
+  confirmDueAt          DateTime?              @map("confirm_due_at")
+  acknowledgedAt        DateTime?              @map("acknowledged_at")
+  acknowledgedBy        AcknowledgedBy?        @map("acknowledged_by")
+  acknowledgedNote      String?                @map("acknowledged_note")
+  defectsWindowEndsAt   DateTime?              @map("defects_window_ends_at")
+  cancellationId        String?                @map("cancellation_id")
+  closedAt              DateTime?              @map("closed_at")
+  closedBy              String?                @map("closed_by")
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
 
-  catalogService CatalogService? @relation("RequestService", fields: [serviceId], references: [id], onDelete: Restrict)
-  catalogRoot    CatalogService? @relation("RequestServiceRoot", fields: [serviceRootId], references: [id], onDelete: Restrict)
-  group         RequestGroup? @relation(fields: [groupId], references: [id], onDelete: Restrict)
-  location      Location      @relation("RequestLocation", fields: [locationId], references: [id], onDelete: Restrict)
-  attachments   RequestAttachment[]
-  edits         RequestEdit[]
-  runs          DispatchRun[]
-  assignments   Assignment[]
-  contributions Contribution[]
-  quotes        Quote[]
-  schedules     Schedule[]
-  updates       ProgressUpdate[]
-  issues        Issue[]
-  cancellations Cancellation[]
-  noShows       NoShow[]
-  messages      RequestMessage[]
-  payments      Payment[]
-  refunds       Refund[]
-  payouts       Payout[]
+  catalogService      CatalogService?             @relation("RequestService", fields: [serviceId], references: [id], onDelete: Restrict)
+  catalogRoot         CatalogService?             @relation("RequestServiceRoot", fields: [serviceRootId], references: [id], onDelete: Restrict)
+  group               RequestGroup?               @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  location            Location                    @relation("RequestLocation", fields: [locationId], references: [id], onDelete: Restrict)
+  attachments         RequestAttachment[]
+  edits               RequestEdit[]
+  runs                DispatchRun[]
+  assignments         Assignment[]
+  contributions       Contribution[]
+  quotes              Quote[]
+  schedules           Schedule[]
+  updates             ProgressUpdate[]
+  issues              Issue[]
+  cancellations       Cancellation[]
+  noShows             NoShow[]
+  messages            RequestMessage[]
+  payments            Payment[]
+  refunds             Refund[]
+  payouts             Payout[]
   decision            RequestDecision?
   providerAssignments RequestProviderAssignment[]
   counterOffers       RequestCounterOffer[]
@@ -1380,27 +1399,27 @@ model Quote {
 }
 
 model Payment {
-  id                   String        @id @default(uuid())
-  requestId            String        @map("request_id")
-  quoteId              String        @map("quote_id")
-  quoteVersion         Int           @map("quote_version")
+  id                   String         @id @default(uuid())
+  requestId            String         @map("request_id")
+  quoteId              String         @map("quote_id")
+  quoteVersion         Int            @map("quote_version")
   amount               BigInt
   method               PaymentMethod
   channel              String?
   status               PaymentStatus
-  reference            String        @unique
-  gatewayTransactionId String?       @unique @map("gateway_transaction_id")
-  gatewayChannel       String?       @map("gateway_channel")
-  paidAt               DateTime?     @map("paid_at")
-  proofUploadId        String?       @map("proof_upload_id")
-  recordedBy           String?       @map("recorded_by")
-  reconciledBy         String?       @map("reconciled_by")
-  reconciledAt         DateTime?     @map("reconciled_at")
+  reference            String         @unique
+  gatewayTransactionId String?        @unique @map("gateway_transaction_id")
+  gatewayChannel       String?        @map("gateway_channel")
+  paidAt               DateTime?      @map("paid_at")
+  proofUploadId        String?        @map("proof_upload_id")
+  recordedBy           String?        @map("recorded_by")
+  reconciledBy         String?        @map("reconciled_by")
+  reconciledAt         DateTime?      @map("reconciled_at")
   note                 String?
-  failureReason        String?       @map("failure_reason")
-  lateRefundOpened     Boolean       @default(false) @map("late_refund_opened")
-  createdAt            DateTime      @default(now()) @map("created_at")
-  updatedAt            DateTime      @updatedAt @map("updated_at")
+  failureReason        String?        @map("failure_reason")
+  lateRefundOpened     Boolean        @default(false) @map("late_refund_opened")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
   request              ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
   refunds              Refund[]
 
@@ -1409,58 +1428,58 @@ model Payment {
 }
 
 model Refund {
-  id                 String       @id @default(uuid())
-  paymentId          String       @map("payment_id")
-  requestId          String       @map("request_id")
-  cancellationId     String?      @map("cancellation_id")
+  id                 String         @id @default(uuid())
+  paymentId          String         @map("payment_id")
+  requestId          String         @map("request_id")
+  cancellationId     String?        @map("cancellation_id")
   amount             BigInt
-  status             RefundStatus @default(pending_approval)
+  status             RefundStatus   @default(pending_approval)
   reason             String
-  requestedBy        String       @map("requested_by")
-  decidedBy          String?      @map("decided_by")
-  secondApprover     String?      @map("second_approver")
-  transferReference  String?      @map("transfer_reference")
-  transferProofId    String?      @map("transfer_proof_id")
-  transferRecordedBy String?     @map("transfer_recorded_by")
-  gatewayRefundId    String?      @unique @map("gateway_refund_id")
-  reconciledBy       String?      @map("reconciled_by")
-  completedAt        DateTime?    @map("completed_at")
-  version            Int          @default(1)
-  createdAt          DateTime     @default(now()) @map("created_at")
-  updatedAt          DateTime     @updatedAt @map("updated_at")
-  payment            Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  requestedBy        String         @map("requested_by")
+  decidedBy          String?        @map("decided_by")
+  secondApprover     String?        @map("second_approver")
+  transferReference  String?        @map("transfer_reference")
+  transferProofId    String?        @map("transfer_proof_id")
+  transferRecordedBy String?        @map("transfer_recorded_by")
+  gatewayRefundId    String?        @unique @map("gateway_refund_id")
+  reconciledBy       String?        @map("reconciled_by")
+  completedAt        DateTime?      @map("completed_at")
+  version            Int            @default(1)
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  payment            Payment        @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   request            ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
-  cancellation       Cancellation? @relation(fields: [cancellationId], references: [id], onDelete: Restrict)
+  cancellation       Cancellation?  @relation(fields: [cancellationId], references: [id], onDelete: Restrict)
 
   @@index([requestId, status])
   @@map("refunds")
 }
 
 model Payout {
-  id                  String       @id @default(uuid())
-  requestId           String       @map("request_id")
-  assignmentId        String       @map("assignment_id")
-  providerId          String       @map("provider_id")
-  kind                PayoutKind   @default(primary)
-  amount              BigInt
-  status              PayoutStatus @default(pending_approval)
-  holdReason          String?      @map("hold_reason")
-  holdSource          String?      @map("hold_source")
-  approvalDueAt       DateTime?    @map("approval_due_at")
-  bankAccountId       String?      @map("bank_account_id")
-  bankLast4           String?      @map("bank_last4")
-  transferReference   String?      @map("transfer_reference")
-  transferProofId     String?      @map("transfer_proof_id")
-  transferRecordedBy  String?      @map("transfer_recorded_by")
-  reconciledBy        String?      @map("reconciled_by")
-  paidAt              DateTime?    @map("paid_at")
-  version             Int          @default(1)
-  createdAt           DateTime     @default(now()) @map("created_at")
-  updatedAt           DateTime     @updatedAt @map("updated_at")
-  request             ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
-  provider            ProviderProfile @relation(fields: [providerId], references: [id], onDelete: Restrict)
-  approvals           PayoutApproval[]
-  transferAttempts    TransferAttempt[]
+  id                 String            @id @default(uuid())
+  requestId          String            @map("request_id")
+  assignmentId       String            @map("assignment_id")
+  providerId         String            @map("provider_id")
+  kind               PayoutKind        @default(primary)
+  amount             BigInt
+  status             PayoutStatus      @default(pending_approval)
+  holdReason         String?           @map("hold_reason")
+  holdSource         String?           @map("hold_source")
+  approvalDueAt      DateTime?         @map("approval_due_at")
+  bankAccountId      String?           @map("bank_account_id")
+  bankLast4          String?           @map("bank_last4")
+  transferReference  String?           @map("transfer_reference")
+  transferProofId    String?           @map("transfer_proof_id")
+  transferRecordedBy String?           @map("transfer_recorded_by")
+  reconciledBy       String?           @map("reconciled_by")
+  paidAt             DateTime?         @map("paid_at")
+  version            Int               @default(1)
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+  request            ServiceRequest    @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  provider           ProviderProfile   @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  approvals          PayoutApproval[]
+  transferAttempts   TransferAttempt[]
 
   @@index([requestId, kind])
   @@index([status])
@@ -1468,30 +1487,30 @@ model Payout {
 }
 
 model PayoutApproval {
-  id         String   @id @default(uuid())
-  payoutId   String   @map("payout_id")
-  step       Int
-  actorId    String   @map("actor_id")
-  note       String?
-  bankVersion String? @map("bank_version")
-  createdAt  DateTime @default(now()) @map("created_at")
-  payout     Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  id          String   @id @default(uuid())
+  payoutId    String   @map("payout_id")
+  step        Int
+  actorId     String   @map("actor_id")
+  note        String?
+  bankVersion String?  @map("bank_version")
+  createdAt   DateTime @default(now()) @map("created_at")
+  payout      Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
 
   @@map("payout_approvals")
 }
 
 model TransferAttempt {
-  id                String   @id @default(uuid())
-  payoutId          String   @map("payout_id")
-  reference         String   @unique
-  gatewayTransferId String?  @unique @map("gateway_transfer_id")
+  id                String    @id @default(uuid())
+  payoutId          String    @map("payout_id")
+  reference         String    @unique
+  gatewayTransferId String?   @unique @map("gateway_transfer_id")
   amount            BigInt
   status            String
-  failureCode       String?  @map("failure_code")
-  submittedAt       DateTime @map("submitted_at")
+  failureCode       String?   @map("failure_code")
+  submittedAt       DateTime  @map("submitted_at")
   settledAt         DateTime? @map("settled_at")
-  createdAt         DateTime @default(now()) @map("created_at")
-  payout            Payout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  payout            Payout    @relation(fields: [payoutId], references: [id], onDelete: Cascade)
 
   @@index([payoutId, createdAt])
   @@map("transfer_attempts")
@@ -1519,22 +1538,95 @@ model GatewayEvent {
   @@map("gateway_events")
 }
 
+/// Account definitions are platform-owned; administrators never receive wallet accounts.
+model FinancialLedgerAccount {
+  code       String                     @id
+  name       String
+  type       FinancialLedgerAccountType
+  normalSide FinancialLedgerSide        @map("normal_side")
+  currency   String                     @default("NGN") @db.VarChar(3)
+  active     Boolean                    @default(true)
+  createdAt  DateTime                   @default(now()) @map("created_at")
+  updatedAt  DateTime                   @updatedAt @map("updated_at")
+  entries    FinancialLedgerEntry[]
+
+  @@map("financial_ledger_accounts")
+}
+
+/// Immutable, idempotent journal headers for platform money movements.
+model FinancialLedgerJournal {
+  id             String                 @id @default(uuid())
+  sourceType     String                 @map("source_type")
+  sourceId       String                 @map("source_id")
+  event          String
+  idempotencyKey String                 @unique @map("idempotency_key")
+  description    String
+  currency       String                 @default("NGN") @db.VarChar(3)
+  createdBy      String?                @map("created_by")
+  metadata       Json?
+  createdAt      DateTime               @default(now()) @map("created_at")
+  entries        FinancialLedgerEntry[]
+
+  @@unique([sourceType, sourceId, event])
+  @@index([createdAt, id])
+  @@index([sourceType, sourceId])
+  @@map("financial_ledger_journals")
+}
+
+/// Entries are append-only; each journal must balance debits and credits in one currency.
+model FinancialLedgerEntry {
+  id          String                 @id @default(uuid())
+  journalId   String                 @map("journal_id")
+  accountCode String                 @map("account_code")
+  side        FinancialLedgerSide
+  amount      BigInt
+  currency    String                 @default("NGN") @db.VarChar(3)
+  requestId   String?                @map("request_id")
+  createdAt   DateTime               @default(now()) @map("created_at")
+  journal     FinancialLedgerJournal @relation(fields: [journalId], references: [id], onDelete: Restrict)
+  account     FinancialLedgerAccount @relation(fields: [accountCode], references: [code], onDelete: Restrict)
+
+  @@index([accountCode, currency, createdAt])
+  @@index([requestId, createdAt])
+  @@map("financial_ledger_entries")
+}
+
+/// Company-owned reserve transfers, recorded by one staff member and reconciled by another.
+model RefundReserveFunding {
+  id              String                      @id @default(uuid())
+  amount          BigInt
+  reference       String                      @unique
+  proofUploadId   String                      @map("proof_upload_id")
+  note            String?
+  status          RefundReserveFundingStatus  @default(pending_reconciliation)
+  recordedBy      String                      @map("recorded_by")
+  reconciledBy    String?                     @map("reconciled_by")
+  reconciledAt    DateTime?                   @map("reconciled_at")
+  reconciliationNote String?                  @map("reconciliation_note")
+  version         Int                         @default(1)
+  createdAt       DateTime                    @default(now()) @map("created_at")
+  updatedAt       DateTime                    @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@map("refund_reserve_fundings")
+}
+
 model ApprovalDeadline {
-  id          String    @id @default(uuid())
-  kind        String
-  itemId      String    @map("item_id")
-  requestId   String?   @map("request_id")
-  openedAt    DateTime  @map("opened_at")
+  id                     String    @id @default(uuid())
+  kind                   String
+  itemId                 String    @map("item_id")
+  requestId              String?   @map("request_id")
+  openedAt               DateTime  @map("opened_at")
   startedAt              DateTime? @map("started_at")
   deadlineWorkingMinutes Int?      @map("deadline_working_minutes")
   remindAt               DateTime? @map("remind_at")
-  dueAt       DateTime  @map("due_at")
-  remindedAt  DateTime? @map("reminded_at")
-  escalatedAt DateTime? @map("escalated_at")
-  closedAt    DateTime? @map("closed_at")
+  dueAt                  DateTime  @map("due_at")
+  remindedAt             DateTime? @map("reminded_at")
+  escalatedAt            DateTime? @map("escalated_at")
+  closedAt               DateTime? @map("closed_at")
   closedReason           String?   @map("closed_reason")
-  openedBy    String?   @map("opened_by")
-  createdAt   DateTime  @default(now()) @map("created_at")
+  openedBy               String?   @map("opened_by")
+  createdAt              DateTime  @default(now()) @map("created_at")
 
   @@index([closedAt, dueAt])
   @@index([requestId, closedAt])
@@ -1672,16 +1764,16 @@ model NoShow {
 }
 
 model RequestMessage {
-  id         String         @id @default(uuid())
-  requestId  String         @map("request_id")
+  id         String               @id @default(uuid())
+  requestId  String               @map("request_id")
   channel    MessageChannel
-  providerId String?        @map("provider_id")
-  authorId   String?        @map("author_id")
-  authorRole String         @map("author_role")
+  providerId String?              @map("provider_id")
+  authorId   String?              @map("author_id")
+  authorRole String               @map("author_role")
   text       String
   kind       MessageKind          @default(text)
-  createdAt  DateTime       @default(now()) @map("created_at")
-  request    ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  createdAt  DateTime             @default(now()) @map("created_at")
+  request    ServiceRequest       @relation(fields: [requestId], references: [id], onDelete: Cascade)
   counter    RequestCounterOffer?
 
   @@index([requestId, channel, createdAt])
@@ -1740,6 +1832,8 @@ model RequestCounterOffer {
   note           String         @default("")
   supersededById String?        @unique @map("superseded_by_id")
   supersededAt   DateTime?      @map("superseded_at")
+  acceptedAt     DateTime?      @map("accepted_at")
+  acceptedBy     String?        @map("accepted_by")
   createdAt      DateTime       @default(now()) @map("created_at")
   request        ServiceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
   message        RequestMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)

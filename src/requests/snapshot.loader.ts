@@ -209,6 +209,7 @@ export type SnapshotSource = Pick<
   | 'defectsWindowEndsAt'
   | 'reportApprovedAt'
 > & {
+  workflowMode?: LoadedRequest['workflowMode'];
   assignments: Array<
     Pick<
       LoadedRequest['assignments'][number],
@@ -381,6 +382,7 @@ export function buildSnapshot(
       .map((item) => item.providerUserId),
     providerAssignmentStatus: assignment?.status ?? null,
     status: row.status,
+    workflowMode: row.workflowMode,
     intake: { state: row.intakeState },
     contactInBrief: row.contactInBrief,
     currentAssignment: assignment ? assignmentSnapshot(assignment) : null,

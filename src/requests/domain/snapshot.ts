@@ -117,6 +117,7 @@ export type RequestSnapshot = {
   }>;
   providerAssignmentStatus?: AssignmentSnapshot['status'] | null;
   status: RequestStatus;
+  workflowMode?: 'phase2' | 'v1';
   intake: { state: 'pending' | 'clarification' | 'approved' };
   contactInBrief?: boolean;
   currentAssignment: AssignmentSnapshot | null;
