@@ -456,6 +456,7 @@ export class ProvidersService {
         documents: dto.documents,
         photo: dto.photo,
       };
+      const { serviceAreaIds, ...heldChanges } = proposed;
       let profile;
       if (approved && live) {
         profile = await tx.providerProfile.update({
@@ -463,13 +464,14 @@ export class ProvidersService {
           data: {
             phone,
             locationId: locationValues.locationId,
+            serviceAreaIds,
             businessName: dto.businessName?.trim() || undefined,
             experience: dto.experience,
             bio: dto.bio.trim(),
             workingHours: json(dto.workingHours),
             portfolio: json(dto.portfolio ?? []),
             pendingChanges: json({
-              ...proposed,
+              ...heldChanges,
               submittedAt: new Date().toISOString(),
             }),
             changesReview: json({
@@ -569,7 +571,13 @@ export class ProvidersService {
           providerId: profile.id,
           kind: approved ? 'held_change' : 'profile',
           decision: 'submitted',
-          fields: approved && live ? changedProfileFields(live, proposed) : [],
+          fields:
+            approved && live
+              ? changedProfileFields(live, {
+                  ...proposed,
+                  serviceAreaIds: live.serviceAreaIds,
+                })
+              : [],
           actorId: userId,
           version: profile.version,
         },
