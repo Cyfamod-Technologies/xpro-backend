@@ -577,9 +577,9 @@ describe('ProvidersService', () => {
       });
       expect(data.serviceAreaIds).toEqual(['district-1']);
       expect(data.pendingChanges).not.toHaveProperty('serviceAreaIds');
-      expect(
-        tx.providerReview.create.mock.calls[0][0].data.fields,
-      ).not.toContain('Service areas');
+      const reviewCalls = tx.providerReview.create.mock
+        .calls as unknown as Array<[{ data: { fields?: string[] } }]>;
+      expect(reviewCalls[0]?.[0].data.fields).not.toContain('Service areas');
       expect(data.pendingChanges).not.toHaveProperty('serviceAreas');
       expect(data).not.toHaveProperty('serviceIds');
       expect(data).not.toHaveProperty('skillIds');
